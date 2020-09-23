@@ -1,0 +1,79 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<h3>View Manual Review</h3>
+<div>
+    <h4>By Assessment</h4>
+    <ul>
+        {% for unit in units %}
+            <li><a href='dashboard?action=manual_review_assessment&key={{ unit.unit_id }}'>{{ unit.title }}</a></li>
+        {% endfor %}
+    </ul>
+</div>
+<div>
+    <h4>By Course Staff</h4>
+    <ul>
+        {% for course_staff in course_staff_list %}
+            <li><a href='dashboard?action=manual_review_course_staff&key={{ course_staff.user_id }}'>{{ course_staff.email }}</a></li>
+        {% endfor %}
+    </ul>
+</div>
+<div style='margin-top:10px'>
+    <h3>Assigning Cron Job</h3>
+    <p>Click the following button to trigger the assignment of all un-assigned submissions for this course.</p>
+    <p>It may take a while for the job to complete after the response has arrived.</p>
+    <button id='assign-job-button' onclick='runAssignJob();'>Run Submission Assigning Job</button>
+    <span id='assign-job-result-text'></span>
+</div>
+<div style='margin-top:10px'>
+    <h3>Reassigning Cron Job</h3>
+    <p><strong>Run this only if you feel there are lingering submissions assigned to ex-course staff who have been removed.</strong></p>
+    <p>Click the following button to trigger the reassignment of all submissions for which the course staff have been deleted.</p>
+    <p>It may take a while for the job to complete after the response has arrived.</p>
+    <button id='reassign-job-button' onclick='runReassignJob();'>Run Submission Reassigning Job</button>
+    <span id='reassign-job-result-text'></span>
+</div>
+<script type='text/javascript'>
+    function runAssignJob() {
+        console.log('Running Assign Job');
+        var button = document.getElementById('assign-job-button');
+        button.disabled = true;
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function() {
+            var response = xhttp.responseText;
+            var result_el = document.getElementById('assign-job-result-text');
+            result_el.innerHTML = 'Job Triggered. Response: \n' + response;
+            // button.disabled = false;
+        }
+        xhttp.open('GET', '{{ assign_cron_job_url }}', true);
+        xhttp.send();
+    }
+
+    function runReassignJob() {
+        console.log('Running Reassign Job');
+        var button = document.getElementById('reassign-job-button');
+        button.disabled = true;
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function() {
+            var response = xhttp.responseText;
+            var result_el = document.getElementById('reassign-job-result-text');
+            result_el.innerHTML = 'Job Triggered. Response: \n' + response;
+            // button.disabled = false;
+        }
+        xhttp.open('GET', '{{ reassign_cron_job_url }}', true);
+        xhttp.send();
+    }
+</script>

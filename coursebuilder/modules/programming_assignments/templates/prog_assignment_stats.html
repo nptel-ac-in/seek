@@ -1,0 +1,166 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% if stats_calculated %}
+  <style type="text/css">
+    .table-container {
+      margin: 20px 0;
+    }
+  </style>
+
+  <script type="text/javascript" src="//www.google.com/jsapi"></script>
+  <script type="text/javascript">
+    google.load('visualization', '1', {packages: ['table']});
+    google.setOnLoadCallback(drawProgrammingAssignmentTables);
+    var testCaseDict = JSON.parse("{{ test_stats | js_string}}");
+    var unitIdToTitle = JSON.parse("{{ unit_title | js_string}}");
+
+    function getSizeOfObject(obj) {
+      var size = 0;
+      for (var key in obj) {
+        if (obj.hasOwnProperty(key)) {
+          size++;
+        }
+      }
+      return size;
+    }
+
+    function getSortedKeys(obj) {
+      var keys = [];
+      for (var item in obj) {
+        keys.push(item);
+      }
+      keys.sort();
+      return keys;
+    }
+
+    function getMaxTestCases(answerList, test_type) {
+      var max_tests = 0;
+      for (var rowIndex = 0; rowIndex < answerList.length; rowIndex++) {
+        // The row key is the programming assignment unit_id.
+        var assingment_info = answerList[rowIndex]['stats'];
+        var keys = getSortedKeys(assingment_info[test_type]);
+        if (keys.length > max_tests) {
+          max_tests = keys.length;
+        }
+      }
+      return max_tests;
+    }
+    function getMaxPublicTests(answerList) {
+      return getMaxTestCases(answerList, 'public');
+    }
+    function getMaxPrivateTests(answerList) {
+      return getMaxTestCases(answerList, 'private');
+    }
+
+    function getScoreLabel(score, attempts) {
+      if (attempts === 0) {
+        return 'No attempts recorded';
+      } else {
+        var roundedScore = Math.round(score / attempts * 100.0) / 100;
+        var attemptsSuffix = (attempts == 1) ? ' attempt' : ' attempts';
+        return roundedScore + ' (' + attempts + attemptsSuffix + ')';
+      }
+    }
+
+    function populateTestCases(table, rowIndex, colOffset, tests) {
+      var keys = getSortedKeys(tests);
+      var max_attempts = 0;
+      for (var caseIndex = 0; caseIndex < keys.length; caseIndex++) {
+        var case_id = keys[caseIndex];
+        var num_passed = tests[case_id]['passed'];
+        var num_failed = tests[case_id]['failed'];
+        if (num_failed + num_passed > max_attempts) {
+           max_attempts = num_passed + num_failed;
+        }
+
+        table.setCell(rowIndex, caseIndex + colOffset, num_passed);
+      }
+      return max_attempts;
+    }
+
+    function getUnitTitle(unitIdToTitle, unit_id) {
+       if (unit_id in unitIdToTitle) return unitIdToTitle[unit_id];
+       return unit_id;
+    }
+
+    // Adds data to the displayed table.
+    function populateProgrammingAssignmentTable(
+       table, answerList, maxPublicTestCases, unitIdToTitle) {
+      for (var rowIndex = 0; rowIndex < answerList.length; rowIndex++) {
+        // The row key is the programming assignment unit_id.
+        var assingment_info = answerList[rowIndex]['stats'];
+        table.setCell(rowIndex, 0, getUnitTitle(
+              unitIdToTitle, answerList[rowIndex]['unit_id']));
+        var num_public_attempts = populateTestCases(table, rowIndex, 2, assingment_info['public']);
+        table.setCell(rowIndex, 1, num_public_attempts);
+
+        var num_private_attempts = populateTestCases(table, rowIndex, 3 + maxPublicTestCases, assingment_info['private']);
+        table.setCell(rowIndex, 2 + maxPublicTestCases , num_private_attempts);
+      }
+    }
+
+    function drawProgrammingAssignmentTable(divId, sourceList, unitIdToTitle) {
+      // Create and populate the data table.
+      var table = new google.visualization.DataTable();
+      table.addColumn('string', 'Progamming Assignment');
+      table.addColumn('number', 'Num Attempts(Public Test Cases)');
+
+      var maxPublicTestCases = getMaxPublicTests(sourceList);
+      for (var i = 0; i < maxPublicTestCases; i++) {
+        table.addColumn('number', 'Public ' + (i + 1));
+      }
+      table.addColumn('number', 'Num Submissions');
+      var maxPrivateTestCases = getMaxPrivateTests(sourceList);
+      for (var i = 0; i < maxPrivateTestCases; i++) {
+        table.addColumn('number', 'Private ' + (i + 1));
+      }
+
+      var numRows = sourceList.length;
+      table.addRows(numRows);
+      populateProgrammingAssignmentTable(
+          table, sourceList, maxPublicTestCases, unitIdToTitle);
+
+      new google.visualization.Table(
+        document.getElementById(divId)
+      ).draw(
+        table, {
+          allowHtml: true,
+          sortColumn: 0,  // Force sort on Question Identifier.
+          title: 'Answer distribution per test case'
+        }
+      );
+    }
+
+    function drawProgrammingAssignmentTables() {
+      drawProgrammingAssignmentTable(
+          'assignmentStatisticsTable', testCaseDict, unitIdToTitle);
+    }
+  </script>
+  <div id="assignmentStatisticsTable" class="table-container"></div>
+
+{% endif %}
+
+{% if errors %}
+  <ul>
+    {% for error in errors %}
+      <li>{{ error }}</li>
+    {% endfor %}
+  </ul>
+{% endif %}
+
+
+<br><br>

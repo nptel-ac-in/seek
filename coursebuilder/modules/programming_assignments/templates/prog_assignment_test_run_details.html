@@ -1,0 +1,70 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<!-- TODO(rthakker) Structure HTML properly with relavant classes
+and separate out any CSS if required. -->
+{% set pa_url="dashboard?key=%s&unit_type=com.google.coursebuilder.programming_assignment&action=edit_custom_unit" % programming_assignment.unit_id %}
+<a class="gcb-button gcb-pull-right" target="_blank" href={{pa_url}}>Edit</a>
+<div>
+  <h2>Latest Test Run Details for {{ programming_assignment.title }}</h2>
+</div>
+{% if not (pa_test_run_details) %}
+<div id='testRunPendingLi'>
+  <p>Test run data invalid or missing.</p>
+  <p>
+    Please add at least one sample solution to the programming assignment
+    by clicking <a target="_blank" href={{pa_url}}>here.</a>
+    <!-- TODO(rthakker) Add option to invoke a test run here -->
+  </p>
+</div>
+{% endif %}
+<div id='paTestRunLi'>
+  <ul>
+    {% for lang in pa_test_run_details.keys() %}
+    <li>
+      <h3>Language: {{ lang }}</h3>
+      {% set lang_test_run = pa_test_run_details[lang] %}
+      {% if lang_test_run['public'] %}
+      <div id='publicTestCaseLi'>
+        <h4>Public test cases</h4>
+        <ul>
+          <li>
+            {% set assignment = lang_test_run.public %}
+            {% include "test_response.html" %}
+          </li>
+        </ul>
+      </div>
+      {% endif %}
+      <br/>
+      <br/>
+      {% if lang_test_run['private'] %}
+      <div id='privateTestCaseLi'>
+        <h4>Private test cases</h4>
+        <ul>
+          <li>
+            {% set assignment = lang_test_run.private %}
+            {% include "test_response.html" %}
+          </li>
+        </ul>
+      </div>
+      {% endif %}
+      <br/>
+    </li>
+    {% endfor %}
+    <link rel="stylesheet" type="text/css" href="/modules/programming_assignments/assets/css/prog.css"/>
+    <link rel="stylesheet" type="text/css" href="/static/prettify/google-code-prettify/desert.css"/>
+  </ul>
+</div>

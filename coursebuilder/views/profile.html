@@ -1,0 +1,337 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<div id="registrationFields">
+<input type="hidden" name="old_country_of_residence"
+id="old_country_of_residence"
+value="{{ country_of_residence|escape}}">
+</input>
+<input type="hidden" name="old_state_of_residence"
+id="old_state_of_residence"
+value="{{ state_of_residence|escape}}">
+</input>
+<input type="hidden" name="old_age_group"
+id="old_age_group"
+value="{{ age_group|escape}}">
+</input>
+<input type="hidden" name="old_graduation_year"
+id="old_graduation_year"
+value="{{ graduation_year|escape}}">
+</input>
+<input type="hidden" name="old_profession"
+id="old_profession"
+value="{{ profession|escape}}">
+</input>
+<input type="hidden" name="old_college_id" id="old_college_id"
+value="{{college_id|escape}}">
+</input>
+<input type="hidden" name="old_local_chapter"
+id="old_local_chapter"
+{% if local_chapter %}
+  value=true
+{% else %}
+  value=false
+{% endif %}>
+</input>
+<input type="hidden" name="make_reg_form_read_only" id="make_reg_form_read_only"
+  value="{{make_reg_form_read_only|escape}}">
+</input>
+<script type="text/javascript">
+var LocalChapterList = {{ local_chapter_dict|safe }};
+</script>
+<div class='gcb-aside'>
+  <h2>Personal Details</h2>
+  <div class="registration_form">
+    <div class="gcb-cols gcb-form-tr">
+      <div class="gcb-reg-form-name-field gcb-col-2">
+        <label class="gcb-reg-form-label" for="form01">
+          {# I18N: A question in the registration form. #}
+          {{ gettext('Name') }} <font color='red'>*</font>
+        </label>
+      </div>
+      <div class="gcg-reg-form-value-field gcb-col-7">
+        <input
+          name="form01" id="form01" type="text"
+          value="{{ current_name|escape }}" required>
+        </input>
+      </div>
+    </div>
+    <div class="gcb-cols gcb-form-tr">
+      <script src='/modules/nptel/assets/js/mobile_lib.js'></script>
+      <div class="gcb-reg-form-name-field gcb-col-2">
+        <label class="gcb-reg-form-label" for="mobile_number">
+          {# I18N: A question in the registration form. #}
+          {{ gettext('Mobile Number') }} <font color='red'>*</font>
+        </label>
+      </div>
+      <div class="gcg-reg-form-value-field gcb-col-7">
+        <input
+          name="mobile_number" id="mobile_number" type="text"
+          value="{{ current_mobile_number|escape }}" required>
+        </input>
+      </div>
+    </div>
+
+    <div class="gcb-cols gcb-form-tr">
+      <div class="gcb-reg-form-name-field gcb-col-2">
+        <label class="gcb-reg-form-label">
+          {# I18N: A question in the registration form. #}
+          {{ gettext('Email address') }}
+        </label>
+      </div>
+      <div class="gcg-reg-form-value-field gcb-col-7">
+        <label>{{ email }}</label>
+      </div>
+    </div>
+
+    <div class="gcb-cols gcb-form-tr">
+      <script src='/modules/nptel/assets/js/mobile_lib.js'></script>
+      <div class="gcb-reg-form-name-field gcb-col-2">
+        <label class="gcb-reg-form-label" for="age_group">
+          {# I18N: A question in the registration form. #}
+          {{ gettext('Which age group do you belong to?') }} <font color='red'>*</font>
+        </label>
+      </div>
+      <div class="gcg-reg-form-value-field gcb-col-7">
+        <!-- <input
+          name="mobile_number" id="mobile_number" type="text"
+          value="{{ current_mobile_number|escape }}">
+        </input> -->
+        <select name="age_group" id="age_group" required>
+          <option value="" selected></option>
+          <option id="age_group_13-20" value="13-20">13-20</option>
+          <option id="age_group_20-30" value="20-30">20-30</option>
+          <option id="age_group_30-40" value="30-40">30-40</option>
+          <option id="age_group_40-50" value="40-50">40-50</option>
+          <option id="age_group_50-60" value="50-60">50-60</option>
+          <option id="age_group_60-70" value="60-70">60-70</option>
+          <option id="age_group_70-80" value="70-80">70-80</option>
+          <option id="age_group_80-90" value="80-90">80-90</option>
+          <option id="age_group_90-100" value="90-100">90-100</option>
+        </select>
+      </div>
+    </div>
+
+
+    <div class='gcb-cols gcb-form-tr'>
+    <div class='gcb-reg-form-name-field gcb-col-2'>
+      <label class="gcb-reg-form-label" for="country_of_residence">
+        {# I18N: A question in the registration form. #}
+        {{ gettext('Country residing in currently') }} <font color='red'>*</font>
+      </label>
+      </div>
+      <div class='gcg-reg-form-value-field gcb-col-7'>
+     <select id="country_of_residence" name="country_of_residence"
+       onchange="countryChanged()" required>
+       <option value='' selected="selected" disabled></option>
+       <option id="country_IN" value="IN">India</option>
+       <option value='' disabled>----</option>
+     </select>
+      </div>
+    </div>
+
+
+    <!-- <div class='gcb-aside' id='professionLi' style='display:block;'> -->
+    <!-- <h2>Professional Details</h2> -->
+      <div class="registration_form">
+        <div class='gcb-cols gcb-form-tr'>
+          <div class='gcb-reg-form-name-field gcb-col-2'>
+          <label class="gcb-reg-form-label" for="profession">
+            {# I18N: A question in the registration form. #}
+            {{ gettext('Profession') }} <font color='red'>*</font>
+          </label>
+          </div>
+          <div class='gcg-reg-form-value-field gcb-col-7'>
+          <select name="profession" id="profession"
+          onchange="professionChanged()" required>
+            <option value='' selected="selected"></option>
+            <option id="profession_student" value="student">Student</option>
+            <option id="profession_faculty" value="faculty">Faculty</option>
+            <option id="profession_employed" value="employed">Employed</option>
+            <option id="profession_other" value="other">Other</option>
+          </select>
+          </div>
+        </div>
+
+        <div class='gcb-cols gcb-form-tr' id="employerLi" style="display:none;">
+          <div class='gcb-reg-form-name-field gcb-col-2'>
+          <label class="gcb-reg-form-label" for="employer">
+            {# I18N: A question in the registration form. #}
+            {{ gettext('Name Of Employer') }} <font color='red'>*</font>
+          </label>
+          </div>
+          <div class='gcg-reg-form-value-field gcb-col-7'>
+          <input name="employer" id="employer" type="text"
+           value="{{ employer_name|escape }}"></input>
+          </div>
+        </div>
+      </div>
+    <!-- </div> -->
+
+
+  </div>
+</div>
+
+<div class='gcb-aside'>
+  <h2>Education Details</h2>
+  <div class="registration_form">
+
+    <div class='gcb-cols gcb-form-tr' id="localChapterLi">
+      <div class='gcb-reg-form-name-field gcb-col-2'>
+      <label class="gcb-reg-form-label" for="local_chapter">
+        {# I18N: A question in the registration form. #}
+        {{ gettext('Are you a part of an NPTEL local chapter?') }} <font color='red'>*</font>
+      </label>
+      <label>If you are a student/faculty in a college, go to
+        <a href="http://nptel.ac.in/LocalChapter/" target="_blank">http://nptel.ac.in/LocalChapter/</a> and check if your college is an NPTEL Local Chapter</label>
+      </div>
+      <div class='gcg-reg-form-value-field gcb-col-7'>
+      <select name="local_chapter" id="local_chapter" onchange="localChapterOnChanged()" required>
+        <option value="" id="local_chapter_"></option>
+        <option value=true id="local_chapter_true">Yes</option>
+        <option value=false id="local_chapter_false">No</option>
+      </select>
+      </div>
+    </div>
+
+    <div class='gcb-cols gcb-form-tr' id="indianStateLi" style="display:none;">
+      <div class='gcb-reg-form-name-field gcb-col-2'>
+      <label class="gcb-reg-form-label" for="state_of_residence">
+        {# I18N: A question in the registration form. #}
+        {{ gettext('State') }} <font color='red'>*</font>
+      </label>
+      </div>
+      <div class='gcg-reg-form-value-field gcb-col-7'>
+
+      <select id="state_of_residence" name="state_of_residence"
+      onchange="IndianStateOnChanged();" required>
+        <option value='' selected="selected" disabled></option>
+      </select>
+      </div>
+    </div>
+
+    <div class='gcb-cols gcb-form-tr' id="nonIndianStateLi" style="display:none;">
+      <div class='gcb-reg-form-name-field gcb-col-2'>
+      <label class="gcb-reg-form-label" for="non_indian_state">
+        {# I18N: A question in the registration form. #}
+        {{ gettext('State') }}
+      </label>
+      </div>
+      <div class='gcg-reg-form-value-field gcb-col-7'>
+      <input name="non_indian_state" id="non_indian_state" type="text"
+      value="{{ state_of_residence|escape }}"></input>
+      </div>
+    </div>
+
+    <div class='gcb-cols gcb-form-tr' id="cityLi" style="display:none;">
+      <div class='gcb-reg-form-name-field gcb-col-2'>
+      <label class="gcb-reg-form-label" for="city_of_residence">
+        {# I18N: A question in the registration form. #}
+        {{ gettext('City') }} <font color='red'>*</font>
+      </label>
+      </div>
+      <div class='gcg-reg-form-value-field gcb-col-7'>
+      <input name="city_of_residence" id="city_of_residence" type="text"
+      value="{{ city_of_residence|escape }}" required></input>
+      </div>
+    </div>
+
+    <div class='gcb-cols gcb-form-tr'>
+      <div class='gcb-reg-form-name-field gcb-col-2'>
+      <label class="gcb-reg-form-label" for="college">
+        {# I18N: A question in the registration form. #}
+        {{ gettext('College Name') }} <font color='red'>*</font>
+      </label>
+      </div>
+      <div class='gcg-reg-form-value-field gcb-col-7'>
+      <input name="college" id="college" type="text"
+       value="{{ name_of_college|escape }}" style="display:none;" required></input>
+       <select name="local_chapter_college" id="local_chapter_college"
+       onchange="localChapterCollegeChanged();">
+       <option value="" id="local_chapter_college_" selected></option>
+       </select>
+       <input type="text" name="college_id" id="college_id" style="display:none;"
+       value="{{ college_id|escape }}">
+       </input>
+      </div>
+    </div>
+
+    <div class='gcb-cols gcb-form-tr' id="collegeRollNoLi">
+      <div class='gcb-reg-frm-name-field gcb-col-2'>
+        <label class='gcb-reg-form-label' for='college_roll_no'>
+          {# I18N: A question in the registration form. #}
+          {{ gettext('College Roll No.') }}
+        </label>
+      </div>
+      <div class="gcg-reg-form-value-field gcb-col-7">
+        <input name="college_roll_no" id="college_roll_no"
+        type="text" value="{{ college_roll_no|escape }}"></input>
+      </div>
+    </div>
+
+    <div class='gcb-cols gcb-form-tr'>
+      <div class='gcb-reg-form-name-field gcb-col-2'>
+      <label class="gcb-reg-form-label" for="graduationyear">
+        {# I18N: A question in the registration form. #}
+        {{ gettext('Year of Graduation') }} <font color='red'>*</font>
+      </label>
+      </div>
+      <div class='gcg-reg-form-value-field gcb-col-7'>
+      <select name="graduationyear" id="graduationyear" required>
+        <option value='' selected="selected" disabled></option>
+      </select>
+      </div>
+    </div>
+    </div>
+  </div>
+
+<div class="registration_form">
+  <div class='gcb-cols gcb-form-tr' id="termsLi">
+    <div class='gcb-reg-form-name-field gcb-col-2'>
+      <div class='gcb-pull-right'>
+        <input type='checkbox' name="terms" id='terms' required/>
+      </div>
+    </div>
+    <div class='gcg-reg-form-value-field gcb-col-7'>
+      <label class="gcb-reg-form-label" for="terms">
+        {# I18N: A question in the registration form. #}
+        I agree to NPTEL <a onclick='showPopupDiv("termsDiv"); return false;'>Terms of Service</a>.
+      </label>
+    </div>
+  </div>
+  <div class='gcb-cols gcb-form-tr' id="honor_codeLi">
+    <div class='gcb-reg-form-name-field gcb-col-2'>
+      <div class='gcb-pull-right'>
+        <input type='checkbox' name="honor_code" id='honor_code' required/>
+      </div>
+    </div>
+    <div class='gcg-reg-form-value-field gcb-col-7'>
+      <label class="gcb-reg-form-label" for="honor_code">
+          {# I18N: A question in the registration form. #}
+          I agree to follow the <a onclick='showPopupDiv("honorDiv"); return false;'>Honor Code</a>.
+      </label>
+    </div>
+  </div>
+  <div class='gcb-cols gcb-form-tr' id="regFormSubmitLi">
+    <div class='gcb-col-7'>
+      <button class="gcb-button gcb-float-right" type="submit">
+        {# I18N: Button at the end of the registration form for a course. #}
+        {{ gettext(submit_button_name) }}
+      </button>
+    </div>
+  </div>
+</div>
+</div>

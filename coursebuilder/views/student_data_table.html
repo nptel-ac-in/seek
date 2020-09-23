@@ -1,0 +1,79 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<table class="gcb-student-data-table">
+  <colgroup>
+    <col style="width: 10%">
+    <col>
+  </colgroup>
+
+  <tr>
+    {# I18N: Table header that states when a student enrolled in a course. #}
+    <th align="left">{{ gettext('Date enrolled') }}</th>
+    <td>{{ date_enrolled }}</td>
+  </tr>
+
+  <tr>
+    {# I18N: Table header for the student's email address. This is a noun. #}
+    <th align="left">{{ gettext('Email') }}</th>
+    <td>{{ student.key().name() }}</td>
+  </tr>
+
+  <tr>
+    {# I18N: Table header for the student's name. #}
+    <th align="left">{{ gettext('Name') }}</th>
+    <td>{{ student_name }}</td>
+  </tr>
+
+  <tr>
+    {# I18N: Table header for the student's assessment scores. #}
+    <th align="left" colspan=2>
+      {{ gettext('Assessment scores') }}
+    </th>
+  </tr>
+
+  {% for assessment in score_list %}
+    <tr>
+      <th align="left">&nbsp;&nbsp;&nbsp;{{ assessment['title'] }}</th>
+      <td>
+        {% if assessment['human_graded'] %}
+          <a href="assessment?name={{ assessment.id }}">
+            {% if assessment['completed'] %}
+              {# I18N: Shown in the student profile page, next to an assessment title. States whether the assessment has been completed. #}
+              {{ gettext('Completed') }}
+            {% else %}
+              {# I18N: Shown in the student profile page, next to an assignment title, as the link text for a self- or peer-reviewed assignment. #}
+              {{ gettext('View assignment') }}
+            {% endif %}
+          </a>
+        {% elif assessment['attempted'] and assessment['show_scores'] and 'score' in assessment and assessment['score'] is defined %}
+          <span id="assessment-score-{{assessment['title']}}">{{ assessment['score'] }}</span>
+        {% else %}
+          <span id="assessment-score-{{assessment['title']}}">{{ gettext('--') }}</span>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+
+  {% for header, value in extra_student_data %}
+    {% if header or value %}
+      <tr>
+        <th align="left">{{ header }}</th>
+        <td>{{ value }}</td>
+      </tr>
+    {% endif %}
+  {% endfor %}
+</table>

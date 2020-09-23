@@ -1,0 +1,72 @@
+/**
+ * Copyright 2020 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+div.gcb-ratings-widget {
+  text-align: left;
+}
+div.gcb-ratings-widget > h4 {
+  margin: 0.3em 0 0 0.5em;
+}
+div.gcb-ratings-widget > div.gcb-ratings-container {
+  text-align: center;
+}
+div.gcb-ratings-widget > div > ul.gcb-ratings {
+  list-style-type: none;
+  display: inline-block;
+}
+div.gcb-ratings-widget > div > ul.gcb-ratings {
+  margin: 0 0 10px 0;
+}
+div.gcb-ratings-widget > div > ul.gcb-ratings > li {
+  display: inline-block;
+  margin: 0 1em;
+}
+div.gcb-ratings-widget > div > ul.gcb-ratings > li > button {
+  width: 5.5em;
+  text-align: center;
+  padding: 0.2em;
+  color: #888;
+  background-color: inherit;
+  border: solid #f8f8f8 1px;
+  -webkit-transition: border 200ms, color 200ms;
+}
+div.gcb-ratings-widget > div > ul.gcb-ratings > li > button.selected,
+div.gcb-ratings-widget > div > ul.gcb-ratings > li > button:hover {
+  color: #000;
+  border-radius: 2px;
+  border: solid #ccc 1px;
+}
+div.gcb-ratings-widget > div.gcb-extra-feedback {
+  margin-top: 0.2em;
+  text-align: center;
+  max-height: 10em;
+  overflow: hidden;
+  -webkit-transition: max-height 300ms;
+}
+div.gcb-ratings-widget > div.gcb-extra-feedback.hidden {
+  display: block;
+  max-height: 0;
+}
+div.gcb-ratings-widget > div.gcb-extra-feedback > textarea {
+  width: 30em;
+  height: 3em;
+}
+div.gcb-ratings-widget > div.gcb-extra-feedback > button {
+  position: relative;
+  top: -20px;
+  left: 1em;
+  padding: 0.5em 1em;
+}

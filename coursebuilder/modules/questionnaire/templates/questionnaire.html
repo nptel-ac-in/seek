@@ -1,0 +1,39 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<link rel="stylesheet" type="text/css"
+    href="/modules/questionnaire/resources/css/button.css">
+<div class="gcb-questionnaire">
+  <button
+      class="gcb-button questionnaire-button"
+      data-form-id="{{ form_id }}"
+      data-xsrf-token="{{ xsrf_token }}"
+      data-disabled="{% if disabled %}true{% else %}false{% endif %}"
+      data-registered="{% if registered %}true{% else %}false{% endif %}">
+    {% if button_label %}
+      {{ button_label }}
+    {% else %}
+      {# I18N: Button label to submit the responses to a questionnaire. #}
+      {{ gettext('Submit answers') }}
+    {% endif %}
+  </button>
+  {% if post_message %}
+  <div class="post-message hidden">
+    <div>{{post_message}}</div>
+  </div>
+  {% endif %}
+</div>
+

@@ -1,0 +1,10 @@
+<form id='reevaluate-progrmming-assignment' action='{ reevaluate_url }' method='POST'>
+<p>
+{{ gettext('Choose the Assignment to be reevaluated.') }}
+</p>
+<select name='unit_id' id='unit_id'>
+  <option value='' selected>--</option>
+</select>
+
+
+</form>

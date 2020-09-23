@@ -1,0 +1,49 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<a class="gcb-button gcb-pull-right" href="dashboard?action=get_add_mentors">Add Mentors</a>
+{% if mentors %}
+<h2> Existing Mentors </h2>
+  <table>
+    <tr>
+      <th>Mentor Email</th>
+      <th>Local Chapter (if any)</th>
+      <th></th>
+    </tr>
+    {% for m in mentors %}
+      <tr>
+        <td>{{ m.email }} </td>
+        <td>
+          {% if m.local_chapter %}
+            <a target='_blank' href=admin?action=edit_local_chapter&key={{ m.college_id }}>{{ m.college_id }}</a>
+          {% else %}
+            None
+          {% endif %}
+        </td>
+        <td>
+          <form action='dashboard' method='post'>
+            <input type='hidden' name='xsrf_token' value='{{ remove_mentor_xsrf_token }}'></input>
+            <input type="submit" value="Remove"></input>
+            <input type='hidden' name='action' value='remove_mentor'></input>
+            <input type='hidden' name='mentor_id' value='{{ m.user_id }}'></input>
+            <input type='hidden' name='mentor_email' value='{{ m.email }}'></input>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+{% endif %}
+<hr/>

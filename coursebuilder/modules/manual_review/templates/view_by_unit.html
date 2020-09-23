@@ -1,0 +1,168 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<script type="text/javascript" src="//www.google.com/jsapi"></script>
+<h2>Manual Reviews for {{ unit.title }}
+    {% if evaluator %}
+    : {{ evaluator.email }}
+    {% endif %}
+</h2>
+{% if not (assigned_reviews or unassigned_reviews or removed_reviews) %}
+<p>No reviews to show</p>
+{% endif %}
+{% if assigned_reviews %}
+<div style='margin-bottom: 20px'>
+    <h3>Assigned ({{ assigned_reviews|length }})</h3>
+    <div id='assigned-table-div'></div>
+</div>
+{% endif %}
+{% if unassigned_reviews %}
+<div style='margin-bottom: 20px'>
+    <h3>Not Assigned to Anyone ({{ unassigned_reviews|length }})</h3>
+    <div id='unassigned-table-div'></div>
+</div>
+{% endif %}
+{% if removed_reviews %}
+<div style='margin-bottom: 20px'>
+    <h3>Removed ({{ removed_reviews|length }})</h3>
+    <div id='removed-table-div'></div>
+</div>
+{% endif %}
+<div>
+    <a href='{{ dashboard_home_action }}' class='gcb-button'>Back</a>
+</div>
+<script>
+
+
+function assignCourseStaff(URL, evaluatorEmailID) {
+    var el = document.getElementById(evaluatorEmailID);
+    URL = URL + '&evaluator_id=' + el.value;
+    window.location.href = URL;
+}
+
+function drawTables() {
+
+    // Assigned
+    {% if assigned_reviews %}
+    var assigned_table = new google.visualization.DataTable();
+
+    assigned_table.addColumn('string', 'Course Staff');
+    assigned_table.addColumn('string', 'Student ID');
+    assigned_table.addColumn('string', 'Evaluation Status');
+    assigned_table.addColumn('number', 'Score');
+    assigned_table.addColumn('string', 'Remove');
+
+    {% for step in assigned_reviews %}
+        assigned_table.addRows(1);
+        assigned_table.setCell({{ loop.index0 }}, 0, '{{ evaluator_profiles[loop.index0].email }}');
+        {% if student_details_action %}
+            assigned_table.setCell({{ loop.index0 }}, 1, '<a href="{{ student_details_action }}&key={{ step.reviewee_key }}">{{ step.reviewee_key.name() }}</a>');
+        {% else %}
+            assigned_table.setCell({{ loop.index0 }}, 1, '{{ step.reviewee_key.name() }}');
+        {% endif %}
+        assigned_table.setCell({{ loop.index0 }}, 2, '{{ step.state }}');
+        assigned_table.setCell({{ loop.index0 }}, 3, {{ step.score }});
+        assigned_table.setCell({{ loop.index0 }}, 4, "<a class='gcb-button' href='{{ delete_action }}&key={{ step.key()|safe }}'>Remove</a>");
+    {% endfor %}
+
+    new google.visualization.Table(
+        document.getElementById('assigned-table-div')
+    ).draw(
+        assigned_table, {
+            allowHtml: true,
+            sortColumn: 0,
+            title: 'Assigned Manual Reviews'
+        }
+    )
+    {% endif %}
+
+    // UnAssigned
+    {% if unassigned_reviews %}
+    var unassigned_table = new google.visualization.DataTable();
+    unassigned_table.addColumn('string', 'Student ID');
+    unassigned_table.addColumn('string', 'Assign');
+
+    {% for summary in unassigned_reviews %}
+        unassigned_table.addRows(1);
+        {% if student_details_action %}
+            unassigned_table.setCell({{ loop.index0 }}, 0, '<a href="{{ student_details_action }}&key={{ summary.reviewee_key }}">{{ summary.reviewee_key.name() }}</a>');
+        {% else %}
+            unassigned_table.setCell({{ loop.index0 }}, 0, '{{ summary.reviewee_key.name() }}');
+        {% endif %}
+        // TODO(rthakker) See if there is a better way to do this
+        // instead of supplying html strings
+        unassigned_table.setCell({{ loop.index0 }}, 1,
+            "<select id='evaluator_email_{{ summary.key().name() }}'>" +
+                "<option value='' selected>Select Automatically</option>" +
+                {% for profile in course_staff_profiles %}
+                    {% if profile.email != summary.reviewee_key.name() %}
+                    "<option value='{{ profile.user_id }}'>{{ profile.nick_name }} ( {{ profile.email }})</option>" +
+                    {% endif %}
+                {% endfor %}
+            "</select>" +
+            "<button class='gcb-button gcb-pull-right' style='margin-left:10px'" +
+            "onclick='assignCourseStaff(\"{{ assign_action }}&unit_id={{ summary.unit_id }}&reviewee_key={{ summary.reviewee_key|safe }}\", \"evaluator_email_{{ summary.key().name() }}\");'>" +
+            "Assign</a>"
+        );
+
+    {% endfor %}
+
+    new google.visualization.Table(
+        document.getElementById('unassigned-table-div')
+    ).draw(
+        unassigned_table, {
+            allowHtml: true,
+            sortColumn: 0,
+            title: 'Unassigned Manual Reviews'
+        }
+    )
+    {% endif %}
+
+    // Removed
+    {% if removed_reviews %}
+    var removed_table = new google.visualization.DataTable();
+    removed_table.addColumn('string', 'Course Staff');
+    removed_table.addColumn('string', 'Student');
+    removed_table.addColumn('string', 'Previous Evaluation Status');
+
+    {% for step in removed_reviews %}
+        removed_table.addRows(1);
+        removed_table.setCell({{ loop.index0 }}, 0, '{{ removed_evaluator_profiles[loop.index0].email }}');
+        {% if student_details_action %}
+            removed_table.setCell({{ loop.index0 }}, 1, '<a href="{{ student_details_action }}&key={{ step.reviewee_key }}">{{ step.reviewee_key.name() }}</a>');
+        {% else %}
+            removed_table.setCell({{ loop.index0 }}, 1, '{{ step.reviewee_key.name() }}');
+        {% endif %}
+        removed_table.setCell({{ loop.index0 }}, 2, '{{ step.state }}');
+
+
+    {% endfor %}
+
+    new google.visualization.Table(
+        document.getElementById('removed-table-div')
+    ).draw(
+        removed_table, {
+            allowHtml: true,
+            sortColumn: 0,
+            title: 'Removed Manual Reviews'
+        }
+    )
+    {% endif %}
+
+}
+google.load('visualization', '1', {packages: ['table']});
+google.setOnLoadCallback(drawTables);
+</script>

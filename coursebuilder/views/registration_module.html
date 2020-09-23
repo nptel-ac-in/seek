@@ -1,0 +1,37 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% if can_register %}
+  <div class="gcb-col-5">
+    <center>
+      {% if show_registration_page %}
+        <a class="gcb-button gcb-button-large" href="register" role="button">
+          {# I18N: Registration button on the main course page. #}
+          {{ gettext('Join') }}
+        </a>
+      {% else %}
+        <form action='register' method='post'>
+          <input type="hidden" name="xsrf_token" value="{{ register_xsrf_token|escape }}">
+          <input type="hidden" name="name_from_profile">
+          <button class="gcb-button gcb-button-large" type="submit">
+            {# I18N: Registration button on the main course page. #}
+            {{ gettext('Join') }}
+          </button>
+        </form>
+      {% endif %}
+    </center>
+  </div>
+{% endif %}

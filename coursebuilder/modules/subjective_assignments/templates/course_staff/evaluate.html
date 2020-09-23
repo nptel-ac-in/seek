@@ -1,0 +1,96 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% extends base %}
+
+{% block top_content %}
+<script src="/modules/ajax_registry/assets/js/registry.js"></script>
+<script src="/modules/subjective/editor/ckeditor/ckeditor.js"></script>
+<script type="text/javascript">
+function saveDraft(id) {
+  updateInnerHTML('save-draft-button', 'Saving ...');
+  element('save-draft-button').disabled = true;
+  data = {'comments': CKEDITOR.instances.comments.getData(), 'key': id, 'score': element('score').value};
+  ajax_server.save_comments(data);
+}
+function onSaveSuccess() {
+  updateInnerHTML('save-draft-button', 'Save');
+  element('save-draft-button').disabled = false;
+}
+
+installFunction('course_staff', 'save_comments', onSaveSuccess, '{{ save_comments_xsrf_token }}');
+</script>
+{% endblock %}
+
+{% block main_content_header %}
+<div>
+  <h1 class="gcb-unit-header">
+    {# I18N: Header text for a unit page. #}
+    {{ gettext('Evaluate %(user)s for %(title)s', user=reviewee, title=unit.title) }}
+  </h1>
+</div>
+{% endblock %}
+
+{% block main_content_data %}
+<div style="display: inline-block;font-size:16px;padding-bottom: 7px;">
+{% if submission_due_date %}
+  <div class="gcb-submission-due-date">
+    {{ gettext('Due on %(time)s', time=submission_due_date) }}
+  </div>
+{% endif %}
+
+{% if essay %}
+  <textarea name="essay" id="essay" rows="60" style="width:100%;">{{ essay }}</textarea>
+  <script type="text/javascript">
+      CKEDITOR.replace("essay", {readOnly : true});
+  </script>
+{% elif file_meta_list %}
+  <h4>Submission:</h4>
+  <ul>
+  {% for file_meta in file_meta_list %}
+    {% if file_meta.id %}
+    <li><a href='https://drive.google.com/open?id={{ file_meta.id }}' target='_blank'>{{ file_meta.title }}</a></li>
+    {% else %}
+    <li><a href='{{ file_meta.webContentLink }}' target='_blank'>{{ file_meta.title }}</a></li>
+    {% endif %}
+  {% endfor %}
+  </ul>
+{% endif %}
+<br/>
+<br/>
+<br/>
+<form id='gcb-submit-comments' action='course_staff?action=submit_score' method='POST'>
+    Comments:
+    <textarea name="comments" id="comments" rows="60" style="width:100%;">{{ comments }}</textarea>
+    <script type="text/javascript">
+        CKEDITOR.replace("comments");
+    </script>
+    <br/>
+    Score:
+    <input type="text" id='score' name="score" value={{ score }}></input>
+
+    <input type="hidden" name="key" value="{{ key|escape }}">
+    <input type="hidden" name="xsrf_token" value="{{ submit_xsrf_token|escape }}">
+    <div>
+      <button type="submit" class="gcb-button gcb-pull-right">
+        {{ gettext('Submit') }}</button>
+      <button type='submit' value='save' class="gcb-button gcb-pull-right"
+                                         href="javascript:void(0);" id="save-draft-button"
+                                                                    onclick="saveDraft('{{ key }}'); return false;" target="_blank">
+{{ gettext('Save') }}</button>
+</form>
+</div>
+{% endblock %}

@@ -1,0 +1,110 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% if any_generator_not_running %}
+  <form id="gcb-generate-analytics-data"
+        action="analytics?action=run_visualizations"
+        method="POST">
+    <input type="hidden" name="r" value="{{ r }}">
+    <input type="hidden" name="xsrf_token" value="{{ xsrf_token_run }}">
+    {% for visualization in visualizations %}
+      <input type="hidden" name="visualization" value="{{ visualization }}">
+    {% endfor %}
+    <button class="gcb-button gcb-pull-right"
+            type="submit">
+      Update All Statistics
+    </button>
+  </form>
+  <br>
+  <br>
+{% endif %}
+
+
+{% if rest_sources %}
+  <div id="gcb_rest_source_errors">
+  </div>
+  {% if has_pagination %}
+    <h3>Data Navigation</h3>
+    <p>The statistics on this page use data sources that are too big
+      to show all at once.  Use the page navigation buttons below to
+      select which parts of the data to view.  These controls affect all
+      statistics on this page.</p>
+  {% endif %}
+  {% for rest_source in rest_sources|sort(attribute='title') %}
+    <p>
+    {% if rest_source.chunk_size > 0%}
+      {{ rest_source.title }}
+      <button
+         class="gcb_button"
+         id="gcb_rest_source_page_request_zero_{{ rest_source.name }}"
+         onclick="gcbRestSourcePageRequest('{{ rest_source.name }}', 0);">
+        |&lt;&lt;
+      </button>
+      <button
+         class="gcb_button"
+         id="gcb_rest_source_page_request_minusten_{{ rest_source.name }}"
+         onclick="gcbRestSourcePageChange('{{ rest_source.name }}', -10);">
+        &lt;&lt;
+      </button>
+      <button
+         class="gcb_button"
+         id="gcb_rest_source_page_request_minusone_{{ rest_source.name }}"
+         onclick="gcbRestSourcePageChange('{{ rest_source.name }}', -1);">
+        &lt;
+      </button>
+      Page:
+      <span id="gcb_rest_source_page_number_{{ rest_source.name }}">
+        0
+      </span>
+      <button
+         class="gcb_button"
+         id="gcb_rest_source_page_request_plusone_{{ rest_source.name }}"
+         onclick="gcbRestSourcePageChange('{{ rest_source.name }}', 1);">
+        &gt;
+      </button>
+      <button
+         class="gcb_button"
+         id="gcb_rest_source_page_request_plusten_{{ rest_source.name }}"
+         onclick="gcbRestSourcePageChange('{{ rest_source.name }}', 10);">
+        &gt;&gt;
+      </button>
+      <!-- TODO(mgainer): Additional controls for filtering and ordering
+           based on schema. -->
+      Items per page:
+      <input type="text"
+             size="6"
+             id="gcb_rest_source_chunk_size_{{ rest_source.name }}"
+             value="{{ rest_source.chunk_size }}">
+    {% else %}
+      <!-- Data sources that are guaranteed to only have one page
+           get bogus items for the page number display and page
+           size control to simplify code in rest_visualizations.html -->
+      <input type="hidden"
+             id="gcb_rest_source_chunk_size_{{ rest_source.name }}"
+             value="0">
+      <span id="gcb_rest_source_page_number_{{ rest_source.name }}"
+            style="display:none;"></span>
+    {% endif %}
+    </p>
+    <div id="gcb_log_rest_source_{{ rest_source.name }}"></div>
+  {% endfor %}
+  <br>
+{% endif %}
+
+
+{% for section in sections %}
+  {{ section }}
+{% endfor %}

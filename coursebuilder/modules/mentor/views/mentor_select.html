@@ -1,0 +1,84 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% extends 'base_course.html' %}
+
+{% block subtitle %}
+  {# I18N: Title of the course progress webpage. #}
+  {{ gettext('Mentor') }}
+{% endblock subtitle %}
+
+{% block top_content %}
+{% endblock %}
+
+{% block breadcrumb_content %}
+  <ul class="gcb-breadcrumb">
+    {# I18N: Navigation breadcrumb. #}
+    <li><a href="course">{{ gettext('Course') }}</a></li>
+    <li><a href="student/mentor">
+      {# I18N: Navigation breadcrumb. #}
+      {{ gettext('Mentor') }}</a></li>
+  </ul>
+{% endblock %}
+
+{% block main_content_header %}
+  <div>
+    <h1 class="gcb-unit-header">
+      {# I18N: Header text for a unit page. #}
+      {{ gettext('Mentor') }}
+    </h1>
+  </div>
+{% endblock %}
+
+{% block main_content_data %}
+    {% if mentor_email %}
+      {# I18N: Table header for the student's email address. This is a noun. #}
+      <div class='gcb-cols gcb-bold-row'>
+      <div class="gcb-col-3">{{ gettext('Your currently selected mentor is : ') }}
+      </div>
+      <div class='gcb-col-5'>{{ mentor_email}}</div>
+      <div class='gcb-col-2'>
+      <form action='student/mentor' method='post'>
+          <input type='hidden' name='xsrf_token' value='{{ remove_mentor_xsrf_token }}'></input>
+          <input type='hidden' name='action' value='remove_mentor'></input>
+          <input type='submit' class='gcb-button' value='Remove Mentor'></input>
+      </form>
+      </div>
+      </div>
+    {% endif %}
+
+    {% if pmentors %}
+      {# I18N: Table header for the student's email address. This is a noun. #}
+      <form action='student/mentor' method='post'>
+      <div class='gcb-cols gcb-bold-row'>
+      <div class="gcb-col-3">{{ gettext('Select Mentor') }}</div>
+      <div class='gcb-col-5'>
+      <select name='mentor_id'>
+      <option value='' disabled selected>--</option>
+      {% for m in pmentors %}
+      <option value='{{ m.user_id }}'>{{ m.nick_name }} ({{ m.email }})</option>
+      {% endfor %}
+      </select>
+      </div>
+      <div class='gcb-col-2'>
+      <input type='hidden' name='xsrf_token' value='{{ set_mentor_xsrf_token }}'></input>
+      <input type='hidden' name='action' value='set_mentor'></input>
+      <input type='submit' class='gcb-button' value='Set Mentor'></input>
+      </div>
+      </div>
+      </form>
+    {% endif %}
+{% endblock %}

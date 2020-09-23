@@ -1,0 +1,141 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% extends 'base_course.html' %}
+
+{% block subtitle %}
+  {# I18N: Title of the course progress webpage. #}
+  {{ gettext('Mentee List') }}
+{% endblock subtitle %}
+
+{% block top_content %}
+{% endblock %}
+
+{% block breadcrumb_content %}
+  <ul class="gcb-breadcrumb">
+    {# I18N: Navigation breadcrumb. #}
+    <li><a href="course">{{ gettext('Course') }}</a></li>
+    <li><a href="student/mentee">
+      {# I18N: Navigation breadcrumb. #}
+      {{ gettext('Mentee List') }}</a></li>
+  </ul>
+{% endblock %}
+
+{% block main_content_header %}
+  <div>
+    <h1 class="gcb-unit-header">
+      {# I18N: Header text for a unit page. #}
+      {{ gettext('Mentee Details') }}
+    </h1>
+  </div>
+{% endblock %}
+
+{% block main_content_data %}
+  {% if mentee_list %}
+    <style type="text/css">
+      .table-container { margin: 20px 0; }
+    </style>
+    <script type="text/javascript" src="//www.google.com/jsapi"></script>
+    <script type="text/javascript">
+      var TICK_MARK = '\u2713';
+      google.load('visualization', '1', {packages: ['table']});
+      google.setOnLoadCallback(showMenteeData);
+      function getSizeOfObject(obj) {
+        var size = 0;
+        for (var key in obj) {
+          if (obj.hasOwnProperty(key)) {
+            size++;
+          }
+        }
+        return size;
+      }
+      function getSortedKeys(obj) {
+        var keys = [];
+        for (var item in obj) {
+          keys.push(item);
+        }
+        keys.sort();
+        return keys;
+      }
+      var mentee_list = JSON.parse("{{ mentee_list | js_string}}");
+      var a_list = JSON.parse("{{ a_list | js_string}}");
+
+      // Adds data to the displayed table.
+      function populateMenteeData(table, mlist, alist) {
+        var rowKeys = getSortedKeys(mlist);
+        for (var rowIndex = 0; rowIndex < rowKeys.length; rowIndex++) {
+          var rowKey = rowKeys[rowIndex];
+          var d = mlist[rowKey];
+          table.setCell(rowIndex, 0, d['name']);
+          table.setCell(rowIndex, 1, d['email']);
+          for (var i = 0; i < alist.length; i++) {
+            var score = d[alist[i][0]];
+            if (score === 'submitted') {
+                // Student has submitted but deadline has not passed yet.
+                // Displaying a tick mark instead of the score
+                table.setCell(rowIndex, 2 + i, TICK_MARK);
+            }
+            else {
+                table.setCell(rowIndex, 2 + i, d[alist[i][0]]);
+            }
+          }
+        }
+      }
+
+      function drawMenteeTable(divId, mlist, alist) {
+        // Create and populate the data table.
+        var table = new google.visualization.DataTable();
+        table.addColumn('string', 'Name');
+        table.addColumn('string', 'Email');
+        for (var i = 0; i < alist.length; i++) {
+            if (alist[i][2]) {
+                table.addColumn('number', alist[i][1]);
+            }
+            else {
+                table.addColumn('string', alist[i][1]);
+            }
+        }
+        var numRows = getSizeOfObject(mlist);
+        table.addRows(numRows)
+        populateMenteeData(table, mlist, alist);
+
+        new google.visualization.Table(
+          document.getElementById(divId)
+        ).draw(
+          table, {
+            allowHtml: true,
+            sortColumn: 0,  // Force sort on Question Identifier.
+            title: "List of Mentee's"
+          }
+        );
+      }
+      function showMenteeData() {
+          drawMenteeTable('menteeTable', mentee_list, a_list);
+      }
+    </script>
+
+    <div id='menteeTable'></div>
+    <div id='menteeTableHelpText'>
+        <p>
+            * <span class='tick-mark-el'></span> implies the student has submitted but the assessment due date has not
+            passed yet.
+        </p>
+    </div>
+    <script>
+        $('.tick-mark-el').append(TICK_MARK);
+    </script>
+  {% endif %}
+{% endblock %}

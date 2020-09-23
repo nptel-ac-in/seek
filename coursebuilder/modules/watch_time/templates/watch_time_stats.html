@@ -1,0 +1,172 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% if stats_calculated %}
+  <style type="text/css">
+    .table-container {
+      margin: 20px 0;
+    }
+  </style>
+ <script type="text/javascript"
+          src="https://www.google.com/jsapi?autoload={
+            'modules':[{
+              'name':'visualization',
+              'version':'1',
+              'packages':['corechart']
+            }]
+          }"></script>
+  <script type="text/javascript">
+    var stats = JSON.parse("{{ stats | js_string}}");
+    
+
+    google.setOnLoadCallback(setPageContnets);
+    function setPageContnets(){
+      var drowpown = document.getElementById('lessons_dropdown');
+      var no_of_videos =stats.length;
+        for(var i = 0; i < no_of_videos; i++){
+          unit_id = stats[i]["unit_id"];
+          title = stats[i]["unit_title"]; 
+          if ($("#lessons_dropdown option[value='"+unit_id+"']").length > 0){
+            //do nothing
+          }else{
+            drowpown.options[drowpown.options.length] = new Option(title, unit_id);
+          }
+        }
+      drawChart();
+    }
+    function create2DArray(length) {
+        var arr = new Array(length || 0),
+            i = length;
+
+        if (arguments.length > 1) {
+            var args = Array.prototype.slice.call(arguments, 1);
+            while(i--) arr[length-1 - i] = createArray.apply(this, args);
+        }
+
+        return arr;
+    }
+
+    function createArray(length, initValue){
+
+      var data = [];
+      for(var i = 0; i < length; i++) {
+          data.push(initValue);
+      }
+      return data;
+    }
+
+    function drawChart() {
+        var drowpown = document.getElementById('lessons_dropdown');
+        selected_unit_id = drowpown.options[drowpown.selectedIndex].value;
+        selected_unit_name = drowpown.options[drowpown.selectedIndex].text;
+        console.log(selected_unit_id);
+        var data = new google.visualization.DataTable();
+        data.addColumn('number', 'Watch Time');
+
+
+
+        //get the titles
+        var no_of_videos =stats.length;
+        title_array = []
+        for(var i = 0; i < no_of_videos; i++){
+          if(stats[i]["unit_id"] != selected_unit_id) {continue;}  
+          video_title = stats[i]["title"];
+          video_id = stats[i]["video_id"];
+
+          if($.inArray(video_title, title_array) == -1 ){
+            data.addColumn('number',video_title);
+            title_array.push(video_title);
+          }
+        }
+        var rows = {}
+        for(var j=0; j < title_array.length; j++){
+          present_video_title = title_array[j];
+          
+
+            for(var i = 0; i < no_of_videos; i++){
+              if(stats[i]["unit_id"] != selected_unit_id) {continue;} 
+              if(stats[i]["title"] != present_video_title) {continue;} 
+              video_data = stats[i]["stats"];
+
+              if(video_data && video_data != undefined ){
+                for (var key in video_data) {
+                  if (key === 'length' || !video_data.hasOwnProperty(key)) continue;
+                  var value = video_data[key];
+                  var row = createArray(title_array.length, 0);
+                  strKey = key.toString();
+                  if (strKey in rows){
+                    row = rows[strKey]
+                    row[j] =  video_data[strKey]
+                    rows[strKey] = row
+                  }else{
+                    row[j] =  video_data[strKey]
+                    rows[strKey] = row
+                  }
+                }
+              }
+
+
+
+            }
+
+
+        }
+              dataRows = []
+              for(key in rows){
+                dataRow = []
+                dataRow.push(parseInt(key));
+                dataRow = dataRow.concat(rows[key])
+                dataRows.push(dataRow)
+              }
+              console.log(dataRows);
+              data.addRows(dataRows);
+
+
+    
+              var options = {
+                      title: selected_unit_name,
+                      legend: { position: 'bottom' }
+                    };
+              var chart = new  google.visualization.LineChart(document.getElementById('linechart_material'));
+              chart.draw(data, options);
+        }
+    
+
+    
+  </script>
+  <div style="width: 900px;">
+    <p><b>Please select a lesson to see the stats</b></p>
+    <select id="lessons_dropdown" onchange="drawChart();">
+    </select>
+</div>
+<div id="linechart_material" style="width: 900px; height: 500px"></div>
+  
+{% endif %}
+
+
+{% if errors %}
+  <ul>
+    {% for error in errors %}
+      <li>{{ error }}</li>
+    {% endfor %}
+  </ul>
+{% endif %}
+
+{% if not errors and not stats_calculated%}
+  <p><b>No stats data availabe.</b></p>
+{% endif %}
+
+<br><br>

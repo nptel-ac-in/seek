@@ -1,0 +1,77 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% extends base %}
+
+{% block subtitle %}
+  {# I18N: Title of the webpage. #}
+  {% if title %}
+    {{ gettext('%(title)s', title=title) }}
+  {% else %}
+    {{ gettext('External Link') }}
+  {% endif %}
+{% endblock subtitle %}
+
+{% block top_content %}
+{% endblock %}
+
+{% block edit_unit_content %}
+  {% if is_read_write_course and is_course_admin and unit %}
+    <div class="gcb-unit-edit-controls">
+      <a href="dashboard?action=edit_link&key={{ unit.unit_id }}"
+        class="gcb-button gcb-button-action">Edit Link</a>
+    </div>
+  {% endif %}
+{% endblock %}
+
+{% block breadcrumb_content %}
+  {% if unit %}
+  <ul class="gcb-breadcrumb">
+    {# I18N: Navigation breadcrumb. #}
+    <li><a href="course">{{ gettext('Course') }}</a></li>
+    <li><a href="link?unit={{ unit.unit_id }}">
+    {# I18N: Navigation breadcrumb. #}
+    {% if title %}
+      {{ gettext('%(title)s', title=title) }}
+    {% else %}
+      {{ gettext('External Link') }}
+    {% endif %}
+     </a></li>
+  </ul>
+ {% endif %}
+{% endblock %}
+
+{% block main_content_header %}
+  <div>
+    <h1 class="gcb-unit-header">
+      {# I18N: Header text for a unit page. #}
+      {% if title %}
+        {{ gettext('%(title)s', title=title) }}
+      {% else %}
+        {{ gettext('External Link') }}
+      {% endif %}
+    </h1>
+  </div>
+{% endblock %}
+
+{% block main_content_data %}
+<div class="gcb-cols">
+  <iframe src="{{ target }}" frameborder="0" width="100%" height="569"
+    allowfullscreen="true" mozallowfullscreen="true"
+    webkitallowfullscreen="true">
+  </iframe>
+</div>
+{% endblock %}

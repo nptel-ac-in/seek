@@ -1,0 +1,137 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% macro show_full_progress_state(suffix, uid) -%}
+<div class="gcb-progress-icon-holder"><img src="/modules/nptel/assets/img/not_started.png"
+    alt="{# I18N: Alt text for image representing student progress. #}{{ gettext('Not Started') }}"
+    title="{# I18N: Alt text for image representing student progress. #}{{ gettext('Not Started') }}"
+    class="gcb-progress-icon"
+    id="progress-state-{{ suffix }}{{ uid }}">
+</div>
+{%- endmacro %}
+
+{% macro show_progress_state(uid) -%}
+  {{ show_full_progress_state('', uid) }}
+{%- endmacro %}
+
+{% macro start_unit_navbar(u, is_faq, faq_title) -%}
+  <div class="unit_navbar" id="unit_navbar_{{ u.unit_id }}" >
+  <div {% if is_faq %} class="faq_heading" {% else %} class="unit_heading" {% endif %}
+    id="unit_heading_{{ u.unit_id }}"
+    onclick='toggleSubUnitNavBar("subunit_navbar_{{ u.unit_id }}")'>
+    {% if is_faq %} {{ faq_title }} {% else %} {{ u.title }} {% endif %}</div>
+    {% if unit_id and u.unit_id == unit_id %}
+      <ul class="subunit_navbar_current" id="subunit_navbar_{{ u.unit_id }}">
+    {% else %}
+      <ul class="subunit_navbar_other" id="subunit_navbar_{{ u.unit_id }}">
+    {% endif %}
+{%- endmacro %}
+
+{% macro end_unit_navbar() -%}
+</ul></div>
+{%- endmacro %}
+
+{% macro start_subunit(cond) -%}
+  <li {% if cond %} class="subunit_current" {% else %} class="subunit_other" {% endif %}>
+  <div class="gcb-left-activity-title-with-progress gcb-nav-pa">
+{%- endmacro %}
+
+{% macro end_subunit() -%}
+</div></li>
+{%- endmacro %}
+
+{% macro show_lesson(u, lesson, show_progress) -%}
+  {% if lesson.now_available or is_course_admin %}
+    {{ start_subunit(page_type == 'unit' and lesson_id and lesson.lesson_id == lesson_id) }}
+      <a href="unit?unit={{ u.unit_id }}&lesson={{ lesson.lesson_id }}">{{ gettext('%(title)s', title=lesson.title) }}</a>
+      {% if not transient_student and show_progress %}
+        {{ show_full_progress_state('html-', lesson.lesson_id) }}
+      {% endif %}
+    {{ end_subunit() }}
+    {% if lesson.activity and lesson.activity_listed %}
+      {{ start_subunit(page_type == 'activity' and lesson_id and lesson.lesson_id == lesson_id) }}
+        <a href="activity?unit={{ u.unit_id }}&lesson={{ lesson.lesson_id }}">{{ gettext('Activity') }}</a>
+        {% if not transient_student %}
+          {{ show_full_progress_state('activity-', lesson.lesson_id) }}
+        {% endif %}
+      {{ end_subunit() }}
+    {% endif %}
+  {% endif %}
+{%- endmacro %}
+
+{% macro show_subunit(subunit, show_progress) -%}
+  {% if subunit.now_available or is_course_admin %}
+    {{ start_subunit(unit and subunit.unit_id == unit.unit_id) }}
+      {% if subunit.type == 'PA' %}
+        <a href="progassignment?name={{ subunit.unit_id }}">{{ gettext('Assignment : %(title)s', title=subunit.title) }}</a>
+      {% elif subunit.type == 'A' %}
+        <a href="assessment?name={{ subunit.unit_id }}">{{ gettext('Quiz : %(title)s', title=subunit.title) }}</a>
+      {% elif subunit.type == 'O' %}
+        <a href="link?unit={{ subunit.unit_id }}">{{ subunit.title }}</a>
+      {% elif subunit.type == 'X' %}
+        <a href="{{ subunit._custom_unit_url }}">{{ subunit.title }}</a>
+      {% endif %}
+      {% if not transient_student and show_progress %}
+        {{ show_progress_state(subunit.unit_id) }}
+      {% endif %}
+    {{ end_subunit() }}
+  {% endif %}
+{%- endmacro %}
+
+<div class="gcb-nav" id="gcb-nav-left" role="navigation">
+   <div class='gcb-aside'>
+  <h2>Course outline</h2>
+
+    {% for uiter in units %}
+      {% if uiter.title != "FAQ's" and (uiter.now_available or is_course_admin) %}
+        {% if uiter.type == 'U' %}
+          {{ start_unit_navbar(uiter, False, '') }}
+            {% for lesson in lessons_dict[uiter.unit_id] %}
+              {{ show_lesson(uiter, lesson, is_enrolled) }}
+            {% endfor %}
+            {% for subunit in unit_dict[uiter.unit_id] %}
+              {{ show_subunit(subunit, is_enrolled) }}
+            {% endfor %}
+          {{ end_unit_navbar() }}
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+    &nbsp;
+  </div>
+
+  {% for uiter in units %}
+    {% if uiter.title == "FAQ's" and (uiter.now_available or is_course_admin) %}
+      <div class='gcb-aside'>
+      <ul class="unit_navbar_ul" id="faq_navbar">
+        {% if uiter.type == 'U' %}
+          {{ start_unit_navbar(uiter, True, 'Help and FAQs') }}
+            {% for lesson in lessons_dict[uiter.unit_id] %}
+              {{ show_lesson(uiter, lesson, False) }}
+            {% endfor %}
+            {% for subunit in unit_dict[uiter.unit_id] %}
+              {{ show_subunit(subunit, False) }}
+            {% endfor %}
+          {{ end_unit_navbar() }}
+        {% endif %}
+      </ul>
+      </div>
+    {% endif %}
+  {% endfor %}
+{% if enable_hangouts %}
+  <script src='/modules/nptel/assets/js/instanthangouts-0.1.0.js' async></script>
+  <div class='instanthangouts' width='100%'></div>
+{% endif %}
+</div>

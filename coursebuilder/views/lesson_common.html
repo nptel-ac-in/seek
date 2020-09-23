@@ -1,0 +1,49 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{{ title }}
+{% if is_read_write_course and is_course_admin %}
+  <a id="gcb-edit-lesson-button"
+      href="dashboard?action=edit_lesson&key={{ lesson.lesson_id }}"
+      class="gcb-button gcb-button-action gcb-button-author">Edit  Lesson</a>
+{% endif %}
+{% if lesson.now_available or can_see_drafts %}
+  <div {% if lesson.notes %}class="gcb-cols"{% endif %}>
+    {% if lesson.notes %}
+    <div id="get-text-button">
+      <p style="float:right; margin-top: 0px;">
+        <a role="button" class="gcb-button" id="lessonNotesLink"
+           href="{{ lesson.notes }}" target="_blank">
+          {# I18N: Link to a text version of a lesson video. #}
+          {{ gettext('Text Version') }}
+        </a>
+      </p>
+    </div>
+    {% endif %}
+  </div><!-- /gcb-cols -->
+
+  {% if activity %}
+    {% include 'activity.html' %}
+  {% else %}
+    {% include 'lesson.html' %}
+  {% endif %}
+
+{% else %}
+  <div>
+    {# I18N: Text shown for a lesson that has not been made public. #}
+    {{ gettext('This lesson is not available.')}}
+  </div>
+{% endif %}

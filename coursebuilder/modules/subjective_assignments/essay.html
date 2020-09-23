@@ -1,0 +1,130 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% extends base %}
+
+{% block top_content %}
+<script src="/modules/ajax_registry/assets/js/registry.js"></script>
+<script src="/modules/subjective/editor/ckeditor/ckeditor.js"></script>
+<script type="text/javascript">
+function saveDraft(id) {
+  updateInnerHTML('save-draft-button', 'Saving ...');
+  element('save-draft-button').disabled = true;
+  data = {'essay': CKEDITOR.instances.essay.getData(), 'id': id};
+  ajax_server.save_draft(data);
+}
+function onSaveSuccess() {
+  updateInnerHTML('save-draft-button', 'Save');
+  element('save-draft-button').disabled = false;
+}
+
+installFunction('subjective', 'save_draft', onSaveSuccess, '{{ assignment.save_draft_xsrf_token }}');
+</script>
+{% endblock %}
+
+{% block edit_unit_content %}
+{% if is_read_write_course and is_course_admin %}
+  {% if assignment %}
+    {% if assignment.edit_action %}
+      <a class="gcb-button pull-right" role="button"
+         style="float:right;width:60px;"
+         href="{{ assignment.edit_action }}" >Edit</a>
+    {% endif %}
+  {% endif %}
+{% endif %}
+{% endblock %}
+
+{% block breadcrumb_content %}
+{% endblock %}
+
+{% block main_content_header %}
+<div>
+  <h1 class="gcb-unit-header">
+    {# I18N: Header text for a unit page. #}
+    {{ gettext('%(title)s', title=unit.title) }}
+  </h1>
+</div>
+{% endblock %}
+
+{% block main_content_data %}
+{% if assignment.submission_due_date %}
+  <div class="gcb-submission-due-date">
+    {{ gettext('Due on %(time)s', time=assignment.submission_due_date) }}
+  </div>
+{% endif %}
+
+{% if assignment %}
+  <div style='clear: both; padding-top: 2px;' />
+  {% if assignment.question %}
+    <div style="display: inline-block;font-size:16px;padding-bottom: 7px;">
+      {{ assignment.question | safe }}
+    </div>
+    <div style="padding-bottom: 2px; clear: both;"></div>
+    <div style=" width: 100%;">
+      {% if not readonly %}
+        <form id='gcb-submit-essay' action='{{ assignment.submit_action }}' method='POST'>
+          <div style="width: 83%">
+            <textarea name="essay" id="essay" rows="60" style="width:100%;">{{ assignment.previous_submission }}</textarea>
+            <script type="text/javascript">
+                CKEDITOR.replace("essay");
+            </script>
+
+            <input type="hidden" name="xsrf_token" value="{{ assignment.submit_xsrf_token|escape }}">
+            <div>
+              <div class='gcb-submit-only-once'>
+                {% if submit_only_once %}
+                {{ gettext('You are allowed to submit this assignment only once.') }}
+                {% else %}
+                {{ gettext('You may submit any number of times before the due date. The final submission will be considered for grading.') }}
+                {% endif %}
+              </div>
+              <button type="submit" class="gcb-button gcb-pull-right">
+                {{ gettext('Submit') }}</button>
+              <button type='submit' value='save' class="gcb-button gcb-pull-right"
+                                                 href="javascript:void(0);" id="save-draft-button"
+                                                                            onclick="saveDraft('{{ pa_name }}'); return false;" target="_blank">
+        {{ gettext('Save') }}</button>
+            </div>
+        </form>
+      {% else %}
+        <div class='gcb-submit-only-once'>
+          {% if assignment.due_date_exceeded %}
+            {{ gettext('Due Date Exceeded.') }}
+          {% elif submit_only_once and assignment.last_code %}
+            {{ gettext('You have already submitted this assignment') }}
+          {% endif %}
+          {% if assignment.score %}
+            {{ gettext('You scored %(score)s/100.', score=assignment.score) }}
+          {% endif %}
+          {% if assignment.previous_submission and assignment.already_submitted %}
+            <br/>
+            {{ gettext('Your last recorded submission was :') }}
+            <textarea name="essay" id="essay" rows="60" style="width:100%;">{{ assignment.previous_submission }}</textarea>
+            <script type="text/javascript">
+                CKEDITOR.replace("essay", {readOnly : true});
+            </script>
+          {% else %}
+          <div class='gcb-submit-only-once'>
+            {{ gettext('As per our records you have not submitted this assignment.') }}
+          </div>
+          {% endif %}
+      {% endif %}
+      </div>
+    {% else %}
+    <p>{{ gettext('No Question') }}</p>
+    {% endif %}
+{% endif %}
+{% endblock %}

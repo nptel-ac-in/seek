@@ -1,0 +1,82 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<h3>Student Details for {{ student.profile.nick_name }}</h3>
+<div id='student-details-div'>
+<ul>
+    {% set profile=student.profile %}
+    {% include 'templates/profile_fields.html' %}
+    {% if student_scores %}
+        <li>Scores:</li>
+        <ul>
+        {% set student_scores=student_scores %}
+        {% for unit in units %}
+            {% if student_scores[unit.unit_id|string] %}
+                <li>{{ unit.title }} ({{ unit.unit_id }}): {{ student_scores[unit.unit_id|string] }}</li>
+                {% set student_scores=student_scores.pop(unit.unit_id|string) %}
+            {% endif %}
+        {% endfor %}
+        </ul>
+        {% if student_scores %}
+            Scores of deleted assignments:
+            <ul>
+            {% for unit_id in student_scores %}
+                <li>ID {{ unit_id }}: {{ student_scores[unit_id] }}</li>
+            {% endfor %}
+            </ul>
+        {% endif %}
+    {% endif %}
+    {% if watch_time %}
+        <li>Watch Time:</li>
+        <ul>
+        <!-- TODO(rthakker) Show watchtime in a better format -->
+        {% for resource_id in watch_time %}
+        <li><strong>{{ resource_id }}</strong>:
+            <ul>
+                <li>Watched: <strong>{{ watch_time[resource_id].total_watched_percent }} %</strong></li>
+                <li>Split up:
+                    <!-- TODO(rthakker) Remove the trailing comma-->
+                    {% for entity in watch_time[resource_id].watched_pretty %}
+                        <strong>{{ entity[0] }}</strong> to <strong>{{ entity[1] }}</strong>,
+                    {% endfor %}
+                </li>
+                <li>Total Duration: <strong>{{ watch_time[resource_id].duration_pretty }}</strong></li>
+
+        </li>
+        </ul>
+        {% endfor %}
+    {% endif %}
+</ul>
+</div>
+<div>
+    {% if student.is_enrolled %}
+        <form action='{{ unenroll_action }}' method='post'>
+            <input type='hidden' name='key' value='{{ student.key() }}'></input>
+            <input name="xsrf_token" id="xsrf_token" value="{{ unenroll_xsrf }}" type="hidden">
+            <button class='gcb-button' type='submit'>Force Unenroll Student</button>
+        </form>
+    {% else %}
+        <form action='{{ enroll_action }}' method='post'>
+            <input type='hidden' name='email' value='{{ student.email }}'></input>
+            <input name="xsrf_token" id="xsrf_token" value="{{ enroll_xsrf }}" type="hidden">
+            <button class='gcb-button' type='submit'>Force Enroll Student</button>
+        </form>
+    {% endif %}
+    <p></p>
+</div>
+<div>
+    <a class='gcb-button' href='{{ back_action }}'>Back</a>
+</div>

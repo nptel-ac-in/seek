@@ -1,0 +1,43 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% macro show_subunit(subunit) -%}
+  {% if subunit.is_custom_unit %}
+    <li class="unit_current">
+    <div class="gcb-left-activity-title-with-progress gcb-nav-pa">
+      <a
+        href="course_staff?action={{ CUSTOM_UNITS[subunit.custom_unit_type].list_action }}&name={{ subunit.unit_id }}"
+        >{{ gettext('%(title)s', title=subunit.title) }}</a>
+</div></li>
+  {% endif %}
+{%- endmacro %}
+
+<div class="gcb-nav" id="gcb-nav-left" role="navigation">
+   <div class='gcb-aside'>
+  <h2>Course outline</h2>
+  <ul class="unit_navbar_ul" id="course_navbar">
+    {% for uiter in units %}
+        {% if uiter.type == 'U' %}
+            {% for subunit in unit_dict[uiter.unit_id] %}
+              {% if subunit.custom_unit_type in CUSTOM_UNITS %}
+              {{ show_subunit(subunit) }}
+              {% endif %}
+            {% endfor %}
+        {% endif %}
+    {% endfor %}
+  </ul>
+  </div>
+</div>

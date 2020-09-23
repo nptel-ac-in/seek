@@ -1,0 +1,114 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<script type="text/javascript" src="//www.google.com/jsapi"></script>
+<h3>Students</h3>
+<br/>
+<div id='navigation-div'>
+    <label>Number of rows to show in a page:</label>
+    <input id='no-of-entries' type='text' value='{{ no_of_entries }}'></input>
+    <label>Order By: </label>
+    <select id='order'>
+        <option value='email'
+            {% if order == 'email' %} selected {% endif %}>Email</option>
+        <option value='user_id'
+            {% if order == 'user_id' %} selected {% endif %}>User ID</option>
+    </select>
+    <input type='checkbox' id='invert_order'
+    {% if invert_order %} checked {% endif %}>Invert</input>
+    <button class='gcb-button' onclick='changeNoOfEntries()'>Go</button>
+    <span class='gcb-pull-right'>
+        <label>Search by email: </label>
+        <input id='search-email' placeholder="Email" value='{{ search_email_query }}'></input>
+        <button class='gcb-button' onclick='searchByEmail()'>Search</button>
+        <button class='gcb-button' onclick='clearSearch()'>Clear</button>
+    </span>
+</div>
+<br/>
+<div id='students-table'></div>
+<br/>
+<div id='nav-buttons'>
+    <a class='gcb-button' href='{{ list_action|safe }}&num={{ no_of_entries }}&cursor={{ cursor }}&order={% if invert_order %}-{% endif %}{{ order }}&reverse_query=yes'>Previous</a>
+    <a class='gcb-button' href='{{ list_action|safe }}&num={{ no_of_entries }}&cursor={{ new_cursor }}&order={% if invert_order %}-{% endif %}{{ order }}'>Next</a>
+</div>
+<script type='text/javascript'>
+function changeNoOfEntries() {
+    var no_of_entries = parseInt(document.getElementById('no-of-entries').value);
+    if (no_of_entries >= 1) {
+        order = document.getElementById('order').value;
+        invert = document.getElementById('invert_order').checked;
+        if (invert) {
+            order = '-' + order;
+        }
+        window.location.href = '{{ list_action|safe }}&num=' + no_of_entries
+                                + '&order=' + order;
+    }
+    else {
+        alert('Please enter a valid number');
+    }
+}
+
+function searchByEmail() {
+    var email = document.getElementById('search-email').value;
+    if (email) {
+        window.location.href = '{{ list_action|safe }}&email=' + email;
+    }
+    else {
+        alert('Please enter an email ID to search');
+    }
+}
+
+function clearSearch() {
+    {% if search_email_query %}
+        window.location.href = '{{ list_action|safe }}';
+    {% endif %}
+}
+
+function drawTables() {
+
+    {% if student_profiles %}
+        var table = new google.visualization.DataTable();
+
+        // TODO(rthakker) Add separate column for each unit (score).
+        // Use the list of units in this course for that.
+        table.addColumn('string', 'User ID');
+        table.addColumn('string', 'Email');
+
+
+        {% for profile in student_profiles %}
+            table.addRows(1);
+            var rowIndex = {{ loop.index0 }};
+            table.setCell(rowIndex, 0, '{{ profile.user_id }}');
+            table.setCell(rowIndex, 1,
+                '<a href="{{ details_action }}&key={{ profile.key() }}">{{ profile.email }}</a>');
+        {% endfor %}
+
+        new google.visualization.Table(
+            document.getElementById('students-table')
+        ).draw(
+            table, {
+                allowHtml: true,
+                title: 'Enrolled Students'
+            }
+        )
+    {% else %}
+        document.getElementById('students-table').innerHTML = 'No records found';
+    {% endif %}
+}
+
+google.load('visualization', '1', {packages: ['table']});
+google.setOnLoadCallback(drawTables);
+</script>

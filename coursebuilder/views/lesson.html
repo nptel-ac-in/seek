@@ -1,0 +1,123 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% if lesson.video %}
+
+ <script src="//www.youtube.com/iframe_api" type="text/javascript"></script>
+<script type='text/javascript'>
+  var questionData = {};
+  {% if lesson and lesson.scored %}
+    questionData.scored = true;
+  {% else %}
+    questionData.scored = false;
+  {% endif %}
+
+  function mainf() {
+    addScript('//ajax.cdnjs.com/ajax/libs/json2/20110223/json2.js', null);
+    installFunction('student_questions', 'relevant_questions', onRetrieveSuccess, null);
+    installFunction('student_questions', 'all_questions', onRetrieveSuccess, null);
+    installFunction('student_questions', 'submit_question', onSubmitSuccess, '{{ submit_question_xsrf_token }}');
+    installFunction('student_questions', 'inc_count', noopCallback, '{{ inc_count_xsrf_token }}');
+    installFunction('modules/watch_time/video_watchtime', 'record_video_watchtime', noopCallback, '{{ watch_time_xsrf_token }}');
+    loadIFramePlayer("{{ lesson.video }}", 'videoDiv');
+  }
+  function _run() {
+    loadOtherJs(mainf);
+  }
+  google.setOnLoadCallback(_run);
+  // Callback for after a successful doAdd
+  function onRetrieveSuccess(response) {
+    element('lessonDoubtButton').style.display = 'none';
+    formatRetreivedQuestions(
+        element('retrievedQuestionsList'),
+        response,
+        '{{ forum_id }}',
+        '{{ forum_domain }}');
+    element('retrievedQuestions').style.display = 'inline';
+    element('doubtForm').style.display = 'inline';
+  }
+</script>
+
+  <div class="gcb-video-container">
+    {# I18N: Alt text for an embedded YouTube video player. #}
+    <div id="videoDiv">Loading ...</div>
+     <br/>
+  </div>
+  {% if student_questions_module %}
+    <div class="gcb-student-questions-area">
+      <div class="gcb-retrieved-question-box" id="retrievedQuestions">
+      Previously asked questions around the same time :
+        <div class="gcb-retrieved-question-list" id="retrievedQuestionsList">
+        </div>
+      </div>
+      <div class="gcb-ask-question-container" id="lessonDoubtButton">
+        <a role="button" class="gcb-button gcb-button-medium gcb-button-primary"
+          id="ask-question-button" href="javascript:void(0);"
+          onclick="retrieveQuestions( '{{ lesson.video }}'); return false;" target="_blank">
+         Ask a question
+       </a>
+      </div>
+      <form id="doubtForm" style="display: none;">
+        <hr/>
+        <label class="form-label" for="doubtSummary">
+          <b>Short Description:</b>
+        </label>
+        <br/>
+        <input type="text" id="doubtSummaryField" name="doubtSummary" maxlength=50></input>
+        <br/>
+
+        <label class="form-label" for="doubtQuestion">
+          <b>Detailed question:</b>
+        </label>
+        <br/>
+        <textarea rows="4" cols="85" id="doubtQuestionField" type="text" name="doubtQuestion"></textarea>
+        <br/>
+        <br/>
+        <a style="display: inline;" role="button" class="gcb-button
+        gcb-button-primary" id="postQuestionButton" href="javascript:void(0);" onclick="submitQuestionClient('{{ lesson.video }}'); return false;" target="_blank">
+        Post question
+        </a>
+        &nbsp;&nbsp;&nbsp;
+        <a style="display: inline;" role="button" class="gcb-button gcb-button-primary" id="cancelButton" href="javascript:void(0);" onclick="cancel(); return false;" target="_blank">
+          Keep watching
+        </a>
+        <br/>
+        <br/>
+        <span>To post questions, you must be a member of
+          <a href="https://groups.google.com{{ forum_domain }}/forum/#!forum/{{ forum_id }}" target="_blank" >Course Discussion Group!</a>
+        </span>
+      </form>
+  </div>
+  {% endif %}
+{% endif %}
+
+{% if lesson.objectives %}
+  <div class="gcb-lesson-content"
+       data-scored="{{ lesson.scored }}"
+       data-question-batch-id="L{{ lesson.lesson_id }}">
+    {{ lesson.objectives | gcb_tags}}
+    {% if lesson.scored and not transient_student %}
+      <div class="qt-grade-scored-lesson qt-hidden">
+        <button class="gcb-button qt-check-answer-button">
+          {# I18N: Button at the bottom of a lesson page offering the student the opportunity to grade his/her answers. #}
+          {{ gettext('Grade Questions') }}
+        </button>
+      </div>
+      <div class="qt-grade-report qt-hidden"
+           data-question-batch-id="L{{ lesson.lesson_id }}"></div>
+    {% endif %}
+  </div>
+{% endif %}

@@ -1,0 +1,38 @@
+# Copyright 2020 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+cron:
+- description: expires old assigned review steps
+  url: /cron/expire_old_assigned_reviews
+  schedule: every 15 minutes  # Max execution is 10 minutes.
+- description: process pending notifications
+  url: /cron/process_pending_notifications
+  schedule: every 1 hours
+- description: indexes all courses
+  url: /cron/search/index_courses
+  schedule: every day 06:00
+- description: clean up resources from map/reduce jobs.
+  url: /cron/mapreduce/cleanup
+  schedule: every day 03:45
+- description: Run job to report count of courses and students to CourseBuilder.
+  url: /cron/usage_reporting/report_usage
+  schedule: every sunday 05:00
+- description: My Daily Full Backup
+  url: /_ah/datastore_admin/backup.create?name=FullBackup&kind=AnnouncementEntity&kind=ClusterEntity&kind=ConfigPropertyEntity&kind=CourseCategory&kind=CourseList&kind=CourseStaff&kind=DurableJobEntity&kind=EventEntity&kind=ExplorerLayout&kind=FileDataEntity&kind=FileMetadataEntity&kind=LabelEntity&kind=ManualEvaluationStep&kind=ManualEvaluationSummary&kind=MenteeData&kind=Notification&kind=Payload&kind=PersonalProfile&kind=ProgrammingAnswersEntity&kind=ProgrammingTestCasesEntity&kind=QuestionAnswersEntity&kind=QuestionEntity&kind=QuestionGroupEntity&kind=Review&kind=ReviewStep&kind=ReviewSummary&kind=RoleEntity&kind=SavedProgrammingCodeEntity&kind=Student&kind=StudentAnswersEntity&kind=StudentEnrollmentEventEntity&kind=StudentFormEntity&kind=StudentPreferencesEntity&kind=StudentPropertyEntity&kind=StudentQuestionEntity&kind=Submission&kind=SubscriptionStateEntity&filesystem=gs&gs_bucket_name=nptelmoocdatadump
+  schedule: every 12 hours
+  target: ah-builtin-python-bundle
+- description: StudentDataDump
+  url: /_ah/datastore_admin/backup.create?name=StudentDataBackup&kind=FileDataEntity&kind=FileMetadataEntity&kind=PersonalProfile&kind=ProgrammingAnswersEntity&kind=ProgrammingTestCasesEntity&kind=QuestionAnswersEntity&kind=SavedProgrammingCodeEntity&kind=Student&kind=StudentAnswersEntity&kind=StudentPreferencesEntity&kind=StudentPropertyEntity&kind=Submission&filesystem=gs&gs_bucket_name=nptelmoocdatadump
+  schedule: every 4 hours
+  target: ah-builtin-python-bundle

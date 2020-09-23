@@ -1,0 +1,144 @@
+# Copyright 2020 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+application: nptelmooc2013
+version: 9
+runtime: python27
+api_version: 1
+threadsafe: false
+
+instance_class: F4
+
+env_variables:
+  GCB_PRODUCT_VERSION: '1.8.0'
+
+  # Enable collection of stats on numbers of calls to the datastore,
+  # memcache, and email-sending backends.  Used for profiling CourseBuilder
+  # to improve performance.  See
+  # https://cloud.google.com/appengine/docs/python/tools/appstats
+  GCB_APPSTATS_ENABLED: true
+
+  # Regsitering 'certificate' after 'dashboard' for correct tab ordering.
+  GCB_REGISTERED_MODULES:
+    modules.activity_tag.activity_tag
+    modules.admin.admin
+    modules.analytics.analytics
+    modules.announcements.announcements
+    modules.assessment_tags.questions
+    modules.balancer.balancer
+    modules.code_tags.code_tags
+    modules.core_tags.core_tags
+    modules.courses.courses
+    modules.data_source_providers.data_source_providers
+    modules.dashboard.dashboard
+    modules.course_explorer.course_explorer
+    modules.data_pump.data_pump
+    modules.extra_tabs.extra_tabs
+    modules.i18n_dashboard.i18n_dashboard
+    modules.invitation.invitation
+    modules.manual_progress.manual_progress
+    modules.mapreduce.mapreduce_module
+    modules.math.math
+    modules.notifications.notifications
+    modules.oeditor.oeditor
+    modules.questionnaire.questionnaire
+    modules.rating.rating
+    modules.review.review
+    modules.search.search
+    modules.skill_map.skill_map
+    modules.unsubscribe.unsubscribe
+    modules.upload.upload
+    modules.usage_reporting.usage_reporting
+    modules.oauth2.oauth2=disabled
+    modules.nptel.register
+    modules.ajax_registry.registry
+    modules.mooshak.mooshak
+    modules.nsjail.nsjail
+    modules.programming_assignments.register
+    modules.subjective_assignments.assignment
+    modules.offline_assignments.register
+    modules.course_staff.register
+    modules.links.links
+    modules.manual_review.register
+    modules.course_theme.register
+    modules.mentor.register
+    modules.student_questions.student_questions
+    modules.watch_time.register
+    modules.scoring.register
+    modules.local_chapter.register
+    modules.email_settings.register
+    modules.google_service_account.register
+    modules.student_list.register
+
+
+inbound_services:
+- warmup
+
+builtins:
+- remote_api: on
+- deferred: on
+- appstats: on
+
+libraries:
+- name: jinja2
+  version: "2.6"
+- name: PIL
+  version: "1.1.7"
+- name: pycrypto
+  version: "2.6"
+- name: webapp2
+  version: "2.5.2"
+- name: webob
+  version: "1.2.3"
+- name: lxml
+  version: "2.3"
+- name: ssl
+  version: "latest"
+
+handlers:
+- url: /remote_api
+  script: $PYTHON_LIB/google/appengine/ext/remote_api/handler.py
+  login: admin
+  secure: always
+- url: /cron/.*
+  script: main.app
+  login: admin
+  secure: always
+- url: /mapreduce/worker/.*
+  script: main.app
+  login: admin
+  secure: always
+- url: /assets
+  static_dir: assets
+  application_readable: True
+  secure: always
+  expiration: "7d"
+- url: /gae_mini_profiler/static
+  static_dir: gae_mini_profiler/static
+  expiration: "7d"
+- url: /gae_mini_profiler/.*
+  script: gae_mini_profiler.main.application
+- url: /.*
+  script: main.application
+  secure: always
+
+skip_files:
+# GAE default patterns.
+- ^(.*/)?#.*#$
+- ^(.*/)?.*~$
+- ^(.*/)?.*\.py[co]$
+- ^(.*/)?.*/RCS/.*$
+- ^(.*/)?\..*$
+# CB-specific patterns.
+- ^internal/.*$

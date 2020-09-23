@@ -1,0 +1,221 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% extends base %}
+
+{% block main_content_data %}
+<script src="/static/prettify/google-code-prettify/prettify.js"></script>
+<link href="/modules/code_tags/codemirror/lib/codemirror.css" rel="stylesheet"/>
+<script src="/modules/code_tags/codemirror/lib/codemirror.js"></script>
+{% for lang,lang_details in assignment.all_lang_data.iteritems() %}
+  <script src="/modules/code_tags/codemirror/mode/{{ lang_details.syntax }}/{{ lang_details.syntax }}.js"></script>
+{% endfor %}
+<script src="/modules/ajax_registry/assets/js/registry.js"></script>
+
+<script type="text/javascript">
+var langSyntaxMap = {};
+var langSyntaxModeMap = {};
+var editorTheme = "eclipse";
+var readonlyEditorTheme = "eclipse eclipse_disabled_style";
+
+function createCodeMirrorEditor(div_id, read_only, first_line_number, lang){
+  var theme = editorTheme;
+  if (read_only) {
+      theme = readonlyEditorTheme;
+  }
+  return CodeMirror.fromTextArea(document.getElementById(div_id), 
+    {"mode": langSyntaxModeMap[lang] , "theme":theme, "readOnly":read_only, "lineNumbers":true, "firstLineNumber": first_line_number});
+}
+
+{% for lang,lang_details in assignment.all_lang_data.iteritems() %}
+  var first_line_number_{{ lang }} = 1;
+  langSyntaxMap['{{ lang }}'] = '{{ lang_details.syntax }}';
+  langSyntaxModeMap['{{ lang }}'] = '{{ lang_details.syntax_mode }}';
+{% endfor %}
+function onLangChoiceChange() {
+  progLang = getSelectValue('prog-assignment-lang');
+  {% for lang,v in assignment.all_lang_data.iteritems() %}
+    element('prog-div-{{lang}}').style.display = 'none';
+  {% endfor %}
+  if (progLang != '') {
+    element('prog-div-' + progLang).style.display = '';
+  }
+}
+</script>
+
+<link rel="stylesheet" type="text/css" href="/modules/programming_assignments/assets/css/prog.css"/>
+<link rel="stylesheet" type="text/css" href="/static/prettify/google-code-prettify/desert.css"/>
+
+{% if is_read_write_course and is_course_admin %}
+  {% if assignment %}
+    {% if assignment.edit_action %}
+      <a class="gcb-button pull-right" role="button"
+         style="float:right;width:60px;"
+         href="{{ assignment.edit_action }}" >Edit</a>
+    {% endif %}
+  {% endif %}
+{% endif %}
+
+<div>
+  <h1 class="gcb-unit-header">
+    {# I18N: Header text for a unit page. #}
+    {{ gettext('%(title)s', title=unit.title) }}
+  </h1>
+</div>
+
+{% if assignment.submission_due_date %}
+  <div class="gcb-submission-due-date">
+    {{ gettext('Due on %(time)s', time=assignment.submission_due_date) }}
+  </div>
+{% endif %}
+
+{% if assignment %}
+  <div style='clear: both; padding-top: 2px;' />
+  {% if assignment.question %}
+    <div style="display: inline-block;font-size:16px;padding-bottom: 7px;">
+      {{ assignment.question | gcb_tags }}
+    </div>
+    <div style="padding-bottom: 2px; clear: both;"></div>
+    <div style=" width: 100%;">
+      <div>
+      {% if not readonly %}
+        {% include 'code_editor.html' %}
+        <div style="width: 83%; padding-top: 5px;">
+          <div style="border: solid 1px grey;">
+            <div style="padding-left:5px;">
+              {% if assignment.answer %}
+                <label style="font-size:15px;color:red">
+                  {{ assignment.answer }} <br/>
+                </label>
+                <br style="content: ''; line-height: 25px; ">
+              {% endif %}
+              {% if assignment.score %}
+                <br style="
+                  content: '';
+                  line-height: 22px;
+                  display: block;
+                  margin: -2px 0px;
+                 ">
+               <label style="font-size: 16px; font-weight: bold;">
+                    {{ gettext('You scored %(score)s/100 ', score=assignment.score) }}
+                  </label>
+              {% else %}
+                {% if assignment.response %}
+                  {% include 'compilation_response.html' %}
+                  {% if not assignment.response.status == 3 %}
+                    {% include 'test_response.html' %}
+                  {% endif %}
+                {% else %}
+                  {% if assignment.sample_tests %}
+                    {% include 'sample_tests.html' %}
+                  {% endif %}
+                {% endif %}
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      {% else %}
+        {% if assignment.sample_tests %}
+          <div style="width: 83%; padding-top: 5px;">
+            <div style="padding-left:5px;">
+              {% include 'sample_tests.html' %}
+            </div>
+          </div>
+        {% endif %}
+        <div class='gcb-submit-only-once'>
+          {% if assignment.due_date_exceeded %}
+            {{ gettext('Due Date Exceeded.') }}
+          {% elif submit_only_once and assignment.last_code %}
+            {{ gettext('You have already submitted this assignment') }}
+          {% endif %}
+          {% if assignment.score %}
+            {{ gettext('You scored %(score)s/100.', score=assignment.score) }}
+          {% endif %}
+          {% if assignment.previous_submission %}
+            <br/>
+            {{ gettext('Your last recorded submission was :') }}
+            <div style="text-align: left;">
+              <textarea id='prev_sub'>{{ assignment.previous_submission }}</textarea>
+              <script>
+	        createCodeMirrorEditor( 'prev_sub', true, 1, "{{ assignment.previous_submission_lang }}");
+              </script>
+            </div>
+          {% else %}
+          <div class='gcb-submit-only-once'>
+            {{ gettext('As per our records you have not submitted this assignment.') }}
+          </div>
+          {% endif %}
+
+          {% if assignment.has_sample_solution %}
+          <div class='gcb-prog-sample_solutions'>
+           {{ gettext('Sample solutions (Provided by instructor) ') }}
+           <br/>
+          {{ gettext('Select the Language .') }}
+          <select id='prog-assignment-lang' name='prog-lang' onchange='onLangChoiceChange()'>
+            <option value=''>--</option>
+            {% for lang,v in assignment.all_lang_data.iteritems() %}
+            {% if assignment.selected_lang and lang == assignment.selected_lang %}
+            <option value='{{ lang }}' selected>{{ v.name }}</option>
+            {% else %}
+            <option value='{{ lang }}'>{{ v.name }}</option>
+            {% endif %}
+            {% endfor %}
+          </select>
+
+          {% for lang,lang_details in assignment.all_lang_data.iteritems() %}
+            <div id="prog-div-{{lang}}">
+              {% if lang_details.solution %}
+                <div style="text-align: left;">
+                  <textarea id="sol_{{ lang }}">{{ lang_details.solution }}</textarea>
+                  <script>
+		    createCodeMirrorEditor( 'sol_{{ lang }}', true, 1, "{{ lang }}");
+                  </script>
+                </div>
+                <br/>
+              {% endif %}
+              {% if assignment.previous_submission and lang_details.last_code != assignment.previous_submission %}
+                {{ gettext('Your last saved code is : ') }}
+                <br/>
+                <div style="text-align: left;">
+                  <textarea id="saved_{{ lang }}">{{ lang_details.last_code }}</textarea>
+                  <script>
+		    createCodeMirrorEditor( 'saved_{{ lang }}', true, 1, "{{ lang }}");
+                  </script>
+                </div>
+              {% endif %}
+            </div>
+          {% endfor %}
+          {% endif %}
+        </div>
+      {% endif %}
+      <div class="gcb-button-box">
+        <div class="gcb-next-button">
+          {# I18N: Text on the navigation button at the end of a
+            programming assignement. It signals that the student has
+            completed a unit. #}
+          <a href="course"> {{ gettext('End') }} </a>
+        </div>
+      </div>
+    </div>
+  {% else %}
+    <p>{{ gettext('No Question') }}</p>
+  {% endif %}
+{% endif %}
+<script type="text/javascript">
+prettyPrint();
+onLangChoiceChange();
+</script>
+{% endblock %}

@@ -1,0 +1,84 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<label style="font-size:15px;">
+  Tests :
+</label>
+{% if assignment.ierr %}
+<label style="font-size:15px;color:red;">
+  {{ assignment['ierr'] }}
+</label>
+{% else %}
+<label style="font-size:15px;">
+  {{ assignment.response.num_test_passed }} /
+  {{ assignment.response.num_test_evaluated }} {{ gettext('Passed') }}
+</label>
+{% endif %}
+
+{% macro show_pre(t) -%}
+  {% if t  %}
+    <pre class="gcb-testcase"><span class="pre-output">{{ t | escape}}</span></pre>
+  {% endif %}
+{%- endmacro %}
+
+{% if assignment.response.test_case_results %}
+<div class="gcb-test-output-container">
+  {% for result in assignment.response.test_case_results %}
+    <div class="gcb-test-output gcb-aside">
+      <div>
+        <div class="gcb-test-case-number">
+          {{ gettext('Test Case %(index)s', index=loop.index) }}
+        </div>
+    {% if result.passed %}
+        <div class="gcb-test-case-result gcb-output-correct">Passed</div>
+          {% if result.reason %}
+            <div class="gcb-test-case-result gcb-output-wrong">
+            {{ gettext(' after ignoring %(err)s', err=result.reason) }}
+            </div>
+          {% endif %}
+      </div>
+    {% else %}
+        <div class="gcb-test-case-result gcb-output-wrong">
+          {{ result.reason }}
+        </div>
+      </div>
+      <div class="gcb-test-case-detail">
+        <table class="gcb-sample-input-table" style="width:100%;">
+          <tr class="gcb-sample-input-table-heading">
+            <td>Input</td>
+            <td>Expected Output</td>
+            <td>Actual Output</td>
+          </tr>
+          <tr>
+            <td>
+              {% if (assignment.sample_tests|length) >= loop.index %}
+                {{ show_pre(assignment.sample_tests[loop.index-1]['input']) }}
+              {% endif %}
+            </td>
+            <td>
+              {{ show_pre(result.expected_output) }}
+            </td>
+            <td>
+              {{ show_pre(result.output) }}
+            </td>
+          </tr>
+        </table>
+      </div>
+    {% endif %}
+    </div>
+  {% endfor %}
+</div>
+{% endif %}

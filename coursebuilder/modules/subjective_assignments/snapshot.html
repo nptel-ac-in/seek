@@ -1,0 +1,128 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% extends base %}
+
+{% block top_content %}
+{% endblock %}
+
+{% block edit_unit_content %}
+{% if is_read_write_course and is_course_admin %}
+  {% if assignment %}
+    {% if assignment.edit_action %}
+      <a class="gcb-button pull-right" role="button"
+         style="float:right;width:60px;"
+         href="{{ assignment.edit_action }}" >Edit</a>
+    {% endif %}
+  {% endif %}
+{% endif %}
+{% endblock %}
+
+{% block breadcrumb_content %}
+{% endblock %}
+
+{% block main_content_header %}
+<div>
+  <h1 class="gcb-unit-header">
+    {# I18N: Header text for a unit page. #}
+    {{ gettext('%(title)s', title=unit.title) }}
+  </h1>
+</div>
+{% endblock %}
+
+{% block main_content %}
+{% if assignment.submission_due_date %}
+  <div class="gcb-submission-due-date">
+    {{ gettext('Due on %(time)s', time=assignment.submission_due_date) }}
+  </div>
+{% endif %}
+
+{% if assignment %}
+  <div style='clear: both; padding-top: 2px;' />
+  {% if assignment.question %}
+    <div style="display: inline-block;font-size:16px;padding-bottom: 7px;">
+      {{ assignment.question | safe }}
+    </div>
+    <div style="padding-bottom: 2px; clear: both;"></div>
+    <br/>
+    <h3>Your Submission: </h3>
+    <div style=" width: 100%;">
+        {% if assignment.failed %}
+        <div class='submission' style='color:red;'>
+            Submission Failed:
+        Please make the file visible by a link before submitting this assignment.
+        {% elif assignment.success %}
+        <div class='submission' style='color:green;'>
+            <strong>Submission Succeeded.</strong>
+        {% endif %}
+        </div>
+      {% if not readonly %}
+        <div id='drive-file-picker-div'>
+          {% include 'file_picker.html' %}
+        </div>
+        <form id='gcb-submit-essay' action='{{ assignment.submit_action }}' method='POST'>
+          <div style="width: 83%">
+            <div id='manual-drive-id-entry-div' style='display: none;'>
+            {{ gettext('Please specify the id of your Google Drive file for submission.')}}
+            <input type="text" name="file_list" id="file_list"></input>
+            </div>
+            <input type="hidden" name="xsrf_token" value="{{ assignment.submit_xsrf_token|escape }}">
+            <div>
+              <div class='gcb-submit-only-once'>
+                {% if submit_only_once %}
+                {{ gettext('You are allowed to submit this assignment only once.') }}
+                {% else %}
+                {{ gettext('You may submit any number of times before the due date. The final submission will be considered for grading.') }}
+                {% endif %}
+              </div>
+              <button id='sa-submit-button' type="submit" class="gcb-button gcb-pull-right">
+                {{ gettext('Submit') }}</button>
+            </div>
+        </form>
+      {% else %}
+        <div class='gcb-submit-only-once'>
+          {% if assignment.due_date_exceeded %}
+            {{ gettext('Due Date Exceeded.') }}
+          {% elif submit_only_once and assignment.already_submitted %}
+            {% if not assignment.success %}
+                {{ gettext('You have already submitted this assignment') }}
+            {% endif %}
+          {% endif %}
+          {% if assignment.score %}
+            {{ gettext('You scored %(score)s/100.', score=assignment.score) }}
+          {% endif %}
+          {% if assignment.orig_file_list_str and assignment.already_submitted %}
+            <br/>
+            <br/>
+            <strong>{{ gettext('Your last recorded submission as of') }}</strong>
+            {{ assignment.copied_file[0].createdDate }}<br/>
+            <ul id='submitted-file-list'>
+                {% for el in assignment.orig_file_list %}
+                    <li>{{ el.fileName }}</li>
+                {% endfor %}
+            </ul>
+          {% else %}
+          <div class='gcb-submit-only-once'>
+            {{ gettext('As per our records you have not submitted this assignment.') }}
+          </div>
+          {% endif %}
+      {% endif %}
+      </div>
+    {% else %}
+    <p>{{ gettext('No Question') }}</p>
+    {% endif %}
+{% endif %}
+{% endblock %}

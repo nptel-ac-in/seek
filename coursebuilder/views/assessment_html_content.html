@@ -1,0 +1,89 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{%
+  macro render(
+      unit_id, xsrf_token, saved_answers, content, readonly=False,
+      check_answers=False, is_review_form=False, review_key=None,
+      submit_only_once=False, transient_student=False)
+%}
+<div
+   data-xsrf-token="{{ xsrf_token }}"
+   data-unit-id="{{ unit_id }}"
+   data-question-batch-id="A{{ unit_id }}"
+   data-scored="True"
+   {% if is_review_form and review_key %}
+     data-review-key = "{{ review_key }}"
+   {% endif %}
+>
+  <script>
+    var questionData = questionData || {};
+    questionData.xsrfToken = '{{ xsrf_token }}';
+    {% if saved_answers %}
+      questionData.savedAnswers = questionData.savedAnswers || {};
+      $.extend(questionData.savedAnswers,
+          JSON.parse("{{saved_answers | js_string}}"));
+    {% endif %}
+  </script>
+  <div class="gcb-assessment-body{% if readonly %} assessment-readonly{% endif %}{% if is_review_form %} review-form{% endif %}">
+    {{ content | gcb_tags }}
+  </div>
+  <div class="qt-assessment-button-bar">
+  {% if is_review_form %}
+    <div class="qt-review-form-controls">
+      <button class="gcb-button qt-save-draft">
+        {{ gettext(' Save Draft ') }}
+      </button>
+      <button class="gcb-button qt-submit-review">
+        {{ gettext(' Submit Review ') }}
+      </button>
+    </div>
+  {% else %}
+    <div class='gcb-submit-only-once'>
+    {% if submit_only_once %}
+      {% if readonly %}
+          {{ gettext('You were allowed to submit this assignment only once.') }}
+      {% else %}
+          {{ gettext('You are allowed to submit this assignment only once.') }}
+      {% endif %}
+    {% else %}
+      {% if not readonly %}
+        {{ gettext('You may submit any number of times before the due date. The final submission will be considered for grading.') }}
+      {% endif %}
+    {% endif %}
+    </div>
+    {% if not readonly %}
+      {% if check_answers %}
+        <div class="qt-grade-scored-lesson qt-hidden">
+          <button class="gcb-button qt-check-answer-button">
+            {{ gettext(' Check Answers ') }}
+          </button>
+        </div>
+      {% endif %}
+      <div class="qt-grade-report qt-hidden"
+           data-question-batch-id="A{{ unit_id }}"></div>
+      {% if not transient_student %}
+      <div class="qt-grade-assessment qt-hidden">
+        <button class="gcb-button qt-check-answer-button">
+          {{ gettext(' Submit Answers ') }}
+        </button>
+      </div>
+      {% endif %}
+    {% endif %}
+  {% endif %}
+  </div>
+</div>
+{% endmacro %}

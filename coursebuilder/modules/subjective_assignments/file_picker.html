@@ -1,0 +1,312 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<script type="text/javascript">
+    // TODO(rthakker) Shift all global options into one javascript object
+    var CLIENT_ID = '{{ google_oauth2_client_id.client_id }}';
+    var SCOPES = [
+        'https://www.googleapis.com/auth/drive'
+        // 'https://www.googleapis.com/auth/youtube'
+    ];
+    var LOADED = 0;
+    {% if google_oauth2_client_id.sub_user_email %}
+        var APPENGINE_SERVICE_ACCOUNT_EMAIL = '{{ google_oauth2_client_id.sub_user_email }}';
+    {% else %}
+        var APPENGINE_SERVICE_ACCOUNT_EMAIL = '{{ google_oauth2_client_id.client_email }}';
+    {% endif %}
+    var INPUT_ELEMENT_ID = 'file_list';
+    var MAX_FILE_LIMIT = {{ max_file_limit }};
+    var pickerApiLoaded = false;
+    var oauthToken;
+    var picker;
+    var selectedFiles = {};
+    var shareAndSubmitCounter = 0;
+
+    function getSelectedListElementId(options) {
+        //returns the selected list's <li> element's ID based on fileId
+        // options should be an object containing fileId
+        return 'selected-files-li-' + options.fileId;
+    }
+
+    function getSelectedListElementHTML(options) {
+        var innerHTML = '<a href=' + options.fileUrl + ' target="_blank">'
+            + options.fileName
+            + "</a> <button type='button' onclick='return removeFile("
+            + JSON.stringify(options) + ");'>Remove</button>";
+        return innerHTML;
+    }
+
+    function addSelectedListElement(options) {
+        // Adds a DOM element to the list of selected items
+        // options should be an object containing fileId, fileName and fileUrl
+        var listItemId = getSelectedListElementId(options);
+        var existingElement = document.getElementById(listItemId);
+        if (!existingElement) {
+            var listElement = document.getElementById('selected-files-list');
+            var existingElement = document.createElement('LI');
+            existingElement.id = listItemId;
+            existingElement.style = 'margin:10px';
+            listElement.appendChild(existingElement);
+        }
+        existingElement.innerHTML = getSelectedListElementHTML(options);
+    }
+
+    function removeSelectedListElement(options) {
+        // Removes a DOM element from the list of selected items
+        // options should be an object containing fileId
+        var listItemId = getSelectedListElementId(options);
+        var existingElement = document.getElementById(listItemId);
+        var listElement = document.getElementById('selected-files-list');
+        if (existingElement) {
+            listElement.removeChild(existingElement);
+        }
+    }
+
+    function sendSelectedFilesToInputEl() {
+        var selectedFilesArray = Object.keys(selectedFiles).map(function(key) {
+            return selectedFiles[key];
+        });
+        document.getElementById(INPUT_ELEMENT_ID).value = JSON.stringify(selectedFilesArray);
+    }
+
+    function selectFile(options) {
+        if (Object.keys(selectedFiles).length >= MAX_FILE_LIMIT) {
+            alert('Maximum file limit ' + MAX_FILE_LIMIT + '. If you have more files, please compress them into a .zip and upload that instead.');
+            return;
+        }
+        selectedFiles[options.fileId] = options;
+        sendSelectedFilesToInputEl();
+        document.getElementById('selected-filename-label').style.display = '';
+        document.getElementById('please-select-label').style.display = 'none';
+        addSelectedListElement(options);
+    }
+
+    function removeFile(options) {
+        if (Object.keys(selectedFiles).includes(options.fileId)) {
+            delete selectedFiles[options.fileId];
+        }
+        sendSelectedFilesToInputEl();
+        removeSelectedListElement(options);
+        return false;
+    }
+
+    function shareFile(options, callback) {
+        console.log('Sharing file..');
+        console.log(options.fileName);
+        gapi.client.drive.permissions.create({
+            fileId: options.fileId,
+            role: 'reader',
+            type: 'user',
+            emailAddress: APPENGINE_SERVICE_ACCOUNT_EMAIL
+        }).execute(function() {
+            if (callback) {
+                callback(options);
+            }
+        });
+    }
+
+    function shareAndSelectFile(options) {
+        shareFile(options, selectFile);
+    }
+
+    function submitFiles() {
+        shareAndSubmitCounter = 0;
+        // Disable the submit button
+        var submit_button = document.getElementById('sa-submit-button');
+        submit_button.disabled = true;
+        submit_button.innerHTML = 'Submitting..'
+        document.getElementById('gcb-submit-essay').submit();
+    }
+
+    function shareAndSubmitFiles() {
+        numberOfFiles = Object.keys(selectedFiles).length;
+        for (var idx in selectedFiles) {
+            options = selectedFiles[idx];
+            shareFile(options, function(dummyValue) {
+                shareAndSubmitCounter += 1;
+                if (shareAndSubmitCounter === numberOfFiles) {
+                    submitFiles();
+                }
+            });
+        }
+
+        // add a timer with an error message in case the page does not
+        // get redirected due to the submit.
+        setTimeout(function() {
+            alert('Seems like submitting is taking too long. You may try once more after refreshing the page.');
+        }, 10000);
+    }
+
+    function onPickerApiLoad() {
+        pickerApiLoaded = true;
+        showPicker();
+    }
+
+    function showPicker() {
+        if (pickerApiLoaded && oauthToken) {
+            if (!picker || !picker.setVisible) {
+                var uploadView = new google.picker.DocsUploadView().
+                setIncludeFolders(true);
+
+                window.picker = picker = new google.picker.PickerBuilder().
+                addView(uploadView).
+                addView(google.picker.ViewId.DOCS).
+                // addView(google.picker.ViewId.YOUTUBE).
+                enableFeature(google.picker.Feature.MULTISELECT_ENABLED).
+                setOAuthToken(oauthToken).
+                setAppId(CLIENT_ID).
+                setCallback(pickerCallback).
+                build();
+            }
+            picker.setVisible(true);
+        }
+    }
+
+    function pickerCallback(data) {
+        if (data[google.picker.Response.ACTION] == google.picker.Action.PICKED) {
+            data[google.picker.Response.DOCUMENTS].forEach(function(file) {
+                var fileId = file[google.picker.Document.ID];
+                var fileName = file[google.picker.Document.NAME];
+                var fileUrl = file[google.picker.Document.URL];
+                // shareAndSelectFile({
+                selectFile({
+                    fileId: fileId,
+                    fileName: fileName,
+                    fileUrl: fileUrl
+                });
+            });
+            picker.setVisible(false);
+        }
+    }
+
+    function checkAuth() {
+        /**
+         * Check if current user has authorized this application.
+         */
+        if (LOADED < 2) {
+            return;
+        }
+        gapi.auth.authorize({
+            'client_id': CLIENT_ID,
+            'scope': SCOPES.join(' '),
+            'immediate': true
+        }, handleAuthResult);
+    }
+
+    function onApiLoad() {
+        LOADED = LOADED + 1;
+    }
+
+    function onClientApiLoad() {
+        LOADED = LOADED + 1;
+    }
+
+    function handleAuthResult(authResult) {
+        if (authResult && !authResult.error) {
+            oauthToken = authResult.access_token;
+            loadDriveAndPickerApi();
+        } else {
+            // Check if the authResult was after user declining/closing a pop up window
+            if (authResult['g-oauth-window']) {
+                // Yes, which means we probably cannot get permissions.
+                alert('Could not load the Google drive file picker. Please enter file ID in the texbox below.');
+                document.getElementById("manual-drive-id-entry-div").style.display = '';
+                document.getElementById("drive-file-picker-div").style.display = 'none';
+                //TODO(rthakker) Implement what's mentioned in the above alert message
+            } else {
+                // This means the authResult was that of the automatic checkAuth()
+                // This may imply that the permission has expired / doesn't exist.
+                // Try once more, this time opening a pop up for the user to renew/accept permissions.
+                startManualAuth();
+                return;
+            }
+        }
+    }
+
+    function startManualAuth() {
+        if (LOADED < 2) {
+            return;
+        }
+        gapi.auth.authorize({
+                client_id: CLIENT_ID,
+                scope: SCOPES,
+                immediate: false
+            },
+            handleAuthResult);
+        return false;
+    }
+
+    function loadPickerApi() {
+        gapi.load('picker', onPickerApiLoad);
+    }
+
+    function loadDriveAndPickerApi() {
+        gapi.client.load('drive', 'v3', loadPickerApi);
+    }
+
+    function startSelectFile() {
+        if (Object.keys(selectedFiles).length >= MAX_FILE_LIMIT) {
+            alert('Maximum file limit ' + MAX_FILE_LIMIT + '. If you have more files, please compress them into a .zip and upload that instead.');
+        }
+        else {
+            checkAuth();
+        }
+        return false;
+    }
+
+    function initFileList() {
+        {% if assignment.orig_file_list_str %}
+            var originalFileList = {{ assignment.orig_file_list_str|safe }};
+        {% else %}
+            var originalFileList = [];
+        {% endif %}
+        originalFileList.forEach(function(options) {
+            selectFile(options);
+        })
+    }
+
+    function initFilePicker() {
+        initFileList();
+        // Change the way the form submits for the form
+        submit_button = $('#sa-submit-button')[0];
+        submit_button.type = 'button';
+        submit_button.onclick = shareAndSubmitFiles;
+    }
+</script>
+<script src="https://apis.google.com/js/client.js?onload=onClientApiLoad">
+</script>
+<script type="text/javascript" src="https://apis.google.com/js/api.js?onload=onApiLoad"></script>
+<!--Button for the user to click to initiate auth sequence -->
+<label id='please-select-label'>{{ gettext('Please select your files from google drive. Maximum of ' + max_file_limit + ' files allowed.') }}</label>
+<label id='selected-filename-label' style='display:none;'>
+    <span>{{ gettext('Selected Files:') }}</span>
+    <strong>
+    <ul id='selected-files-list'>
+    </ul>
+  </strong>
+</label>
+<button type="button" id="select-file-button" onclick="return startSelectFile();">
+    Add File
+</button>
+<br/>
+<br/>
+<script>
+setTimeout(function() {
+    $(document).ready(function() {
+        initFilePicker();
+    });
+}, 2000);
+</script>

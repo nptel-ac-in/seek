@@ -1,0 +1,118 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<form id='gcb-submit-prog' action='{{ assignment.submit_action }}' method='POST'>
+{{ gettext('Select the Language for this assignment.') }}
+  <select id='prog-assignment-lang' name='prog-lang' onchange='onLangChoiceChange()'>
+    <option value=''>--</option>
+    {% for lang,v in assignment.all_lang_data.iteritems() %}
+      {% if assignment.selected_lang and lang == assignment.selected_lang %}
+        <option value='{{ lang }}' selected>{{ v.name }}</option>
+      {% else %}
+        <option value='{{ lang }}'>{{ v.name }}</option>
+      {% endif %}
+    {% endfor %}
+  </select>
+<script type="text/javascript">
+function saveCode(unit_id) {
+  var progLang = getSelectValue('prog-assignment-lang');
+  var cm = window["cm_prog_input_" + progLang];
+  cm.save();
+  updateInnerHTML('save-code-button', 'Saving ...');
+  element('save-code-button').disabled = true;
+  var langId = 'prog-input-' + progLang;
+  var filenameid = "prog-filename-" + progLang;
+  data = {
+    'prog-lang': progLang,
+    'filename': element(filenameid).value,
+    'prog-input': cm.getValue(),
+    'name': unit_id,
+  }
+  ajax_server.save_code(data);
+}
+function onSaveSuccess() {
+  updateInnerHTML('save-code-button', 'Save');
+  element('save-code-button').disabled = false;
+}
+
+installFunction('progassignment', 'save_code', onSaveSuccess, '{{ assignment.save_code_xsrf_token }}');
+</script>
+  <div style="width: 83%">
+    {% for lang,lang_details in assignment.all_lang_data.iteritems() %}
+      <div id="prog-div-{{lang}}">
+      {% if lang == 'java' %}
+      {{ gettext("File name for this program : ") }}
+      <input name="filename-{{lang}}" id="prog-filename-{{lang}}"
+             type="text" value="{{lang_details.filename}}">
+      </input>
+      {% else %}
+         <input name="filename-{{lang}}" id="prog-filename-{{lang}}" type="hidden" value='test.{{lang}}'></input>
+      {% endif %}
+      {% if lang_details.prefixed_code %}
+        <textarea id='prefixed_code_{{ lang }}'>{{ lang_details.prefixed_code }}</textarea>
+        <script>
+          var cm_prefixed_code_{{ lang }} = createCodeMirrorEditor(
+	      'prefixed_code_{{ lang }}', true, 1, "{{ lang }}");
+          first_line_number_{{ lang }} = (cm_prefixed_code_{{ lang }}).lineCount() + 1;
+        </script>
+      {% endif %}
+      <textarea name="prog-input-{{ lang }}" id="prog-input-{{ lang }}" rows="40" style="width:100%; display: block;">{{ lang_details.saved_code }}</textarea>
+      <script>
+          var cm_prog_input_{{ lang }} = createCodeMirrorEditor(
+              "prog-input-{{ lang }}", false, first_line_number_{{ lang }}, "{{ lang }}");
+      </script>
+      <input type="hidden" name="xsrf_token" value="{{ assignment.submit_xsrf_token|escape }}">
+      {% if lang_details.uneditable_code %}
+        <textarea id='uneditable_code_{{ lang }}'>{{ lang_details.uneditable_code }}</textarea>
+        <script>
+            var cm_uneditable_code_{{ lang }} =  createCodeMirrorEditor(
+                'uneditable_code_{{ lang }}', true, first_line_number_{{ lang }} + cm_prog_input_{{ lang }}.lineCount(), '{{ lang }}');
+            cm_prog_input_{{ lang }}.on("change", function(c, ch){
+                cm_uneditable_code_{{ lang }}.options.firstLineNumber = first_line_number_{{ lang }} + c.lineCount();
+                cm_uneditable_code_{{ lang }}.refresh();
+                }
+            );
+        </script>
+      {% endif %}
+      </div>
+    {% endfor %}
+    {% if not readonly %}
+    <div>
+      <div class='gcb-submit-only-once'>
+      {% if submit_only_once %}
+          {{ gettext('You are allowed to submit this assignment only once.') }}
+      {% else %}
+          {{ gettext('You may submit any number of times before the due date. The final submission will be considered for grading.') }}
+      {% endif %}
+      </div>
+      <button type="submit" name="btype" value="submit" class="gcb-button gcb-prog-assignment-button gcb-pull-right">
+        {{ gettext('Submit') }}</button>
+      {% if assignment.check_answers %}
+      <button type="submit" name="btype" value="verify"
+      class="gcb-button gcb-prog-assignment-button gcb-pull-right">
+        {{ gettext('Compile & Run') }}</button>
+      {% endif %}
+      <button type='submit' value='save' class="gcb-button gcb-prog-assignment-button gcb-pull-right"
+      href="javascript:void(0);" id="save-code-button"
+      onclick="saveCode('{{ pa_unit_id }}'); return false;" target="_blank">
+        {{ gettext('Save') }}</a>
+    </div>
+    {% endif %}
+    </div>
+    </div>
+    <br/>
+    <br/>
+</form>

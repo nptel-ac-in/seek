@@ -1,0 +1,127 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% extends 'base_explorer.html' %}
+
+{% macro display_search_course(course) -%}
+<div class="gcb-search-list-item"  data-sort="{{course.order}}">
+  <div>
+  <h1 class="gcb-product-headers-large">
+    <a href="{{course.course_preview_url}}" class="gcb-explorer-course-title">{{course.title}}</a>
+  </h1>
+  </div>
+  <div class="gcb-search-product-headers">{{course.blurb  | gcb_tags}}</div>
+  <div class='gcb-search-register-area'>
+    <div class='gcb-explorer-register-box'>
+    {% if course.is_completed %}
+      <a href="{{course.slug}}/student/home" class="gcb-button gcb-button-large">
+        {# I18N: Text for a button on the 'list of courses' page that takes students to a page where they can view score.#}
+        {{ gettext('View score') }}
+      </a>
+    {% elif course.is_registered %}
+      <a href="{{course.course_preview_url}}" class="gcb-button gcb-button-large">
+        {# I18N: Text for a button on the 'list of courses' page that takes students to the page for that course. #}
+        {{ gettext('Go to course') }}
+      </a>
+    {% elif course.can_register %}
+      {% if show_registration_page %}
+        <a href="{{course.slug}}/register" class="gcb-button gcb-button-large">
+          {# I18N: Registration button on the main course page. #}
+          {{ gettext('Join') }}
+        </a>
+      {% else %}
+        <form action='{{course.slug}}/register' method='post'>
+          <button class="gcb-button gcb-button-large" type="submit">
+            {# I18N: Registration button on the main course page. #}
+            {{ gettext('Join') }}
+          </button>
+          <input type="hidden" name="xsrf_token" value="{{ register_xsrf_token|escape }}">
+          <input type="hidden" name="name_from_profile">
+        </form>
+      {% endif %}
+    {% elif course.registration == 'OPENING_SOON' %}
+      <a href="{{course.course_preview_url}}" class="gcb-button gcb-button-large">
+        {# I18N: Text for a button on the 'list of courses' page that takes students to the page for that course. #}
+        {{ gettext('Opening Soon') }}
+      </a>
+      </a>
+    {% elif course.browsable %}
+      <a href="{{course.course_preview_url}}" class="gcb-button gcb-button-large">
+        {# I18N: Text for a button on the 'list of courses' page that takes students to the page for that course. #}
+        {{ gettext('Browse') }}
+      </a>
+    {% elif course.registration == 'CLOSED' %}
+      <a href="{{course.course_preview_url}}" class="gcb-button gcb-button-large">
+        {# I18N: Text for a button on the 'list of courses' page that takes students to the page for that course. #}
+        {{ gettext('Registration Closed') }}
+      </a>
+    {% else %}
+      <a href="{{course.course_preview_url}}" class="gcb-button gcb-button-large">
+        {# I18N: Text for a button on the 'list of courses' page that takes students to the page for that course. #}
+        {{ gettext('Preview') }}
+      </a>
+    {% endif %}
+    </div>
+  </div>
+  <div style="clear:both"></div>
+</div>
+
+{%- endmacro %}
+
+{% block top_content %}
+{% endblock %}
+
+{% block main_content %}
+<div class="gcb-article tab-content" role="main">
+    {% block course_navbar %}
+      <div class="gcb-nav" id="gcb-nav-left" role="navigation">
+         <div class='gcb-aside'>
+          <h2>Categories</h2>
+            <ul class="unit_navbar_ul" id="course_navbar">
+                <li><a class="gcb-explorer-course-title" href="/explorer/search?category=all">All Courses</a></li>
+                {% for  key in category_menu_list %}
+                <li>
+                 <a class="gcb-explorer-course-title" href="/explorer/search?category={{key}}">{{category_menu_list[key]}}</a>
+                </li>
+                {% endfor %}
+            </ul>
+            </div>
+     </div>
+    {% endblock %}
+
+
+
+      <div class="gcb-article tab-content" role="main" id="search_list">
+        {% if course_by_search_filter|length == 0 %}
+          <p class="gcb-product-headers">
+            <strong>{{ gettext('No courses to display in this category.') }}</strong>
+          </p>
+        {% endif %}
+        {% for course in course_by_search_filter %}
+          {{ display_search_course(course) }}
+        {% endfor %}
+      </div>
+      <script>
+          jQuery.fn.sortDivs = function sortDivs() {
+              $("> div", this[0]).sort(dec_sort).appendTo(this[0]);
+              function dec_sort(a, b){ return ($(b).data("sort")) < ($(a).data("sort")) ? 1 : -1; }
+          }
+          $("#search_list").sortDivs();
+      </script>
+
+
+</div>
+{% endblock %}

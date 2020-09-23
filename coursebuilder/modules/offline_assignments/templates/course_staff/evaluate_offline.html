@@ -1,0 +1,47 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% extends base_evaluator %}
+
+{% block main_content_header %}
+<div>
+  <h1 class="gcb-unit-header">
+    {# I18N: Header text for a unit page. #}
+    {{ gettext('Bulk Evaluate for %(title)s', title=unit.title) }}
+  </h1>
+</div>
+{% endblock %}
+
+{% block main_content_data %}
+<div style="display: inline-block;font-size:16px;padding-bottom: 7px;">
+{% if submission_due_date %}
+    <div class="gcb-submission-due-date">
+      {{ gettext('Due on %(time)s', time=submission_due_date) }}
+    </div>
+{% endif %}
+
+<div>
+    <h3>Bulk Score Offline Assignments</h3>
+    <p>Please enter the CSV of the scores here</p>
+    <form action='{{ form_uri }}?action={{ form_action }}' method="post">
+    <textarea name='scores_csv' style="width:500px; height:300px">student_id,score</textarea>
+    <br/>
+    <input type='hidden' name='xsrf_token' value='{{ score_offline_xsrf_token }}'></input>
+    <input type='hidden' name='assessment_id' value='{{ unit.unit_id }}'></input>
+    <button type='submit' class='gcb-button'>Save</button>
+    </form>
+</div>
+{% endblock %}

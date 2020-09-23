@@ -1,0 +1,60 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% extends base %}
+
+{% block top_content %}
+    <script src='/modules/ajax_registry/assets/js/registry.js'></script>
+    <!-- <script src='/modules/offline_assignments/editor/ckeditor/ckeditor.js'> -->
+{% endblock %}
+{% block edit_unit_content %}
+    {% if is_read_write_course and is_course_admin %}
+        {% if assignment %}
+            {% if assignment.edit_action %}
+                <a class="gcb-button pull-right" role="button"
+                    style="float:right;width:60px;"
+                    href="{{ assignment.edit_action }}" >Edit</a>
+            {% endif %}
+        {% endif %}
+    {% endif %}
+{% endblock %}
+
+{% block breadcrumb_content %}
+{% endblock %}
+
+{% block main_content_header %}
+<div>
+  <h1 class="gcb-unit-header">
+    {# I18N: Header text for a unit page. #}
+    {{ gettext('%(title)s', title=unit.title) }}
+  </h1>
+</div>
+{% endblock %}
+
+{% block main_content_data %}
+
+{% if assignment %}
+  <div style='clear: both; padding-top: 2px;' />
+  {% if assignment.question %}
+    <div style="display: inline-block;font-size:16px;padding-bottom: 7px;">
+      {{ assignment.question | safe }}
+    </div>
+    <div style="padding-bottom: 2px; clear: both;"></div>
+    {% else %}
+    <p>{{ gettext('No Question') }}</p>
+    {% endif %}
+{% endif %}
+{% endblock %}

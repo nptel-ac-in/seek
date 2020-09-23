@@ -1,0 +1,46 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+{% extends 'base_student.html' %}
+
+{% block top_content %}
+<script src="//www.google.com/jsapi" type="text/javascript"></script>
+{% endblock %}
+
+{% block sub_content %}
+<div id="gcb-main">
+  <div>
+    <h1 class="gcb-unit-header">Update Profile</h1>
+  {% if force %}
+    <h2 class="gcb-unit-description">We need you to update your profile at this moment</h2>
+  {% endif %}
+  </div>
+  <div class="gcb-article tab-content">
+      <form action="profile" method='post' onsubmit="return validateForm();">
+        <input type="hidden" name="xsrf_token" value="{{ xsrf_token|escape }}">
+        <input type="hidden" name="action" value="save_profile">
+        </input>
+      {% include 'profile.html' %}
+      </form>
+  </div>
+</div>
+
+<script src='/modules/nptel/assets/js/main.js'></script>
+<script src="/modules/nptel/assets/js/registration.js"></script>
+<script type="text/javascript">
+initRegisterForm();
+</script>
+{% endblock %}

@@ -1,0 +1,69 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<div class="gcb-cols">
+    <div class="gcb-col-11 gcb-aside">
+
+{% if video_exists or image_exists %}
+  <div class="gcb-col-5">
+{% else %}
+  <div class="gcb-col-11">
+{% endif %}
+
+  <h1 class="gcb-product-headers-large">
+    {{course_info.course.title}}
+  </h1>
+
+  <p class="gcb-product-headers">
+  {{course_info.course.blurb | gcb_tags}}
+  </p>
+
+</div>
+
+{% if video_exists or image_exists %}
+  <div class="gcb-col-5">
+
+    {% if video_exists %}
+      {# I18N: Alt text for an embedded YouTube video player. #}
+      <div class="gcb-video-container">
+      <iframe class="youtube-player" type="text/html"
+          title="{{ gettext('YouTube Video Player') }}"
+          src="//www.youtube.com/embed/{{course_info.course.main_video.url}}?rel=0"
+          frameborder="0"
+          allowfullscreen="allowfullscreen">
+          </iframe>
+      </div>
+    {% else%}
+      <img height="300"
+          alt="{{course_info.course.main_image.alt_text}}"
+          src="{{course_info.course.main_image.url}}">
+    {% endif %}
+
+  </div>
+{% endif %}
+</div>
+</div>
+
+<div class='clear'></div>
+<div class="gcb-bio-headers">
+  {{course_info.course.instructor_details | safe}}
+</div>
+
+<div class='clear'></div>
+<div class="gcb-product-headers">
+{{course_info.course.extra_info | gcb_tags}}
+</div>
+

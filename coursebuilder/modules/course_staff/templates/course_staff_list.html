@@ -1,0 +1,86 @@
+<!--
+ Copyright 2020 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+  {% if course_staff_list %}
+  <h2> Existing Course Staff </h2>
+    <table>
+      <tr>
+        <td>Email</td>
+       <td>Can Grade Submissions</td>
+       <td>Can Override Grades</td>
+       <td></td>
+      </tr>
+      {% for m in course_staff_list %}
+        <tr>
+          <td>{{ m.email }}</td>
+         <td>
+           {% if m.can_grade %}
+             Yes
+             <form action='dashboard' method='post'>
+               <input type='hidden' name='xsrf_token' value='{{ course_staff_not_allowed_to_grade_xsrf_token }}'></input>
+               <input type='hidden' name='action' value='course_staff_not_allowed_to_grade'></input>
+               <input type='hidden' name='course_staff_id' value='{{ m.user_id }}'></input>
+               <input type="submit" value="Remove Permission"></input>
+             </form>
+           {% else %}
+             No
+             <form action='dashboard' method='post'>
+               <input type='hidden' name='xsrf_token' value='{{ course_staff_allowed_to_grade_xsrf_token }}'></input>
+               <input type='hidden' name='action' value='course_staff_allowed_to_grade'></input>
+               <input type='hidden' name='course_staff_id' value='{{ m.user_id }}'></input>
+               <input type="submit" value="Allow To Grade"></input>
+             </form>
+           {% endif %}
+         </td>
+         <td>
+           {% if m.can_override %}
+             Yes
+             <form action='dashboard' method='post'>
+               <input type='hidden' name='xsrf_token' value='{{ course_staff_can_not_override_xsrf_token }}'></input>
+               <input type='hidden' name='action' value='course_staff_can_not_override'></input>
+               <input type='hidden' name='course_staff_id' value='{{ m.user_id }}'></input>
+               <input type="submit" value="Remove Permission"></input>
+             </form>
+           {% else %}
+             No
+             <form action='dashboard' method='post'>
+               <input type='hidden' name='xsrf_token' value='{{ course_staff_can_override_xsrf_token }}'></input>
+               <input type='hidden' name='action' value='course_staff_can_override'></input>
+               <input type='hidden' name='course_staff_id' value='{{ m.user_id }}'></input>
+               <input type="submit" value="Allow To Override"></input>
+             </form>
+           {% endif %}
+         </td>
+         <td>
+           <form action='dashboard' method='post'>
+             <input type='hidden' name='xsrf_token' value='{{ remove_course_staff_xsrf_token }}'></input>
+             <input type='hidden' name='action' value='remove_course_staff'></input>
+             <input type='hidden' name='course_staff_id' value='{{ m.user_id }}'></input>
+             <input type="submit" value="Remove"></input>
+           </form>
+         </td>
+        </tr>
+    {% endfor %}
+    </table>
+  {% endif %}
+  <hr/>
+  <h2> Add Course Staff </h2>
+  <form action='dashboard' method='post'>
+    <textarea name='course_staff_email_list' rows=10 cols=50></textarea>
+    <input type='hidden' name='xsrf_token' value='{{ add_course_staff_xsrf_token }}'></input>
+    <input type="submit" value="Add Course Staff"></input>
+    <input type='hidden' name='action' value='add_course_staff'></input>
+  </form>
