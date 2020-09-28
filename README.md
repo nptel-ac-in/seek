@@ -9,6 +9,45 @@ be releasing it as NPTEL Seek.
 The code available here is an old version from Google and we will make
 the latest version available soon.
 
+
+### Contributors (Including the Google Cousebuilder)
+- 💻 [Pavel Simakov](https://github.com/psimakov)
+- 💻 [Michael Gainer](https://github.com/mgainer)
+- 💻 [John Orr](https://github.com/jorr-at-google)
+- 💻 [Nick Retallack](https://github.com/nickretallack)
+- 💻 [johncox-google](https://github.com/johncox-google)
+- 💻 [Todd Larsen](https://github.com/tlarsen-google)
+- 💻 [Davy Risso](https://github.com/davyrisso-at-google)
+- 💻 [milit13](https://github.com/milit13)
+- 💻 [Abhinav Khandelwal](https://github.com/abhinaviitb)
+- 💻 [mark-friedman](https://github.com/mark-friedman)
+- 💻 [Sean Lip](https://github.com/seanlip)
+- 💻 [Michael Lenaghan](https://github.com/michaellenaghan)
+- 💻 [Maia Deutsch](https://github.com/maiadeutsch)
+- 💻 [GoogleAdam](https://github.com/GoogleAdam)
+- 💻 [Rishav Thakker](https://github.com/RishavT)
+- 💻 [Thejesh GN](https://github.com/thejeshgn)
+- 💻 Mike Gainer
+- 💻 Sagar Kothari
+- 💻 Philip Guo
+- 💻 nretallack
+- 💻 tlarsen
+- 💻 John Cox
+- 💻 Boris Roussev
+- 💻 gdejonghe
+- 💻 Rahul Telgote
+- 💻 tujohnson
+- 💻 Mark Friedman
+- 💻 mlenaghan
+- 💻 abhinavk
+- 💻 amitdeutsch
+- 💻 afeldman
+- 💻 Gun Pinyo
+- 💻 danieldanciu
+- [Missing?](https://github.com/nptel-ac-in/seek/issues/new)
+
+
+
 ### About Google Coursebuilder from the original authors at Google
 
 In July 2012, Google hosted a 2-week online, community-based course
