@@ -47,7 +47,7 @@ class ProgAssignment(object):
     PROG_LANG_JAVA = 'java'
     PROG_LANG_PY = 'py'
     PROG_LANG_PY3 = 'py3'
-    PROG_LANG_VERILOG = 'v'
+    PROG_LANG_VERILOG = 'verilog'
     PROG_LANG_PERL = 'pl'
     PROG_LANG_HASKELL = 'hs'
 
@@ -62,6 +62,7 @@ class ProgAssignment(object):
         (PROG_LANG_JAVA, 'Java'),
         (PROG_LANG_PY, 'Python2'),
         (PROG_LANG_PY3, 'Python3'),
+        (PROG_LANG_VERILOG, 'Verilog'),
         (PROG_LANG_PERL, 'Perl'),
         (PROG_LANG_HASKELL, 'Haskell')])
 

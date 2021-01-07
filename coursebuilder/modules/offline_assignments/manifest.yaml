@@ -1,0 +1,21 @@
+registration:
+  main_module: modules.offline_assignments.register
+
+files:
+  - modules/offline_assignments/register.py
+  - modules/offline_assignments/settings.py
+  - modules/offline_assignments/course_staff.py
+  - modules/offline_assignments/dashboard.py
+  - modules/offline_assignments/__init__.py
+  - modules/offline_assignments/base.py
+  - modules/offline_assignments/assignment.py
+  - modules/offline_assignments/question.py
+  - modules/offline_assignments/manifest.yaml
+  - modules/offline_assignments/templates/bulk_score_result.html
+  - modules/offline_assignments/templates/list_offline_assignment.html
+  - modules/offline_assignments/templates/course_staff/evaluate_offline.html
+  - modules/offline_assignments/templates/course_staff/evaluations_offline.html
+  - modules/offline_assignments/templates/course_staff/evaluation_result_offline.html
+  - modules/offline_assignments/templates/offline_assignment_details.html
+  - modules/offline_assignments/templates/bulk_score_dashboard_view.html
+  - modules/offline_assignments/templates/offline_assignment.html

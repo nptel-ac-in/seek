@@ -1,0 +1,16 @@
+registration:
+  main_module: modules.manual_review.register
+
+files:
+  - modules/manual_review/register.py
+  - modules/manual_review/dashboard.py
+  - modules/manual_review/manage.py
+  - modules/manual_review/__init__.py
+  - modules/manual_review/assign.py
+  - modules/manual_review/base.py
+  - modules/manual_review/manifest.yaml
+  - modules/manual_review/templates/result.html
+  - modules/manual_review/templates/list.html
+  - modules/manual_review/templates/view_by_unit.html
+  - modules/manual_review/templates/view_by_course_staff.html
+  - modules/manual_review/staff.py

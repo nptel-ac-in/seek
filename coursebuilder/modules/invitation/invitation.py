@@ -50,15 +50,19 @@ from common import tags
 from controllers import utils
 from models import courses
 from models import custom_modules
+from models import data_removal
 from models import models
 from models import transforms
-from modules.dashboard import course_settings
+from modules.courses import settings
+from modules.invitation import messages
 from modules.notifications import notifications
 from modules.unsubscribe import unsubscribe
 
 
 # The intent recorded for the emails sent by the notifications module
-INVITATION_INTENT = 'courseinvitation'
+INVITATION_INTENT = 'course_invitation'
+MODULE_NAME = 'invitation'
+MODULE_TITLE = 'Invitations'
 COURSE_SETTINGS_SCHEMA_SECTION = 'invitation'
 
 RESOURCES_PATH = '/modules/invitation/resources'
@@ -128,8 +132,7 @@ class InvitationEmail(object):
             self.sender_email,
             INVITATION_INTENT,
             self.body,
-            self.subject,
-            audit_trail=self.email_vars
+            self.subject
         )
 
 
@@ -140,12 +143,11 @@ class InvitationStudentProperty(models.StudentPropertyEntity):
     EMAIL_LIST_KEY = 'email_list'
 
     @classmethod
-    def load_or_create(cls, student):
+    def load_or_default(cls, student):
         entity = cls.get(student, cls.PROPERTY_NAME)
         if entity is None:
             entity = cls.create(student, cls.PROPERTY_NAME)
             entity.value = '{}'
-            entity.put()
         return entity
 
     def is_in_invited_list(self, email):
@@ -194,7 +196,7 @@ class InvitationHandler(utils.BaseHandler):
             self.redirect('/course')
             return
 
-        student = models.Student.get_enrolled_student_by_email(user.email())
+        student = models.Student.get_enrolled_student_by_user(user)
         if student is None:
             self.redirect('/course')
             return
@@ -254,7 +256,7 @@ class InvitationRESTHandler(utils.BaseRESTHandler):
             transforms.send_json_response(self, 401, 'Access denied.', {})
             return
 
-        student = models.Student.get_enrolled_student_by_email(user.email())
+        student = models.Student.get_enrolled_student_by_user(user)
         if not student:
             transforms.send_json_response(self, 401, 'Access denied.', {})
             return
@@ -275,7 +277,7 @@ class InvitationRESTHandler(utils.BaseRESTHandler):
                 self, 400, self.gettext('Error: Empty email list'))
             return
 
-        invitation_data = InvitationStudentProperty.load_or_create(student)
+        invitation_data = InvitationStudentProperty.load_or_default(student)
 
         # Limit the number of emails a user can send, to prevent spamming
         if invitation_data.invited_list_size() + len(email_set) > MAX_EMAILS:
@@ -291,21 +293,21 @@ class InvitationRESTHandler(utils.BaseRESTHandler):
                 'invitations: %s. No messages sent.' % missing_count))
             return
 
-        messages = []
+        email_messages = []
         for email in email_set:
             if not is_email_valid(email):
                 # I18N: Error indicating an email addresses is not well-formed.
-                messages.append(self.gettext(
+                email_messages.append(self.gettext(
                     'Error: Invalid email "%s"' % email))
             elif invitation_data.is_in_invited_list(email):
                 # I18N: Error indicating an email addresses is already known.
-                messages.append(self.gettext(
+                email_messages.append(self.gettext(
                     'Error: You have already sent an invitation email to "%s"'
                     % email))
             elif unsubscribe.has_unsubscribed(email):
                 # No message to the user, for privacy reasons
                 logging.info('Declined to send email to unsubscribed user')
-            elif models.Student.get_enrolled_student_by_email(email):
+            elif models.Student.is_email_in_use(email):
                 # No message to the user, for privacy reasons
                 logging.info('Declined to send email to registered user')
             else:
@@ -314,12 +316,12 @@ class InvitationRESTHandler(utils.BaseRESTHandler):
         invitation_data.append_to_invited_list(email_set)
         invitation_data.put()
 
-        if messages:
+        if email_messages:
             # I18N: Error indicating not all email messages were sent.
-            messages.insert(0, self.gettext(
+            email_messages.insert(0, self.gettext(
                 'Not all messages were sent (%s / %s):') % (
-                    len(email_set) - len(messages), len(email_set)))
-            transforms.send_json_response(self, 400, '\n'.join(messages))
+                    len(email_set) - len(email_messages), len(email_set)))
+            transforms.send_json_response(self, 400, '\n'.join(email_messages))
         else:
             transforms.send_json_response(
                 self, 200,
@@ -330,10 +332,8 @@ class InvitationRESTHandler(utils.BaseRESTHandler):
 def get_course_settings_fields():
     enable = schema_fields.SchemaField(
         'course:invitation_email:enabled',
-        'Enable Invitations', 'boolean',
-        description='Enable students to send emails inviting others to the '
-            'course.',
-        extra_schema_dict_values={
+        'Allow Invitation', 'boolean',
+        description=messages.ALLOW_INVITATION, extra_schema_dict_values={
             'className': 'invitation-enable inputEx-Field inputEx-CheckBox'},
         optional=True)
     sender_email = schema_fields.SchemaField(
@@ -354,12 +354,7 @@ def get_course_settings_fields():
     body_template = schema_fields.SchemaField(
         'course:invitation_email:body_template',
         'Invitation Body', 'text',
-        description='The body of invitation emails to this course. '
-            'Use the string {{sender_name}} to include the name of the student '
-            'issuing the invitation. To avoid spamming, you should always '
-            'include the string {{unsubscribe_url}} in your message to include '
-            'a link which the recipient can use to unsubscribe from future '
-            'invitations.',
+        description=messages.INVITATION_BODY,
         extra_schema_dict_values={'className': 'invitation-data inputEx-Field'},
         optional=True)
 
@@ -434,27 +429,19 @@ def register_module():
 
     def on_module_enabled():
         courses.Course.OPTIONS_SCHEMA_PROVIDERS[
-            COURSE_SETTINGS_SCHEMA_SECTION] += course_settings_fields
+            MODULE_NAME] += course_settings_fields
+        courses.Course.OPTIONS_SCHEMA_PROVIDER_TITLES[
+            MODULE_NAME] = MODULE_TITLE
+        settings.CourseSettingsHandler.register_settings_section(MODULE_NAME)
         utils.StudentProfileHandler.EXTRA_STUDENT_DATA_PROVIDERS += [
             get_student_profile_invitation_link,
             get_student_profile_sub_unsub_link]
-        course_settings.CourseSettingsHandler.ADDITIONAL_DIRS.append(
+        settings.CourseSettingsHandler.ADDITIONAL_DIRS.append(
             TEMPLATES_DIR)
-        course_settings.CourseSettingsHandler.EXTRA_JS_FILES.append(
+        settings.CourseSettingsHandler.EXTRA_JS_FILES.append(
             'invitation_course_settings.js')
-
-    def on_module_disabled():
-        for field in course_settings_fields:
-            courses.Course.OPTIONS_SCHEMA_PROVIDERS[
-                COURSE_SETTINGS_SCHEMA_SECTION].remove(field)
-        utils.StudentProfileHandler.EXTRA_STUDENT_DATA_PROVIDERS.remove(
-            get_student_profile_invitation_link)
-        utils.StudentProfileHandler.EXTRA_STUDENT_DATA_PROVIDERS.remove(
-            get_student_profile_sub_unsub_link)
-        course_settings.CourseSettingsHandler.ADDITIONAL_DIRS.remove(
-            TEMPLATES_DIR)
-        course_settings.CourseSettingsHandler.EXTRA_JS_FILES.remove(
-            'invitation_course_settings.js')
+        data_removal.Registry.register_indexed_by_user_id_remover(
+            InvitationStudentProperty.delete_by_user_id_prefix)
 
     global_routes = [
         (os.path.join(RESOURCES_PATH, '.*'), tags.ResourcesHandler)]
@@ -468,6 +455,5 @@ def register_module():
         'Invitation Page',
         'A page to invite others to register.',
         global_routes, namespaced_routes,
-        notify_module_disabled=on_module_disabled,
         notify_module_enabled=on_module_enabled)
     return custom_module

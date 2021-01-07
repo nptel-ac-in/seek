@@ -87,7 +87,7 @@ class BaseEntity(db.Model):
     # contain private information about a user.  If a property is internally
     # structured, the name may identify sub-components to remove.  E.g.,
     # for a record of type Student, you might specify:
-    # _PROPERTY_EXPORT_DENYLIST = [
+    # _PROPERTY_EXPORT_BLACKLIST = [
     #     name,                        # A db.Property in Student
     #     'additional_fields.gender',  # A named sub-element
     #     'additional_fields.age',     # ditto.
@@ -98,7 +98,7 @@ class BaseEntity(db.Model):
     #
     # For fields that must be transformed rather than purged, see
     # BaseEntity.for_export().
-    _PROPERTY_EXPORT_DENYLIST = []
+    _PROPERTY_EXPORT_BLACKLIST = []
 
     @classmethod
     def all(cls, **kwds):
@@ -145,25 +145,25 @@ class BaseEntity(db.Model):
         return db_key
 
     @classmethod
-    def _get_export_denylist(cls):
-        """Collapses all _PROPERTY_EXPORT_DENYLISTs in the class hierarchy."""
-        denylist = []
+    def _get_export_blacklist(cls):
+        """Collapses all _PROPERTY_EXPORT_BLACKLISTs in the class hierarchy."""
+        blacklist = []
         for klass in cls.__mro__:
-            if hasattr(klass, '_PROPERTY_EXPORT_DENYLIST'):
+            if hasattr(klass, '_PROPERTY_EXPORT_BLACKLIST'):
                 # Treat as module-protected.
                 # pylint: disable=protected-access
-                denylist.extend(klass._PROPERTY_EXPORT_DENYLIST)
+                blacklist.extend(klass._PROPERTY_EXPORT_BLACKLIST)
 
-        for index, item in enumerate(denylist):
+        for index, item in enumerate(blacklist):
             if isinstance(item, db.Property):
-                denylist[index] = item.name
+                blacklist[index] = item.name
             elif isinstance(item, basestring):
                 pass
             else:
                 raise ValueError(
-                    'Denylist entries must be either a db.Property ' +
+                    'Blacklist entries must be either a db.Property ' +
                     'or a string.  The entry "%s" is neither. ' % str(item))
-        return sorted(set(denylist))
+        return sorted(set(blacklist))
 
     def put(self):
         DB_PUT.inc()
@@ -173,6 +173,35 @@ class BaseEntity(db.Model):
         DB_DELETE.inc()
         super(BaseEntity, self).delete()
 
+    @classmethod
+    def delete_by_key(cls, id_or_name):
+        delete(db.Key.from_path(cls.kind(), id_or_name))
+
+    @classmethod
+    def delete_by_user_id_prefix(cls, user_id):
+        """Delete items keyed by a prefix of user ID and some suffix.
+
+        For example, StudentPropertyEntity is keyed with a name string
+        composed of the user ID, a hyphen, and an property name.  Since
+        we cannot simply look up items by user_id as a key, we do an
+        index range scan starting from the user_id up to but not
+        including the user_id incremented by one.
+
+        Args:
+          user_id: User ID as found in Student.user_id.
+        """
+        if user_id.isdigit():
+            # Obfuscated IDs only ever contain characters in 0...9.
+            next_user_id = str(int(user_id) + 1)
+        else:
+            # But this is not true in dev_appserver, which just re-uses the
+            # email address.
+            next_user_id = user_id[:-1] + unichr(ord(user_id[-1]) + 1)
+        query = cls.all(keys_only=True)
+        query.filter('__key__ >=', db.Key.from_path(cls.kind(), user_id))
+        query.filter('__key__ <', db.Key.from_path(cls.kind(), next_user_id))
+        delete(query.run())
+
     def _properties_for_export(self, transform_fn):
         """Creates an ExportEntity populated from this entity instance.
 
@@ -181,7 +210,7 @@ class BaseEntity(db.Model):
         this to obtain,
 
         1) Properties that need to be purged must be deleted from the instance.
-           Subclasses can set these fields in _PROPERTY_EXPORT_DENYLIST.
+           Subclasses can set these fields in _PROPERTY_EXPORT_BLACKLIST.
         2) Properties that need to be transformed should be modified in subclass
            implementations. In particular, properties with customizable JSON
            contents often need to be handled this way.
@@ -193,7 +222,7 @@ class BaseEntity(db.Model):
                 transform should be used.
 
         Raises:
-            ValueError: if the _PROPERTY_EXPORT_DENYLIST contains anything
+            ValueError: if the _PROPERTY_EXPORT_BLACKLIST contains anything
             other than db.Property references or strings.
 
         Returns:
@@ -224,18 +253,18 @@ class BaseEntity(db.Model):
     def for_export(self, transform_fn):
         properties = self._properties_for_export(transform_fn)
 
-        # Denylist may contain db.Property, or names as strings.  If string,
+        # Blacklist may contain db.Property, or names as strings.  If string,
         # the name may be a dotted list of containers.  This is useful for
         # redacting sub-items.  E.g., for the type Student,
         # specifying 'additional_items.name' would remove the PII item for
         # the student's name, but not affect additional_items['goal'],
         # (the student's goal for the course), which is not PII.
-        for item in  self._get_export_denylist():
+        for item in  self._get_export_blacklist():
             self._remove_named_component(item, properties)
         return ExportEntity(**properties)
 
     def for_export_unsafe(self):
-        """Get properties for entity ignoring denylist, and without encryption.
+        """Get properties for entity ignoring blacklist, and without encryption.
 
         Using this function is strongly discouraged.  The only situation in
         which this function is merited is for the export of data for analysis,

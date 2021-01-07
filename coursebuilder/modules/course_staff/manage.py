@@ -103,8 +103,7 @@ class CourseStaffDashboardHandler(base.CourseStaffBase):
             {
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': content},
-            in_action=cls.DASHBOARD_NAV,
-            in_tab=cls.DASHBOARD_SHOW_LIST_TAB)
+            in_action=cls.DASHBOARD_NAV)
 
 
     @classmethod

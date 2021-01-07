@@ -27,7 +27,6 @@ from models import custom_modules
 from models import custom_units
 from controllers import sites
 from modules.dashboard import dashboard
-from modules.dashboard import tabs
 from modules.programming_assignments import analytics as panalytics
 from modules.programming_assignments import assignment
 from modules.programming_assignments import base
@@ -51,32 +50,34 @@ def register_module():
         tab_name, base.ProgAssignment.NAME,
         'templates/prog_assignment_stats.html',
         data_source_classes=[panalytics.ProgrammingStatsDataSource])
-    tabs.Registry.register(
-        'analytics', tab_name, base.ProgAssignment.NAME, [stats])
+
+
+    dashboard.DashboardHandler.add_sub_nav_mapping(
+        'analytics', base.ProgAssignment.DASHBOARD_NAV, base.ProgAssignment.NAME, action=tab_name,
+        contents=analytics.TabRenderer([stats]))
 
     settings.ProgrammingAssignmentSettings.register()
 
-    tabs.Registry.register(
-        scoring_base.ScoringBase.DASHBOARD_NAV,
-        base.ProgAssignment.DASHBOARD_REEVALUATION_TAB,
-        'Programming Assignments',
-        pdashboard.ProgAssignmentDashboardHandler)
 
-    tabs.Registry.register(
-        base.ProgAssignment.DASHBOARD_NAV,
-        base.ProgAssignment.DASHBOARD_TEST_RUN_TAB,
-        'Test Run Details',
-        pdashboard.ProgAssignmentTestRunHandler)
+    dashboard.DashboardHandler.add_nav_mapping(
+        base.ProgAssignment.DASHBOARD_NAV, base.ProgAssignment.NAME, placement=6000)
 
-    tabs.Registry.register(
-        base.ProgAssignment.DASHBOARD_NAV,
-        base.ProgAssignment.DASHBOARD_DOWNLOAD_TAB,
-        'Download',
-        pdashboard.ProgAssignmentDownloadDashboardHandler)
+    dashboard.DashboardHandler.add_sub_nav_mapping(
+        base.ProgAssignment.DASHBOARD_NAV, base.ProgAssignment.DASHBOARD_REEVALUATION_TAB, "Rescore",
+        action=base.ProgAssignment.DASHBOARD_REEVALUATION_TAB,
+        contents=pdashboard.ProgAssignmentDashboardHandler.display_html)
+
+    dashboard.DashboardHandler.add_sub_nav_mapping(
+        base.ProgAssignment.DASHBOARD_NAV, base.ProgAssignment.DASHBOARD_DOWNLOAD_TAB, 'Download',
+        action=base.ProgAssignment.DASHBOARD_DOWNLOAD_TAB,
+        contents=pdashboard.ProgAssignmentDownloadDashboardHandler.display_html)
+
+    dashboard.DashboardHandler.add_sub_nav_mapping(
+        base.ProgAssignment.DASHBOARD_NAV, base.ProgAssignment.DASHBOARD_TEST_RUN_TAB, 'Programming Assignments Test Run',
+        action=base.ProgAssignment.DASHBOARD_TEST_RUN_TAB,
+        contents=pdashboard.ProgAssignmentTestRunHandler.display_html)
 
 
-    dashboard.DashboardHandler.add_custom_get_action(
-        base.ProgAssignment.DASHBOARD_NAV, None)
 
     dashboard.DashboardHandler.add_custom_post_action(
         base.ProgAssignment.REEVAL_ACTION,
@@ -93,8 +94,7 @@ def register_module():
         base.ProgAssignment.TEST_RUN_ACTION,
         pdashboard.ProgAssignmentTestRunHandler.get_show_results)
 
-    dashboard.DashboardHandler.add_nav_mapping(
-        base.ProgAssignment.DASHBOARD_NAV, base.ProgAssignment.NAME)
+
 
     associated_js_files_handlers = [
         ('/static/edit_area/(.*)', sites.make_zip_handler(

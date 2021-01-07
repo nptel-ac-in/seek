@@ -1,0 +1,19 @@
+<div>
+  <span style="float: left"><h3>Active Courses for {{ local_chapter.name }} ({{ local_chapter.org_type }})</h3></span>
+  <span class='gcb-pull-right'>Total registrations: {{ student_registration_data.total_registrations }}. Total members: {{ student_registration_data.total_students }}</span>
+</div>
+<table>
+  <tr>
+    <th>URL Slug</th>
+    <th>Title</th>
+    <th>No. of registered LocalChapter Members</th>
+  </tr>
+
+  {% for cl in courses %}
+  <tr>
+    <td><a href='{{ cl.slug }}/dashboard?action={{dashboard_action}}'>{{ cl.slug }}</td>
+    <td>{{ cl.title }}</td>
+    <td>{{ student_registration_data[cl.namespace] if student_registration_data[cl.namespace] else 0 }}</td>
+  </tr>
+  {% endfor %}
+</table>

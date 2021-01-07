@@ -1,19 +1,3 @@
-<!--
- Copyright 2020 Google LLC
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 <form id='gcb-submit-prog' action='{{ assignment.submit_action }}' method='POST'>
 {{ gettext('Select the Language for this assignment.') }}
   <select id='prog-assignment-lang' name='prog-lang' onchange='onLangChoiceChange()'>
@@ -27,12 +11,21 @@
     {% endfor %}
   </select>
 <script type="text/javascript">
-function saveCode(unit_id) {
+
+var RESET_CODE_RELOAD_PENDING = false;
+
+function saveCode(unit_id, newFullCode) {
   var progLang = getSelectValue('prog-assignment-lang');
   var cm = window["cm_prog_input_" + progLang];
+  if (newFullCode !== undefined && newFullCode !== null) {
+      cm.setValue(newFullCode);
+  }
   cm.save();
   updateInnerHTML('save-code-button', 'Saving ...');
+  element('reset-code-button').disabled = true;
   element('save-code-button').disabled = true;
+  element('submit-code-button').disabled = true;
+  element('compile-code-button').disabled = true;
   var langId = 'prog-input-' + progLang;
   var filenameid = "prog-filename-" + progLang;
   data = {
@@ -43,9 +36,20 @@ function saveCode(unit_id) {
   }
   ajax_server.save_code(data);
 }
+function resetCode(unit_id) {
+  RESET_CODE_RELOAD_PENDING = true;
+  saveCode(unit_id, '');
+}
 function onSaveSuccess() {
+  if (RESET_CODE_RELOAD_PENDING) {
+    location.reload();
+    return;
+  }
   updateInnerHTML('save-code-button', 'Save');
+  element('reset-code-button').disabled = false;
   element('save-code-button').disabled = false;
+  element('submit-code-button').disabled = false;
+  element('compile-code-button').disabled = false;
 }
 
 installFunction('progassignment', 'save_code', onSaveSuccess, '{{ assignment.save_code_xsrf_token }}');
@@ -98,11 +102,16 @@ installFunction('progassignment', 'save_code', onSaveSuccess, '{{ assignment.sav
           {{ gettext('You may submit any number of times before the due date. The final submission will be considered for grading.') }}
       {% endif %}
       </div>
-      <button type="submit" name="btype" value="submit" class="gcb-button gcb-prog-assignment-button gcb-pull-right">
+      <button type='submit' value='save' class="gcb-button gcb-prog-assignment-button gcb-pull-right"
+      href="javascript:void(0);" id="reset-code-button"
+      onclick="resetCode('{{ pa_unit_id }}'); return false;" target="_blank">
+        {{ gettext('Reset') }}</a>
+      <button type="submit" name="btype" value="submit" class="gcb-button gcb-prog-assignment-button gcb-pull-right"
+      id="submit-code-button">
         {{ gettext('Submit') }}</button>
       {% if assignment.check_answers %}
       <button type="submit" name="btype" value="verify"
-      class="gcb-button gcb-prog-assignment-button gcb-pull-right">
+      class="gcb-button gcb-prog-assignment-button gcb-pull-right" id="compile-code-button">
         {{ gettext('Compile & Run') }}</button>
       {% endif %}
       <button type='submit' value='save' class="gcb-button gcb-prog-assignment-button gcb-pull-right"

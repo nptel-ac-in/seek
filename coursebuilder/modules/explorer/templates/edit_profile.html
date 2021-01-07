@@ -1,0 +1,36 @@
+{% extends 'base_student.html' %}
+
+{% block top_content %}
+<script src="//www.google.com/jsapi" type="text/javascript"></script>
+{% endblock %}
+
+{% block sub_content %}
+<div id="gcb-main">
+  <div>
+    <h1 class="gcb-unit-header">Update Profile</h1>
+  {% if force %}
+    <h2 class="gcb-unit-description">We need you to update your profile at this moment</h2>
+  {% endif %}
+  </div>
+  <div class="gcb-article tab-content">
+      <form action="profile" method='post' onsubmit="return validateForm();">
+        <input type="hidden" name="xsrf_token" value="{{ xsrf_token|escape }}">
+        <input type="hidden" name="action" value="save_profile">
+        </input>
+      {% include 'profile.html' %}
+      </form>
+  </div>
+</div>
+
+<script src='{{STATIC_CDN_PATH}}/modules/nptel/assets/js/main.js'></script>
+<script src="/modules/nptel/assets/js/registration.js"></script>
+<script type="text/javascript">
+initRegisterForm();
+</script>
+<script>
+$(document).ready(function(){
+  console.log("Lets do this");
+     $(".chosen-select").chosen({no_results_text: "Oops, nothing found!"}); 
+});
+</script>
+{% endblock %}

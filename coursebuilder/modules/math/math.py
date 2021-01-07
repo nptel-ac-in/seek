@@ -25,11 +25,12 @@ from common import schema_fields
 from common import tags
 from controllers import sites
 from models import custom_modules
+from models import services
+from modules.math import messages
 
 MATH_MODULE_URI = '/modules/math'
 RESOURCES_URI = MATH_MODULE_URI + '/resources'
-MATHJAX_URI = MATH_MODULE_URI + '/MathJax'
-
+MATHJAX_URI = appengine_config.STATIC_CDN_PATH + MATH_MODULE_URI + '/MathJax'
 
 class MathTag(tags.ContextAwareTag):
     """Custom tag for mathematical notation using MathJax."""
@@ -67,7 +68,9 @@ class MathTag(tags.ContextAwareTag):
         header = tags.html_string_to_element_tree("""
 <script src="%s/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
 </script>""" % MATHJAX_URI)
-        footer = tags.html_string_to_element_tree('')
+        #Ref: http://docs.mathjax.org/en/latest/advanced/typeset.html
+        footer = tags.html_string_to_element_tree("""<script type="text/javascript">
+         MathJax.Hub.Typeset(); </script>""")
         return (header, footer)
 
     def get_icon_url(self):
@@ -79,16 +82,15 @@ class MathTag(tags.ContextAwareTag):
             schema_fields.SchemaField(
                 'input_type', 'Type', 'string', i18n=False,
                 optional=True,
-                select_data=[('TeX', 'TeX'), ('MML', 'MML')],
+                select_data=[('TeX', 'TeX'), ('MML', 'MathML')],
                 extra_schema_dict_values={'value': 'TeX'},
-                description=('Select either "TeX" or "MML" to write math'
-                             ' script in TeX or MathML respectively.')))
+                description=services.help_urls.make_learn_more_message(
+                    messages.RTE_MATH_TYPE, 'math:math:input_type')))
         reg.add_property(
             schema_fields.SchemaField(
-                'formula', 'Mathematical formula', 'text',
+                'formula', 'Mathematical Formula', 'text',
                 optional=True,
-                description=('Provide mathematical script'
-                             ' which will be displayed')))
+                description=messages.RTE_MATH_MATHEMATICAL_FORMULA))
         return reg
 
 
@@ -120,5 +122,3 @@ def register_module():
         notify_module_disabled=on_module_disable,
         notify_module_enabled=on_module_enable)
     return custom_module
-
-

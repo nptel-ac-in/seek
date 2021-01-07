@@ -32,7 +32,6 @@ from pipeline import pipeline
 import appengine_config
 from common import utils as common_utils
 from controllers import sites
-from controllers import utils
 from models import config
 from models import courses
 from models import entities
@@ -41,8 +40,9 @@ from models import models
 from models import transforms
 from models.progress import ProgressStats
 from models.progress import UnitLessonCompletionTracker
-from modules.data_source_providers import rest_providers
-from modules.data_source_providers import synchronous_providers
+from modules.analytics import analytics
+from modules.analytics import rest_providers
+from modules.analytics import synchronous_providers
 from modules.mapreduce import mapreduce_module
 
 from google.appengine.ext import db
@@ -56,60 +56,56 @@ class AnalyticsTabsWithNoJobs(actions.TestBase):
     def test_blank_students_tab_no_mr(self):
         email = 'admin@google.com'
         actions.login(email, is_admin=True)
-        self.get('dashboard?action=analytics&tab=students')
+        self.get('dashboard?action=analytics_students')
 
     def test_blank_questions_tab_no_mr(self):
         email = 'admin@google.com'
         actions.login(email, is_admin=True)
-        self.get('dashboard?action=analytics&tab=questions')
+        self.get('dashboard?action=analytics_questions')
 
     def test_blank_assessments_tab_no_mr(self):
         email = 'admin@google.com'
         actions.login(email, is_admin=True)
-        self.get('dashboard?action=analytics&tab=assessments')
+        self.get('dashboard?action=analytics_assessments')
 
     def test_blank_peer_review_tab_no_mr(self):
         email = 'admin@google.com'
         actions.login(email, is_admin=True)
-        self.get('dashboard?action=analytics&tab=peer_review')
+        self.get('dashboard?action=peer_review')
 
     def test_blank_students_tab_with_mr(self):
         config.Registry.test_overrides[
             mapreduce_module.GCB_ENABLE_MAPREDUCE_DETAIL_ACCESS.name] = True
         email = 'admin@google.com'
         actions.login(email, is_admin=True)
-        self.get('dashboard?action=analytics&tab=students')
+        self.get('dashboard?action=analytics_students')
 
     def test_blank_questions_tab_with_mr(self):
         config.Registry.test_overrides[
             mapreduce_module.GCB_ENABLE_MAPREDUCE_DETAIL_ACCESS.name] = True
         email = 'admin@google.com'
         actions.login(email, is_admin=True)
-        self.get('dashboard?action=analytics&tab=questions')
+        self.get('dashboard?action=analytics_questions')
 
     def test_blank_assessments_tab_with_mr(self):
         config.Registry.test_overrides[
             mapreduce_module.GCB_ENABLE_MAPREDUCE_DETAIL_ACCESS.name] = True
         email = 'admin@google.com'
         actions.login(email, is_admin=True)
-        self.get('dashboard?action=analytics&tab=assessments')
+        self.get('dashboard?action=analytics_assessments')
 
     def test_blank_peer_review_tab_with_mr(self):
         config.Registry.test_overrides[
             mapreduce_module.GCB_ENABLE_MAPREDUCE_DETAIL_ACCESS.name] = True
         email = 'admin@google.com'
         actions.login(email, is_admin=True)
-        self.get('dashboard?action=analytics&tab=peer_review')
+        self.get('dashboard?action=peer_review')
 
 
 class ProgressAnalyticsTest(actions.TestBase):
     """Tests the progress analytics page on the Course Author dashboard."""
 
     EXPECTED_TASK_COUNT = 3
-
-    def enable_progress_tracking(self):
-        config.Registry.test_overrides[
-            utils.CAN_PERSIST_ACTIVITY_EVENTS.name] = True
 
     def test_empty_student_progress_stats_analytics_displays_nothing(self):
         """Test analytics page on course dashboard when no progress stats."""
@@ -119,9 +115,9 @@ class ProgressAnalyticsTest(actions.TestBase):
 
         email = 'admin@google.com'
         actions.login(email, is_admin=True)
-        response = self.get('dashboard?action=analytics&tab=students')
+        response = self.get('dashboard?action=analytics_students')
         assert_contains(
-            'Google &gt; Dashboard &gt; Analytics &gt; Students', response.body)
+            'Google &gt; Dashboard &gt; Manage &gt; Students', response.body)
         assert_contains('have not been calculated yet', response.body)
 
         response = response.forms[
@@ -147,59 +143,61 @@ class ProgressAnalyticsTest(actions.TestBase):
     def test_student_progress_stats_analytics_displays_on_dashboard(self):
         """Test analytics page on course dashboard."""
 
-        self.enable_progress_tracking()
+        with actions.OverriddenEnvironment(
+            {'course': {analytics.CAN_RECORD_STUDENT_EVENTS: 'true'}}):
 
-        student1 = 'student1@google.com'
-        name1 = 'Test Student 1'
-        student2 = 'student2@google.com'
-        name2 = 'Test Student 2'
+            student1 = 'student1@google.com'
+            name1 = 'Test Student 1'
+            student2 = 'student2@google.com'
+            name2 = 'Test Student 2'
 
-        # Student 1 completes a unit.
-        actions.login(student1)
-        actions.register(self, name1)
-        actions.view_unit(self)
-        actions.logout()
+            # Student 1 completes a unit.
+            actions.login(student1)
+            actions.register(self, name1)
+            actions.view_unit(self)
+            actions.logout()
 
-        # Student 2 completes a unit.
-        actions.login(student2)
-        actions.register(self, name2)
-        actions.view_unit(self)
-        actions.logout()
+            # Student 2 completes a unit.
+            actions.login(student2)
+            actions.register(self, name2)
+            actions.view_unit(self)
+            actions.logout()
 
-        # Admin logs back in and checks if progress exists.
-        email = 'admin@google.com'
-        actions.login(email, is_admin=True)
-        response = self.get('dashboard?action=analytics&tab=students')
-        assert_contains(
-            'Google &gt; Dashboard &gt; Analytics &gt; Students', response.body)
-        assert_contains('have not been calculated yet', response.body)
+            # Admin logs back in and checks if progress exists.
+            email = 'admin@google.com'
+            actions.login(email, is_admin=True)
+            response = self.get('dashboard?action=analytics_students')
+            assert_contains(
+                'Google &gt; Dashboard &gt; Manage &gt; Students',
+                response.body)
+            assert_contains('have not been calculated yet', response.body)
 
-        response = response.forms[
-            'gcb-generate-analytics-data'].submit().follow()
-        assert len(self.taskq.GetTasks('default')) == (
-            ProgressAnalyticsTest.EXPECTED_TASK_COUNT)
+            response = response.forms[
+                'gcb-generate-analytics-data'].submit().follow()
+            assert len(self.taskq.GetTasks('default')) == (
+                ProgressAnalyticsTest.EXPECTED_TASK_COUNT)
 
-        response = self.get('dashboard?action=analytics')
-        assert_contains('is running', response.body)
+            response = self.get('dashboard?action=analytics_students')
+            assert_contains('is running', response.body)
 
-        self.execute_all_deferred_tasks()
+            self.execute_all_deferred_tasks()
 
-        response = self.get('dashboard?action=analytics')
-        assert_contains('were last updated at', response.body)
-        assert_contains('currently enrolled: 2', response.body)
-        assert_contains('total: 2', response.body)
+            response = self.get('dashboard?action=analytics_students')
+            assert_contains('were last updated at', response.body)
+            assert_contains('currently enrolled: 2', response.body)
+            assert_contains('total: 2', response.body)
 
-        assert_contains('Student Progress', response.body)
-        assert_does_not_contain(
-            'No student progress has been recorded for this course.',
-            response.body)
-        # JSON code for the completion statistics.
-        assert_contains(
-            '\\"u.1.l.1\\": {\\"progress\\": 0, \\"completed\\": 2}',
-            response.body)
-        assert_contains(
-            '\\"u.1\\": {\\"progress\\": 2, \\"completed\\": 0}',
-            response.body)
+            assert_contains('Student Progress', response.body)
+            assert_does_not_contain(
+                'No student progress has been recorded for this course.',
+                response.body)
+            # JSON code for the completion statistics.
+            assert_contains(
+                '\\"u.1.l.1\\": {\\"progress\\": 0, \\"completed\\": 2}',
+                response.body)
+            assert_contains(
+                '\\"u.1\\": {\\"progress\\": 2, \\"completed\\": 0}',
+                response.body)
 
     def test_analytics_are_individually_cancelable_and_runnable(self):
         """Test run/cancel controls for individual analytics jobs."""
@@ -207,18 +205,23 @@ class ProgressAnalyticsTest(actions.TestBase):
         # Submit all analytics.
         email = 'admin@google.com'
         actions.login(email, is_admin=True)
-        response = self.get('dashboard?action=analytics&tab=peer_review')
+        response = self.get('dashboard?action=peer_review')
         response = response.forms[
             'gcb-generate-analytics-data'].submit().follow()
 
         # Ensure that analytics appear to be running and have cancel buttons.
         assert_contains('is running', response.body)
-        assert_contains('Cancel Statistic Calculation', response.body)
+        assert_contains('Cancel', response.body)
 
-        # Now that all analytics are pending, ensure that we do _not_ have
-        # an update-all button.
-        with self.assertRaises(KeyError):
-            response = response.forms['gcb-generate-analytics-data']
+        # Now that all analytics are pending, ensure that update-all button
+        # is hidden.
+        dom = self.parse_html_string(response.body)
+        update_all = dom.find('.//div[@id="analytics-update-all"]')
+        cancel_all = dom.find('.//div[@id="analytics-cancel-all"]')
+        self.assertEquals(update_all.get('class'),
+                          'gcb-button-toolbar not-displayed')
+        self.assertEquals(cancel_all.get('class'),
+                          'gcb-button-toolbar ')
 
         # Click the cancel button for one of the slower jobs.
         response = response.forms[
@@ -235,14 +238,19 @@ class ProgressAnalyticsTest(actions.TestBase):
         response = response.forms[
             'gcb-run-visualization-peer_review'].submit().follow()
 
-        # All jobs should now again be running, and update-all button gone.
-        with self.assertRaises(KeyError):
-            response = response.forms['gcb-generate-analytics-data']
+        # All jobs should now again be running, and update-all button hidden.
+        dom = self.parse_html_string(response.body)
+        update_all = dom.find('.//div[@id="analytics-update-all"]')
+        cancel_all = dom.find('.//div[@id="analytics-cancel-all"]')
+        self.assertEquals(update_all.get('class'),
+                          'gcb-button-toolbar not-displayed')
+        self.assertEquals(cancel_all.get('class'),
+                          'gcb-button-toolbar ')
 
     def test_cancel_map_reduce(self):
         email = 'admin@google.com'
         actions.login(email, is_admin=True)
-        response = self.get('dashboard?action=analytics&tab=peer_review')
+        response = self.get('dashboard?action=peer_review')
         response = response.forms[
             'gcb-run-visualization-peer_review'].submit().follow()
 
@@ -276,7 +284,7 @@ class ProgressAnalyticsTest(actions.TestBase):
 
         assert_equals(
             progress_stats._get_unit_ids_of_type_unit(), [unit1.unit_id])
-        assessment1 = course.add_assessment()
+        assessment1 = course.add_assessment(unit1)
         assert_equals(
             progress_stats._get_assessment_ids(), [assessment1.unit_id])
         lesson11 = course.add_lesson(unit1)
@@ -338,49 +346,66 @@ class ProgressAnalyticsTest(actions.TestBase):
         progress_stats = ProgressStats(course)
         course_dict = progress_stats.compute_entity_dict('course', [])
         assert_equals(course_dict, {
-            'label': 'UNTITLED COURSE', 'u': {}, 's': {}})
+            'label': 'UNTITLED COURSE', 'u': [], 's': []})
 
-    def test_compute_entity_dict_constructs_dict_for_empty_course_correctly(
-        self):
+    def test_compute_entity_dict_for_non_empty_course_correctly(self):
         """Tests correct entity_structure is built."""
+
         sites.setup_courses('course:/test::ns_test, course:/:/')
         course = courses.Course(None, app_context=sites.get_all_courses()[0])
         unit1 = course.add_unit()
-        assessment1 = course.add_assessment()
+        assessment1 = course.add_assessment(unit1)
         progress_stats = ProgressStats(course)
+        expected = {
+            'label': 'UNTITLED COURSE',
+            'u':
+                [{
+                    'child_id': unit1.unit_id,
+                    'child_val': {
+                        'label': 'Unit %s' % unit1.index,
+                        'l': [],
+                        's': []
+                    }
+            }],
+            's':
+                [{
+                    'child_id': assessment1.unit_id,
+                    'child_val': {'label': assessment1.title}
+            }]
+        }
         assert_equals(
-            progress_stats.compute_entity_dict('course', []),
-            {'label': 'UNTITLED COURSE', 'u': {unit1.unit_id: {
-                'label': 'Unit %s' % unit1.index, 'l': {}}}, 's': {
-                    assessment1.unit_id: {'label': assessment1.title}}})
+            expected, progress_stats.compute_entity_dict('course', []))
+
         lesson11 = course.add_lesson(unit1)
+        expected = {
+            's': [{
+                'child_id': assessment1.unit_id,
+                'child_val': {
+                    'label': assessment1.title}
+                }],
+            'u': [{
+                'child_id': unit1.unit_id,
+                'child_val': {
+                    's': [],
+                    'l': [{
+                        'child_id': lesson11.lesson_id,
+                        'child_val': {
+                            'a': [],
+                            'h': [{
+                                'child_id': 0,
+                                'child_val': {
+                                    'c': [],
+                                    'label': 'L1.1'
+                                }}],
+                            'label': lesson11.index
+                        }}],
+                    'label': 'Unit %s' % unit1.index}
+                }],
+            'label': 'UNTITLED COURSE'
+        }
         assert_equals(
-            progress_stats.compute_entity_dict('course', []),
-            {
-                "s": {
-                    assessment1.unit_id: {
-                        "label": assessment1.title
-                    }
-                },
-                "u": {
-                    unit1.unit_id: {
-                        "l": {
-                            lesson11.lesson_id: {
-                                "a": {},
-                                "h": {
-                                    0: {
-                                        "c": {},
-                                        "label": "L1.1"
-                                    }
-                                },
-                                "label": lesson11.index
-                            }
-                        },
-                        "label": "Unit %s" % unit1.index
-                    }
-                },
-                'label': 'UNTITLED COURSE'
-            })
+            expected, progress_stats.compute_entity_dict('course', []))
+
         lesson11.objectives = """
             <question quid="123" weight="1" instanceid="1"></question>
             random_text
@@ -389,48 +414,147 @@ class ProgressAnalyticsTest(actions.TestBase):
             <question-group qgid="456" instanceid="2"></question-group>
             yet_more_random_text
         """
+        expected = {
+            'label': 'UNTITLED COURSE',
+            's': [{
+                'child_id': assessment1.unit_id,
+                'child_val': {'label': assessment1.title}}],
+            'u': [{
+                'child_id': unit1.unit_id,
+                'child_val': {
+                    'label': 'Unit %s' % unit1.index,
+                    's': [],
+                    'l': [{
+                        'child_id': lesson11.lesson_id,
+                        'child_val': {
+                            'label': lesson11.index,
+                            'a': [],
+                            'h': [{
+                                'child_id': 0,
+                                'child_val': {
+                                    'c': [{
+                                        'child_id': '1',
+                                        'child_val': {
+                                            'label': 'L1.1.1'
+                                        }}, {
+                                        'child_id': '2',
+                                        'child_val': {
+                                            'label': 'L1.1.2'
+                                        }
+                                        }],
+                                    'label': 'L1.1'
+                                }
+                            }]
+                        }
+                    }]
+                }
+            }]
+        }
         assert_equals(
-            progress_stats.compute_entity_dict('course', []),
-            {
-                "s": {
-                    assessment1.unit_id: {
-                        "label": assessment1.title
-                    }
-                },
-                "u": {
-                    unit1.unit_id: {
-                        "l": {
-                            lesson11.lesson_id: {
-                                "a": {},
-                                "h": {
-                                    0: {
-                                        "c": {
-                                            u'1': {
-                                                "label": "L1.1.1"
-                                            },
-                                            u'2': {
-                                                "label": "L1.1.2"
-                                            }
-                                        },
-                                        "label": "L1.1"
-                                    }
-                                },
-                                "label": lesson11.index
-                            }
-                        },
-                        "label": "Unit %s" % unit1.index
-                    }
-                },
-                "label": 'UNTITLED COURSE'
-            })
+            expected, progress_stats.compute_entity_dict('course', []))
+
+    def test_entity_dict_for_pre_post_assessment(self):
+        """Tests correct entity_structure is built."""
+        sites.setup_courses('course:/test::ns_test, course:/:/')
+        course = courses.Course(None, app_context=sites.get_all_courses()[0])
+        unit1 = course.add_unit()
+        pre_assessment = course.add_assessment(unit1)
+        pre_assessment.title = 'Pre Assessment'
+        post_assessment = course.add_assessment(unit1)
+        post_assessment.title = 'Post Assessment'
+
+        # Neither pre nor post assessment for unit
+        unit1.pre_assessment = None
+        unit1.post_assessment = None
+        progress_stats = ProgressStats(course)
+        expected = {
+            's': [{
+                'child_id': pre_assessment.unit_id,
+                'child_val': {
+                    'label': 'Pre Assessment'}}, {
+                'child_id': post_assessment.unit_id,
+                'child_val': {
+                    'label': 'Post Assessment'}}],
+             'u': [{
+                'child_id': unit1.unit_id,
+                'child_val': {
+                        's': [],
+                        'l': [],
+                        'label': 'Unit 1'}}],
+             'label': 'UNTITLED COURSE'}
+        assert_equals(
+            expected, progress_stats.compute_entity_dict('course', []))
+
+        # Only pre
+        unit1.pre_assessment = pre_assessment.unit_id
+        unit1.post_assessment = None
+        progress_stats = ProgressStats(course)
+        expected = {
+            's': [{
+                'child_id': post_assessment.unit_id,
+                'child_val': {'label': 'Post Assessment'}}],
+            'u': [{
+                'child_id': unit1.unit_id,
+                'child_val': {
+                    's': [{
+                        'child_id': pre_assessment.unit_id,
+                        'child_val': {'label': 'Pre Assessment'}}],
+                    'l': [],
+                    'label': 'Unit 1'}}],
+            'label': 'UNTITLED COURSE'}
+        assert_equals(
+            expected, progress_stats.compute_entity_dict('course', []))
+
+        # Only post
+        unit1.pre_assessment = None
+        unit1.post_assessment = post_assessment.unit_id
+        progress_stats = ProgressStats(course)
+        expected = {
+            's': [{
+                'child_id': pre_assessment.unit_id,
+                'child_val': {'label': 'Pre Assessment'}}],
+            'u': [{
+                'child_id': unit1.unit_id,
+                'child_val': {
+                    's': [{
+                        'child_id': post_assessment.unit_id,
+                        'child_val': {
+                            'label': 'Post Assessment'}}],
+                    'l': [],
+                    'label': 'Unit 1'}}],
+             'label': 'UNTITLED COURSE'}
+        assert_equals(
+            expected, progress_stats.compute_entity_dict('course', []))
+
+        # Pre and post assessment set.
+        unit1.pre_assessment = pre_assessment.unit_id
+        unit1.post_assessment = post_assessment.unit_id
+        progress_stats = ProgressStats(course)
+        expected = {
+            's': [],
+            'u': [{
+                'child_id': unit1.unit_id,
+                'child_val': {
+                    's': [
+                        {
+                            'child_id': pre_assessment.unit_id,
+                            'child_val': {
+                                'label': 'Pre Assessment'}
+                        }, {
+                            'child_id': post_assessment.unit_id,
+                            'child_val': {
+                                'label': 'Post Assessment'}
+                        }],
+                    'l': [],
+                    'label': 'Unit 1'}}],
+             'label': 'UNTITLED COURSE'}
+        assert_equals(
+            expected, progress_stats.compute_entity_dict('course', []))
+
 
 
 class QuestionAnalyticsTest(actions.TestBase):
     """Tests the question analytics page from Course Author dashboard."""
-
-    def _enable_activity_tracking(self):
-        config.Registry.test_overrides[
-            utils.CAN_PERSIST_ACTIVITY_EVENTS.name] = True
 
     def _get_sample_v15_course(self):
         """Creates a course with different types of questions and returns it."""
@@ -438,11 +562,11 @@ class QuestionAnalyticsTest(actions.TestBase):
         course = courses.Course(None, app_context=sites.get_all_courses()[0])
         unit1 = course.add_unit()
         lesson1 = course.add_lesson(unit1)
-        assessment_old = course.add_assessment()
+        assessment_old = course.add_assessment(unit1)
         assessment_old.title = 'Old assessment'
-        assessment_new = course.add_assessment()
+        assessment_new = course.add_assessment(unit1)
         assessment_new.title = 'New assessment'
-        assessment_peer = course.add_assessment()
+        assessment_peer = course.add_assessment(unit1)
         assessment_peer.title = 'Peer review assessment'
 
         # Create a multiple choice question.
@@ -743,7 +867,7 @@ class CronCleanupTest(actions.TestBase):
         self.assertEquals(1, self._get_num_root_jobs(COURSE_ONE))
         self.assertEquals(1, self._clean_jobs(datetime.timedelta(seconds=0)))
         paths = self._get_cloudstore_paths(COURSE_ONE)
-        self.assertEquals(6, len(paths))
+        self.assertTrue(len(paths) == 6 or len(paths) == 3)
 
         self.execute_all_deferred_tasks()  # Run deferred deletion task.
         self.assertEquals(0, self._get_num_root_jobs(COURSE_ONE))
@@ -759,6 +883,7 @@ class CronCleanupTest(actions.TestBase):
         self.assertEquals(3, self._clean_jobs(datetime.timedelta(seconds=0)))
         paths = self._get_cloudstore_paths(COURSE_ONE)
         self.assertEquals(18, len(paths))
+        self.assertTrue(len(paths) == 18 or len(paths) == 9)
 
         self.execute_all_deferred_tasks()  # Run deferred deletion task.
         self.assertEquals(0, self._get_num_root_jobs(COURSE_ONE))
@@ -799,6 +924,12 @@ class CronCleanupTest(actions.TestBase):
         self.assertEquals(2, self._get_num_root_jobs(COURSE_TWO))
         course_two_paths = self._get_cloudstore_paths(COURSE_TWO)
         self.assertEquals(12, len(course_two_paths))
+        self.assertTrue(len(course_one_paths) == 12 or
+                        len(course_one_paths) == 6)
+        self.assertEquals(2, self._get_num_root_jobs(COURSE_TWO))
+        course_two_paths = self._get_cloudstore_paths(COURSE_TWO)
+        self.assertTrue(len(course_two_paths) == 12 or
+                        len(course_two_paths) == 6)
 
         self.assertEquals(4, self._clean_jobs(datetime.timedelta(seconds=0)))
 
@@ -821,7 +952,8 @@ class CronCleanupTest(actions.TestBase):
         # Note that since the actual handler uses a max time limit of
         # a few days, we need to set up a canceled job which, having
         # no defined start-time will be cleaned up immediately.
-        self.get('/cron/mapreduce/cleanup')
+        self.get('/cron/mapreduce/cleanup',
+                 headers={'X-AppEngine-Cron': 'True'})
 
         self.execute_all_deferred_tasks(iteration_limit=1)
         self.assertEquals(0, self._get_num_root_jobs(COURSE_ONE))
@@ -907,14 +1039,20 @@ class DummyMapReduceJob(jobs.MapReduceJob):
 
 class MapReduceSimpleTest(actions.TestBase):
 
+    # Reserve a bunch of IDs; it appears that when module registration creates
+    # objects, some ID counts are reserved, globally, such that we cannot
+    # re-use those IDs, even when explicitly set on a different entity type.
+    ID_FUDGE = 50
+
     def setUp(self):
         super(MapReduceSimpleTest, self).setUp()
         admin_email = 'admin@foo.com'
         self.context = actions.simple_add_course('mr_test', admin_email, 'Test')
         actions.login(admin_email, is_admin=True)
         with common_utils.Namespace('ns_mr_test'):
-            # Start range at 1 because 0 is a reserved ID.
-            for key in range(1, DummyEntity.NUM_ENTITIES + 1):
+            # Start range after zero, because of reserved/consumed IDs.
+            for key in range(self.ID_FUDGE,
+                             DummyEntity.NUM_ENTITIES + self.ID_FUDGE):
                 DummyDAO.upsert(key, {})
 
     def test_basic_operation(self):

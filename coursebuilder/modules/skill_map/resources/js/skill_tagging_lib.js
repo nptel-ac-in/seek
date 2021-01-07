@@ -1,32 +1,16 @@
 /**
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-/**
  * This file contains the classes to manage Skill Mapping widgets.
  */
 
 var SKILL_API_VERSION = '1';
 var ESC_KEY = 27;
-var MAX_SKILL_REQUEST_SIZE = 10;
 
 /*********************** Start Dependencies ***********************************/
 // The following symols are required to be defined in the global scope:
 //   cbShowMsg, cbShowMsgAutoHide
 var showMsg = cbShowMsg;
 var showMsgAutoHide = cbShowMsgAutoHide;
+var hideMsg = cbHideMsg;
 /************************ End Dependencies ************************************/
 
 function parseAjaxResponse(s) {
@@ -36,66 +20,38 @@ function parseAjaxResponse(s) {
 }
 
 /**
- * InputEx adds a JSON prettifier to Array and Object. This works fine for
- * InputEx code but breaks some library code (e.g., jQuery.ajax). Use this
- * to wrap a function which should be called with the InputEx extras turned
- * off.
- *
- * @param f {function} A zero-args function executed with prettifier removed.
- */
-function withInputExFunctionsRemoved(f) {
-  var oldArrayToPrettyJsonString = Array.prototype.toPrettyJSONString;
-  var oldObjectToPrettyJsonString = Object.prototype.toPrettyJSONString;
-  delete Array.prototype.toPrettyJSONString;
-  delete Object.prototype.toPrettyJSONString;
-
-  try {
-    f();
-  } finally {
-    if (oldArrayToPrettyJsonString !== undefined) {
-      Array.prototype.toPrettyJSONString = oldArrayToPrettyJsonString;
-    }
-    if (oldObjectToPrettyJsonString !== undefined) {
-      Object.prototype.toPrettyJSONString = oldObjectToPrettyJsonString;
-    }
-  }
-}
-
-/**
  * A skills table builder.
  *
  * @class
  */
-function SkillTable(skillList, locationList) {
+function SkillTable(skills, lessons) {
   // TODO(broussev): Add jasmine tests.
-  this._skillList = skillList;
-  this._locationList = locationList;
+  this._skills = skills;
+  this._lessons = lessons;
 }
 
 SkillTable.prototype = {
   _buildRow: function(skill) {
-    var tr = $('<tr class="row"></tr>');
+    var tr = $(
+      '<tr class="row">' +
+      '  <td><i class="diagnosis material-icons gcb-list__icon"></i></td>' +
+      '  <td><a class="delete-skill">' +
+      '    <i class="material-icons gcb-list__icon gcb-list__icon--rowhover">' +
+      '      delete</i></a>' +
+      '  </td> ' +
+      '  <td class="skill-name"><a class="edit-skill">' + skill.name +
+      '  </a></td>' +
+      '</tr>');
 
     // add skill name
-    var td = $(
-        '<td class="skill">' +
-        '  <div class="diagnosis icon md"></div>' +
-        '  <span class="skill-name"></span> ' +
-        '  <button class="icon md md-delete reveal-on-hover delete-skill"></button> ' +
-        '  <button class="icon md md-mode-edit reveal-on-hover edit-skill"></button> ' +
-        '</td>'
-    );
-    td.find('.diagnosis.icon, button').data('id', skill.id);
+    tr.find('.diagnosis, a').data('id', skill.id);
 
-    var diagnosis = this._skillList.diagnosis(skill.id);
+    var diagnosis = this._skills.diagnosis(skill.id);
     if (diagnosis.status == SkillList.WARNING) {
-      td.find('.diagnosis.icon').addClass('md-warning');
+      tr.find('.diagnosis').addClass('warning');
     } else if (diagnosis.status == SkillList.ERROR) {
-      td.find('.diagnosis.icon').addClass('md-error');
+      tr.find('.diagnosis').addClass('error');
     }
-
-    td.find('.skill-name').text(skill.name);
-    tr.append(td);
 
     // add skill description
     var td = $(
@@ -109,23 +65,32 @@ SkillTable.prototype = {
     // add skill prerequisites
     var td = $('<td></td>');
     var ol = $('<ol class="skill-display-root"></ol>');
-    this._skillList.eachPrerequisite(skill, function(prereq) {
+    this._skills.eachPrerequisite(skill, function(prereq) {
       var prereqLi = $('<li class="skill"></li>').text(prereq.name);
       ol.append(prereqLi);
     });
     td.append(ol);
     tr.append(td);
 
-    // add skill locations
+    // add skill successors
+    var td = $('<td></td>');
+    var ol = $('<ol class="skill-display-root"></ol>');
+    this._skills.eachSuccessor(skill, function(successor) {
+      var successorLi = $('<li class="skill"></li>').text(successor.name);
+      ol.append(successorLi);
+    });
+    td.append(ol);
+    tr.append(td);
+
+    // add skill lessons
     var td = $('<td></td>');
     var ol = $('<ol class="comma-list"></ol>');
-    for (var i = 0; i < skill.locations.length; i++) {
-      var loc = skill.locations[i]
-      var title = loc.unit.title + ' ' + loc.lesson.title;
+    for (var i = 0; i < skill.lessons.length; i++) {
+      var loc = skill.lessons[i];
       var a = $('<a class="skill-location"></a>')
           .text(loc.label)
           .attr('href', loc.href)
-          .attr('title', title);
+          .attr('title', loc.description);
       ol.append($('<li></li>').append(a));
     }
     td.append(ol);
@@ -136,7 +101,7 @@ SkillTable.prototype = {
 
   _skillsCount: function() {
     var that = this;
-    return Object.keys(that._skillList._skillLookupByIdTable).length;
+    return Object.keys(that._skills._skillLookupByIdTable).length;
   },
 
   _buildHeader: function() {
@@ -144,14 +109,17 @@ SkillTable.prototype = {
     var thead = $(
       '<thead>' +
       '  <tr>' +
+      '    <th class="gcb-list__cell--icon"></th>' +
+      '    <th class="gcb-list__cell--icon"></th>' +
       '    <th class="skill">Skill <span class="skill-count"></span></th>' +
       '    <th class="description">Description</th>' +
-      '    <th class="prerequisite">Prerequisites</th>' +
+      '    <th class="related-skills">Prerequisites</th>' +
+      '    <th class="related-skills">Leads to</th>' +
       '    <th class="lessons">Lessons</th>' +
       '  </tr>' +
       '</thead>'
     );
-    thead.find('.skill-count').text('(' + that._skillsCount() + ')')
+    thead.find('.skill-count').text('(' + that._skillsCount() + ')');
     return thead;
   },
 
@@ -160,9 +128,8 @@ SkillTable.prototype = {
     var tbody = $('<tbody></tbody>');
 
     var i = 0;
-    that._skillList.eachSkill(function(skill) {
+    that._skills.eachSkill(function(skill) {
       var row = that._buildRow(skill);
-      row.addClass( i++ % 2 == 0 ? 'even' : 'odd');
       tbody.append(row);
     });
 
@@ -176,11 +143,11 @@ SkillTable.prototype = {
     }
 
     tbody.tooltip({
-      items: '.diagnosis.active',
+      items: '.diagnosis',
       content: function() {
         var skillId = $(this).data('id');
-        var diagnosis = that._skillList.diagnosis(skillId);
-        var skill = that._skillList.getSkillById(skillId);
+        var diagnosis = that._skills.diagnosis(skillId);
+        var skill = that._skills.getSkillById(skillId);
         return that._diagnosisReport(skill, diagnosis);
       }
     });
@@ -190,12 +157,12 @@ SkillTable.prototype = {
         return false;
       }
       var skillId = $(this).data('id');
-      that._skillList.deleteSkill(_onAjaxDeleteCallback, skillId);
+      that._skills.deleteSkill(_onAjaxDeleteCallback, skillId);
     });
 
     tbody.find('.edit-skill').on('click', function(e){
       var skillId = $(this).data('id');
-      var skillPopUp = new EditSkillPopup(that._skillList, that._locationList,
+      var skillPopUp = new EditSkillPopup(that._skills, that._lessons,
           skillId);
       skillPopUp.open(function() {
         that._refresh();
@@ -205,43 +172,38 @@ SkillTable.prototype = {
     return tbody;
   },
 
-  _showHideDiagnosis: function() {
-    if (this._content.find('.health-checkbox').is(':checked')) {
-      this._content.find('.diagnosis.icon').addClass('active');
-    } else {
-      this._content.find('.diagnosis.icon').removeClass('active');
-    }
-  },
-
   _refresh: function() {
+    this._table.find('thead').remove();
+    this._table.append(this._buildHeader());
     this._table.find('tbody').remove();
     this._table.append(this._buildBody());
-    this._showHideDiagnosis();
   },
 
   buildTable: function() {
     var that = this;
 
     this._content = $(
-      '<div class="controls">' +
-      '  <label class="show-warnings">' +
-      '    <input type="checkbox" class="health-checkbox" checked>' +
-      '    Show warnings' +
-      '  </label>' +
-      '  <button class="gcb-button add-new-skill">+ Create New Skill</button>' +
+      '<div class="controls gcb-toggle-button-bar gcb-button-toolbar">' +
+      '  <button class="material-icons gcb-toggle-button selected" disabled>' +
+      '     view_list</button>' +
+      '  <button class="material-icons gcb-toggle-button graph-view clickable' +
+      '     " title="Show Skills graph">insert_chart</button>' +
+      '  <button class="material-icons gcb-toggle-button add-new-skill"' +
+      '     title="Add skill">add_box</button>' +
       '</div>' +
-      '<h3>Skills Table</h3>' +
-      '<table class="skill-map-table"></table>');
+      '<div class="gcb-list gcb-list--autostripe">' +
+      '  <table class="skill-map-table"></table>' +
+      '</div>');
 
-    this._table = this._content.filter('table.skill-map-table');
+    this._table = this._content.find('.skill-map-table');
     this._table.append(that._buildHeader());
 
-    this._content.find('.health-checkbox').on("change", function() {
-      that._showHideDiagnosis();
+    this._content.find('.graph-view').on("click", function() {
+      window.location.href = 'modules/skill_map?action=edit_dependency_graph';
     });
 
     this._content.find('.add-new-skill').on("click", function() {
-      var skillPopUp = new EditSkillPopup(that._skillList, that._locationList);
+      var skillPopUp = new EditSkillPopup(that._skills, that._lessons);
       skillPopUp.open(function() {
         that._refresh();
       });
@@ -291,11 +253,11 @@ SkillTable.prototype = {
         $.each(cycle, function(j, cycleSkillId) {
           // Put all the elements of the cycle one after the other (CSS will)
           // interpolate a '-->' between entries
-          var cycleSkill = that._skillList.getSkillById(cycleSkillId);
+          var cycleSkill = that._skills.getSkillById(cycleSkillId);
           li.append($('<span class="elem"></span>').text(cycleSkill.name));
         });
         // Put the first element of the cycle at the end of the cycle too
-        var firstSkill = that._skillList.getSkillById(cycle[0]);
+        var firstSkill = that._skills.getSkillById(cycle[0]);
         li.append($('<span class="elem"></span>').text(firstSkill.name));
         panel.find('.diagnosis.cycles .elem-list').append(li);
       });
@@ -309,7 +271,7 @@ SkillTable.prototype = {
         $.each(chain, function(j, chainSkillId) {
           // Put all the elements of the chain one after the other (CSS will)
           // interpolate a '-->' between entries
-          var chainSkill = that._skillList.getSkillById(chainSkillId);
+          var chainSkill = that._skills.getSkillById(chainSkillId);
           li.append($('<span class="elem"></span>').text(chainSkill.name));
         });
         panel.find('.diagnosis.long-chains .elem-list').append(li);
@@ -374,18 +336,16 @@ SkillList.prototype = {
     };
     var query_string = $.param(params);
     var url = 'rest/modules/skill_map/skill?' + query_string;
-    withInputExFunctionsRemoved(function() {
-      $.ajax({
-        url: url,
-        type: 'DELETE',
-        dataType: 'text',
-        success: function (data) {
-          that._onDeleteSkill(callback, data);
-        },
-        error: function () {
-          callback('error');
-        }
-      });
+    $.ajax({
+      url: url,
+      type: 'DELETE',
+      dataType: 'text',
+      success: function (data) {
+        that._onDeleteSkill(callback, data);
+      },
+      error: function () {
+        callback('error');
+      }
     });
     return true;
   },
@@ -437,6 +397,20 @@ SkillList.prototype = {
   },
 
   /**
+   * Iterate over the successors of a skill
+   *
+   * @param callback {function} A function taking a skill as its arg.
+   */
+  eachSuccessor: function(skill, callback) {
+    for (var i = 0; i < skill.successor_ids.length; i++) {
+      var successor = this._skillLookupByIdTable[skill.successor_ids[i]];
+      if (successor) {
+        callback(successor);
+      }
+    }
+  },
+
+  /**
    * Create a new skill and store it on the server.
    *
    * @param callback {function} A callback which takes (skill, message) args
@@ -446,25 +420,32 @@ SkillList.prototype = {
    * @param skillId
    */
   createOrUpdateSkill: function(callback, name, description, prerequisiteIds,
-      locationKeys, skillId) {
+      lessonKeys, questionKeys, skillId) {
 
     var that = this;
     prerequisiteIds = prerequisiteIds || [];
-    locationKeys = locationKeys || [];
+    lessonKeys = lessonKeys || [];
+    questionKeys = questionKeys || [];
 
     if (! name) {
       showMsg('Name can\'t be empty');
+      $('.form-row .skill-name').addClass('invalid');
       return;
     }
 
-    prerequisites = [];
+    var prerequisites = [];
     for (var i = 0; i < prerequisiteIds.length; i++) {
       prerequisites.push({'id': prerequisiteIds[i]});
     }
 
-    locations = [];
-    for (var i = 0; i < locationKeys.length; i++) {
-      locations.push({'key': locationKeys[i]});
+    var lessons = [];
+    for (var i = 0; i < lessonKeys.length; i++) {
+      lessons.push({'key': lessonKeys[i]});
+    }
+
+    var questions = [];
+    for (var i = 0; i < questionKeys.length; i++) {
+      questions.push({'key': questionKeys[i]});
     }
 
     var requestDict = {
@@ -474,26 +455,31 @@ SkillList.prototype = {
         'name': name,
         'description': description,
         'prerequisites': prerequisites,
-        'locations': locations
+        'lessons': lessons,
+        'questions': questions
       })
     };
     if (skillId) {
       requestDict['key'] = skillId;
     }
 
-    var request = JSON.stringify(requestDict);
+    this._clearErrors();
 
-    withInputExFunctionsRemoved(function() {
-      $.ajax({
-        type: 'PUT',
-        url: 'rest/modules/skill_map/skill',
-        data: {'request': request},
-        dataType: 'text',
-        success: function(data) {
-          that._onCreateOrUpdateSkill(callback, data);
-        }
-      });
+    var request = JSON.stringify(requestDict);
+    $.ajax({
+      type: 'PUT',
+      url: 'rest/modules/skill_map/skill',
+      data: {'request': request},
+      dataType: 'text',
+      success: function(data) {
+        that._onCreateOrUpdateSkill(callback, data);
+      }
     });
+  },
+
+  _clearErrors: function() {
+    $('.form-row .invalid').removeClass('invalid');
+    hideMsg();
   },
 
   /**
@@ -563,10 +549,10 @@ SkillList.prototype = {
 
   _updateFromPayload: function(payload) {
     var that = this;
-    var skillList = payload['skill_list'];
+    var skills = payload['skills'];
 
     this._skillLookupByIdTable = [];
-    $.each(skillList, function() {
+    $.each(skills, function() {
       that._skillLookupByIdTable[this.id] = this;
     });
 
@@ -575,22 +561,32 @@ SkillList.prototype = {
 
   _onCreateOrUpdateSkill: function(callback, data) {
     data = parseAjaxResponse(data);
-    if  (data.status != 200) {
+    if (data.status != 200) {
       showMsg(data.message);
+      if (data.payload) {
+        var payload = JSON.parse(data.payload);
+        if (payload.messages) {
+          $.each(payload.messages, function(key, val) {
+            $('.form-row .' + key).addClass('invalid')
+          })
+        }
+      }
       return;
     }
     var payload = JSON.parse(data.payload);
     this._updateFromPayload(payload);
 
     if (callback) {
-      callback(payload.skill, data.message);
+      callback(payload.skill, data.message, data.status == 200);
     }
   }
 };
 
 function LocationList() {
-  this._locations = null;
-  this._locationsByKey = null;
+  this._lessons = null;
+  this._lessonsByKey = null;
+  this._questions = null;
+  this._questionsByKey = null;
 }
 
 LocationList.prototype = {
@@ -598,7 +594,7 @@ LocationList.prototype = {
     var that = this;
     $.ajax({
       type: 'GET',
-      url: 'rest/modules/skill_map/location_list',
+      url: 'rest/modules/skill_map/locations',
       dataType: 'text',
       success: function(data) {
         that._onLoad(callback, data);
@@ -609,14 +605,24 @@ LocationList.prototype = {
     });
   },
 
-  each: function(callback) {
-    $.each(this._locations, function() {
+  eachLesson: function(callback) {
+    $.each(this._lessons, function() {
       callback(this);
     });
   },
 
-  getByKey: function(key) {
-    return this._locationsByKey[key];
+  getLessonByKey: function(key) {
+    return this._lessonsByKey[key];
+  },
+
+  eachQuestion: function(callback) {
+    $.each(this._questions, function() {
+      callback(this);
+    });
+  },
+
+  getQuestionByKey: function(key) {
+    return this._questionsByKey[key];
   },
 
   _onLoad: function(callback, data) {
@@ -627,72 +633,22 @@ LocationList.prototype = {
       return;
     }
     var payload = JSON.parse(data['payload']);
-    this._locations = payload['location_list'];
-    this._locationsByKey = [];
-    $.each(this._locations, function() {
-      that._locationsByKey[this.key] = this;
+
+    this._lessons = payload['lessons'];
+    this._lessonsByKey = [];
+    $.each(this._lessons, function() {
+      that._lessonsByKey[this.key] = this;
+    });
+
+    this._questions = payload['questions'];
+    this._questionsByKey = [];
+    $.each(this._questions, function() {
+      that._questionsByKey[this.key] = this;
     });
 
     if (callback) {
       callback();
     }
-  }
-};
-
-/**
- * A class to put up a modal lightbox. Use setContent to set the DOM element
- * displayed in the lightbox.
- *
- * @class
- */
-function Lightbox() {
-  this._window = $(window);
-  this._container = $('<div class="lightbox"/>');
-  this._background = $('<div class="background"/>');
-  this._content = $('<div class="content"/>');
-
-  this._container.append(this._background);
-  this._container.append(this._content);
-  this._container.hide();
-}
-Lightbox.prototype = {
-  /**
-   * Set a DOM element to root the lightbox in. Typically will be document.body.
-   *
-   * @param rootEl {Node}
-   */
-  bindTo: function(rootEl) {
-    $(rootEl).append(this._container);
-    return this;
-  },
-  /**
-   * Show the lightbox to the user.
-   */
-  show: function() {
-    this._container.show();
-    var top = this._window.scrollTop() +
-        Math.max(8, (this._window.height() - this._content.height()) / 2);
-    var left = this._window.scrollLeft() +
-        Math.max(8, (this._window.width() - this._content.width()) / 2);
-
-    this._content.css('top', top).css('left', left);
-    return this;
-  },
-  /**
-   * Close the lightbox and remove it from the DOM.
-   */
-  close: function() {
-    this._container.remove();
-    return this;
-  },
-  /**
-   * Set the content shown in the lightbox.
-   *
-   * @param contentEl {Node or jQuery}
-   */
-  setContent: function(contentEl) {
-    this._content.empty().append(contentEl);
-    return this;
   }
 };
 
@@ -710,14 +666,21 @@ function EditSkillPopup(skillList, locationList, skillId) {
   var that = this;
   this._skillId = skillId;
   this._skillList = skillList;
-  this._locationList = locationList;
+  this._locations = locationList;
+  this._prerequisiteIds = [];
+  this._skillList.eachSkill(function(skill) {
+    if ($.inArray(that._skillId, skill.successor_ids) >= 0) {
+      that._prerequisiteIds.push(skill.id);
+    }
+  });
+
   this._documentBody = $(document.body);
-  this._lightbox = new Lightbox();
+  this._lightbox = new window.gcb.Lightbox();
   this._form = $(
       '<div class="edit-skill-popup">' +
       '  <h2 class="title"></h2>' +
       '  <div class="form-row">' +
-      '    <label>Skill</label>' +
+      '    <label class="required-label">Skill</label>' +
       '    <input type="text" class="skill-name"' +
       '        placeholder="e.g. Structure Tables">' +
       '  </div>' +
@@ -727,12 +690,16 @@ function EditSkillPopup(skillList, locationList, skillId) {
       '        placeholder="e.g. Structure data into tables"></textarea>' +
       '  </div>' +
       '  <div class="form-row">' +
-      '    <label class="strong">Prerequisites</label>' +
-      '    <div class="skill-prerequisites"></div>' +
+      '    <label class="strong skill-prerequisites">Prerequisites</label>' +
+      '    <div class="prerequisites"></div>' +
       '  </div>' +
-      '  <div class="form-row location-row">' +
-      '    <label class="strong">Lessons</label>' +
+      '  <div class="form-row lesson-row">' +
+      '    <label class="strong skill-lessons">Lessons</label>' +
       '    <div class="lessons"></div>' +
+      '  </div>' +
+      '  <div class="form-row question-row">' +
+      '    <label class="strong skill-questions">Questions</label>' +
+      '    <div class="questions"></div>' +
       '  </div>' +
       '  <div class="controls">' +
       '    <button class="gcb-button new-skill-save-button">Save</button>' +
@@ -746,9 +713,11 @@ function EditSkillPopup(skillList, locationList, skillId) {
   this._initPrereqDisplay();
 
   if (locationList) {
-    this._initLocationDisplay();
+    this._initLessonDisplay();
+    this._initQuestionDisplay();
   } else {
-    this._form.find('.location-row').hide();
+    this._form.find('.lesson-row').hide();
+    this._form.find('.question-row').hide();
   }
 
   if (skillId !== null && skillId !== undefined) {
@@ -759,8 +728,13 @@ function EditSkillPopup(skillList, locationList, skillId) {
     this._skillList.eachPrerequisite(skill, function(prereq) {
       that._prereqDisplay.add(prereq.id, prereq.name);
     });
-    $.each(skill.locations, function() {
-      that._locationDisplay.add(this.key, this.label + ' ' + this.lesson);
+    $.each(skill.lessons, function() {
+      that._lessonDisplay.add(this.key,
+          this.label + ' ' + this.description);
+    });
+    $.each(skill.questions, function() {
+      that._questionDisplay.add(
+          this.key, this.description);
     });
   } else {
     var title = 'Create New Skill';
@@ -808,61 +782,106 @@ EditSkillPopup.prototype = {
     return this;
   },
 
+  _resetPrereqSelector: function() {
+    var that = this;
+    this._prereqSelector.clear();
+    this._skillList.eachSkill(function(skill) {
+      if (that._skillId != skill.id &&
+          $.inArray(skill.id, that._prerequisiteIds) == -1) {
+        that._prereqSelector.add(skill.id, skill.name);
+      }
+    });
+  },
+
   _initPrereqDisplay: function() {
-    // Set up a display and a chooser for the preqrequisites and bind them
+    // Set up a display and a chooser for the prerequisites and bind them
     // together
     var that = this;
-    this._prereqDisplay = new ListDisplay('skill-display-root', 'skill');
+    this._prereqDisplay = new ListDisplay(
+      'skill-display-root', 'skill', function(sid) {
+        that._prerequisiteIds = $.grep(that._prerequisiteIds, function(val) {
+          return val != sid;
+        });
+        that._resetPrereqSelector();
+      }
+    );
     this._prereqSelector = new ItemSelector(function(selectedSkillIds) {
       $.each(selectedSkillIds, function() {
         var skill = that._skillList.getSkillById(this);
         that._prereqDisplay.add(skill.id, skill.name);
+        that._prerequisiteIds.push(skill.id);
       });
+      that._resetPrereqSelector();
     }, '+ Add Skill');
-    this._skillList.eachSkill(function(skill) {
-      that._prereqSelector.add(skill.id, skill.name);
-    });
+    this._resetPrereqSelector();
 
-    this._form.find('.skill-prerequisites')
+    this._form.find('.prerequisites')
         .append(this._prereqDisplay.element())
         .append(this._prereqSelector.element());
   },
 
-  _initLocationDisplay: function() {
-    // Set up a display and a chooser for the tagging locations and bind them
-    // together
+  _initLessonDisplay: function() {
+    // Set up display and chooser for tagging lessons and bind them together
     var that = this;
-    this._locationDisplay = new ListDisplay('location-display-root', 'location');
-    this._locationSelector = new ItemSelector(function(selectedLocationIds) {
-      $.each(selectedLocationIds, function() {
-        var location = that._locationList.getByKey(this);
-        that._locationDisplay.add(this, location.label + ' ' + location.lesson);
+    this._lessonDisplay = new ListDisplay(
+        'location-display-root', 'location');
+    this._lessonSelector = new ItemSelector(function(selectedLessonIds) {
+      $.each(selectedLessonIds, function() {
+        var lesson = that._locations.getLessonByKey(this);
+        that._lessonDisplay.add(this, lesson.label + ' ' + lesson.description);
       });
     }, '+ Add Lesson', 'Lesson...');
-    this._locationList.each(function(location) {
-      that._locationSelector.add(location.key,
-          location.label + ' ' + location.lesson);
+    this._locations.eachLesson(function(lesson) {
+      that._lessonSelector.add(lesson.key,
+          lesson.label + ' ' + lesson.description);
     });
 
     this._form.find('.lessons')
-        .append(this._locationDisplay.element())
-        .append(this._locationSelector.element());
+        .append(this._lessonDisplay.element())
+        .append(this._lessonSelector.element());
+  },
+
+  _initQuestionDisplay: function() {
+    // Set up a display and a chooser for tagging questions and bind them
+    // together
+    var that = this;
+    this._questionDisplay = new ListDisplay('question-display-root',
+        'question');
+    this._questionSelector = new ItemSelector(function(selectedQuestionIds) {
+      $.each(selectedQuestionIds, function() {
+        var question = that._locations.getQuestionByKey(this);
+        that._questionDisplay.add(this, question.description);
+      });
+    }, '+ Add Question', 'Question...');
+    this._locations.eachQuestion(function(question) {
+      that._questionSelector.add(question.key, question.description);
+    });
+
+    this._form.find('.questions')
+        .append(this._questionDisplay.element())
+        .append(this._questionSelector.element());
   },
 
   _onSave: function() {
     var that = this;
     var name = this._nameInput.val();
     var description = this._descriptionInput.val();
-    var prerequisiteIds = this._prereqDisplay.items();
-    var locationKeys = this._locationDisplay ? this._locationDisplay.items() : [];
+    var prerequisiteIds = this._prerequisiteIds;
+    var locationKeys = this._lessonDisplay ?
+        this._lessonDisplay.items() : [];
+    var questionIds = this._questionDisplay ?
+        this._questionDisplay.items() : [];
 
-    function onSkillCreatedOrUpdated(skill, message) {
+    function onSkillCreatedOrUpdated(skill, message, closePopup) {
       showMsgAutoHide(message);
       that._onAjaxCreateSkillCallback(skill);
+      if (closePopup) {
+        that._lightbox.close()
+      }
     }
-    this._skillList.createOrUpdateSkill(onSkillCreatedOrUpdated, name,
-        description, prerequisiteIds, locationKeys, that._skillId);
-    this._lightbox.close();
+    this._skillList.createOrUpdateSkill(onSkillCreatedOrUpdated,
+        name, description, prerequisiteIds, locationKeys, questionIds,
+        that._skillId);
   },
 
   _onCancel: function() {
@@ -916,6 +935,7 @@ ListDisplay.prototype = {
     }
 
     li.addClass(this._itemClass).text(label).append(closeButton);
+    li.addClass('removable')
 
     closeButton.click(function() {
       li.remove();
@@ -996,6 +1016,7 @@ ItemSelector.prototype = {
   element: function() {
     return this._rootDiv[0];
   },
+
   /**
    * Add an item to the selector.
    *
@@ -1027,10 +1048,12 @@ ItemSelector.prototype = {
 
     this._addItemButton.prop('disabled', false);
   },
+
   clear: function() {
     this._selectItemListOl.empty();
     this._addItemButton.prop('disabled', true);
   },
+
   _bind: function() {
     var that = this;
 
@@ -1056,6 +1079,7 @@ ItemSelector.prototype = {
       return false;
     });
   },
+
   /**
    * Choose an optimal position for the addItemWidgetDiv.
    */
@@ -1073,6 +1097,7 @@ ItemSelector.prototype = {
       this._addItemWidgetDiv.css('top', top);
     }
   },
+
   _close: function() {
     this._addItemWidgetDiv.hide();
     this._searchTextInput.val('');
@@ -1107,27 +1132,29 @@ function SkillEditorForOeditor(env) {
 
   this._env = env;
   this._skillList = new SkillList();
+  this._prerequisiteIds = [];
 
   this._prereqDisplay = new ListDisplay('skill-display-root', 'skill',
-        function(skillId) {
-          that._onRemoveCallback(skillId);
-        });
+    function(skillId) {
+      that._onRemoveCallback(skillId);
+    }
+  );
   this._prereqSelector = new ItemSelector(function(selectedSkillIds) {
     that._onSkillsSelectedCallback(selectedSkillIds);
   }, '+ Add Skill');
 
   var newSkillDiv = $('<div class="new-skill"></div>');
   var newSkillButton = $('<button class="add">+ Create New Skill</button>');
-  newSkillButton.click(function() {
+  newSkillButton.click(function(event) {
+    event.preventDefault();
     new EditSkillPopup(that._skillList, null, null).open(function(skill) {
       that._onSkillsSelectedCallback([skill.id]);
       that._populatePrereqSelector();
     });
-    return false;
   });
   newSkillDiv.append(newSkillButton);
 
-  this._skillWidgetDiv = $('<div class="inputEx-Field"></div>');
+  this._skillWidgetDiv = $('<div class="inputEx-Field skill-widget"></div>');
   this._skillWidgetDiv.append(this._prereqDisplay.element());
 
   var buttonDiv = $('<div class="skill-map-buttons"></div>');
@@ -1147,13 +1174,17 @@ SkillEditorForOeditor.prototype = {
       that._populatePrereqSelector();
     });
   },
+
   _populatePrereqSelector: function() {
     var that = this;
     this._prereqSelector.clear();
     this._skillList.eachSkill(function(skill) {
-      that._prereqSelector.add(skill.id, skill.name);
+      if ($.inArray(skill.id, that._prerequisiteIds) == -1) {
+        that._prereqSelector.add(skill.id, skill.name);
+      }
     });
   },
+
   _onSkillsSelectedCallback: function(selectedSkillIds) {
     // When new skills are selected in the SkillSelector, update the OEditor
     // form and repopulate the SkillDisplay.
@@ -1161,10 +1192,13 @@ SkillEditorForOeditor.prototype = {
     $.each(selectedSkillIds, function() {
       if (! that._formContainsSkillId(this)) {
         that._env.form.inputsNames.skills.addElement({'skill': this});
+        that._prerequisiteIds.push(parseInt(this));
       }
     });
     this._populateSkillList();
+    this._populatePrereqSelector();
   },
+
   _onRemoveCallback: function (skillId) {
     // When a skill is removed from the SkillDisplay, also remove it from the
     // OEditor form.
@@ -1173,10 +1207,15 @@ SkillEditorForOeditor.prototype = {
       var id = this.inputsNames.skill.getValue();
       if (id === skillId) {
         that._env.form.inputsNames.skills.removeElement(i);
+        that._prerequisiteIds = $.grep(that._prerequisiteIds, function(val) {
+          return val != skillId;
+        });
+        that._populatePrereqSelector();
         return false;
       }
     });
   },
+
   _populateSkillList: function() {
     // Populate the SkillDisplay with the skills in the OEditor form.
     var that = this;
@@ -1186,9 +1225,11 @@ SkillEditorForOeditor.prototype = {
       var skill = that._skillList.getSkillById(id);
       if (skill) {
         that._prereqDisplay.add(skill.id, skill.name);
+        that._prerequisiteIds.push(skill.id);
       }
     });
   },
+
   _formContainsSkillId: function(skillId) {
     var fields = this._env.form.inputsNames.skills.subFields;
     for(var i = 0; i < fields.length; i++) {

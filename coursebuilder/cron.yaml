@@ -1,17 +1,3 @@
-# Copyright 2020 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 cron:
 - description: expires old assigned review steps
   url: /cron/expire_old_assigned_reviews
@@ -25,14 +11,39 @@ cron:
 - description: clean up resources from map/reduce jobs.
   url: /cron/mapreduce/cleanup
   schedule: every day 03:45
+- description: Run job to update total enrollment counters.
+  url: /cron/site_admin_enrollments/total
+  schedule: every sunday 01:00
+  retry_parameters:
+    min_backoff_seconds: 3600
+- description: Run job to check for missing enrollment counters.
+  url: /cron/site_admin_enrollments/missing
+  schedule: every friday 05:00
+  retry_parameters:
+    min_backoff_seconds: 120
 - description: Run job to report count of courses and students to CourseBuilder.
   url: /cron/usage_reporting/report_usage
   schedule: every sunday 05:00
-- description: My Daily Full Backup
-  url: /_ah/datastore_admin/backup.create?name=FullBackup&kind=AnnouncementEntity&kind=ClusterEntity&kind=ConfigPropertyEntity&kind=CourseCategory&kind=CourseList&kind=CourseStaff&kind=DurableJobEntity&kind=EventEntity&kind=ExplorerLayout&kind=FileDataEntity&kind=FileMetadataEntity&kind=LabelEntity&kind=ManualEvaluationStep&kind=ManualEvaluationSummary&kind=MenteeData&kind=Notification&kind=Payload&kind=PersonalProfile&kind=ProgrammingAnswersEntity&kind=ProgrammingTestCasesEntity&kind=QuestionAnswersEntity&kind=QuestionEntity&kind=QuestionGroupEntity&kind=Review&kind=ReviewStep&kind=ReviewSummary&kind=RoleEntity&kind=SavedProgrammingCodeEntity&kind=Student&kind=StudentAnswersEntity&kind=StudentEnrollmentEventEntity&kind=StudentFormEntity&kind=StudentPreferencesEntity&kind=StudentPropertyEntity&kind=StudentQuestionEntity&kind=Submission&kind=SubscriptionStateEntity&filesystem=gs&gs_bucket_name=nptelmoocdatadump
-  schedule: every 12 hours
-  target: ah-builtin-python-bundle
-- description: StudentDataDump
-  url: /_ah/datastore_admin/backup.create?name=StudentDataBackup&kind=FileDataEntity&kind=FileMetadataEntity&kind=PersonalProfile&kind=ProgrammingAnswersEntity&kind=ProgrammingTestCasesEntity&kind=QuestionAnswersEntity&kind=SavedProgrammingCodeEntity&kind=Student&kind=StudentAnswersEntity&kind=StudentPreferencesEntity&kind=StudentPropertyEntity&kind=Submission&filesystem=gs&gs_bucket_name=nptelmoocdatadump
-  schedule: every 4 hours
-  target: ah-builtin-python-bundle
+- description: Runs batch jobs to delete items not indexable by user ID.
+  url: /cron/data_removal/batch_delete
+  # Compromise between keeping costs due to batch run down versus preventing
+  # user re-registration while deletion is not yet complete.
+  schedule: every sunday 05:30
+# - description: My Daily Full Backup
+#   url: /modules/nptel/open_courses_backup?action=full_backup
+#   schedule: every day 05:00
+# - description: StudentDataDump
+#   url: /modules/nptel/open_courses_backup?action=student_backup
+#   schedule: every 24 hours
+# - description: Sync Google Drive documents
+#   url: /cron/drive/sync
+#   schedule: every 1 hours
+#- description: Deletes any leftover temporary rows used to discover user ID.
+#  url: /cron/student_groups/batch_delete
+#  schedule: every day 06:00
+- description: Deletes any leftover temporary rows used to discover user ID.
+  url: /cron/student_groups/batch_delete
+  schedule: every day 06:00
+- description: Hourly update of date/time availability triggers.
+  url: /cron/availability/update
+  schedule: every 1 hours

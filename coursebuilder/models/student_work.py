@@ -19,6 +19,9 @@ __author__ = [
     'sll@google.com (Sean Lip)',
 ]
 
+import datetime
+
+import data_removal
 import entities
 import transforms
 
@@ -104,7 +107,7 @@ class Review(BaseEntity):
 
     # Contents of the student's review. Max size is 1MB.
     contents = db.TextProperty()
-
+    score = db.FloatProperty()
     # Key of the student whose work is being reviewed.
     reviewee_key = KeyProperty(kind=models.Student.kind())
     # Key of the Student who wrote this review.
@@ -144,6 +147,10 @@ class Review(BaseEntity):
         """
         return '(review:%s:%s:%s)' % (unit_id, reviewee_key, reviewer_key)
 
+    @property
+    def contents_dict(self):
+        return transforms.loads(self.contents)
+
     @classmethod
     def safe_key(cls, db_key, transform_fn):
         _, unit_id, reviewee_key_str, reviewer_key_str = cls._split_key(
@@ -164,6 +171,16 @@ class Review(BaseEntity):
             model.reviewer_key, transform_fn)
         return model
 
+    @classmethod
+    def _get_student_key(cls, value):
+        return db.Key.from_path(models.Student.kind(), value)
+
+    @classmethod
+    def delete_by_reviewee_id(cls, user_id):
+        student_key = cls._get_student_key(user_id)
+        query = Review.all(keys_only=True).filter('reviewee_key =', student_key)
+        db.delete(query.run())
+
 
 class Submission(BaseEntity):
     """Datastore model for a student work submission."""
@@ -171,10 +188,15 @@ class Submission(BaseEntity):
     # Contents of the student submission. Max size is 1MB.
     contents = db.TextProperty()
 
+    # Submission date
+    updated_on = db.DateTimeProperty(indexed=True)
+
     # Key of the Student who wrote this submission.
     reviewee_key = KeyProperty(kind=models.Student.kind())
     # Identifier of the unit this review is a part of.
     unit_id = db.StringProperty(required=True)
+    # Optional identifier of the component which submitted this data
+    instance_id = db.StringProperty(required=False)
 
     def __init__(self, *args, **kwargs):
         """Constructs a new Submission."""
@@ -182,9 +204,11 @@ class Submission(BaseEntity):
             'Setting key_name manually is not supported')
         reviewee_key = kwargs.get('reviewee_key')
         unit_id = kwargs.get('unit_id')
+        instance_id = kwargs.get('instance_id')
         assert reviewee_key, 'Missing required property: reviewee_key'
         assert unit_id, 'Missing required_property: unit_id'
-        kwargs['key_name'] = self.key_name(unit_id, reviewee_key)
+        kwargs['key_name'] = self.key_name(
+            unit_id, reviewee_key, instance_id=instance_id)
         super(Submission, self).__init__(*args, **kwargs)
 
     @classmethod
@@ -192,7 +216,14 @@ class Submission(BaseEntity):
         return db.Key.from_path(models.Student.kind(), value)
 
     @classmethod
-    def key_name(cls, unit_id, reviewee_key):
+    def delete_by_reviewee_id(cls, user_id):
+        student_key = cls._get_student_key(user_id)
+        query = Submission.all(keys_only=True).filter('reviewee_key =',
+                                                      student_key)
+        db.delete(query.run())
+
+    @classmethod
+    def key_name(cls, unit_id, reviewee_key, instance_id=None):
         """Creates a key_name string for datastore operations.
 
         In order to work with the review subsystem, entities must have a key
@@ -202,28 +233,40 @@ class Submission(BaseEntity):
             unit_id: string. The id of the unit this submission belongs to.
             reviewee_key: db.Key of models.models.Student. The author of the
                 the submission.
+            instance_id: string. The instance id of a component (e.g., file
+                upload) which submitted the content.
 
         Returns:
             String.
         """
-        return '(submission:%s:%s)' % (unit_id, reviewee_key.id_or_name())
+        if instance_id:
+            return '(submission:%s:%s:%s)' % (
+                unit_id, instance_id, reviewee_key.id_or_name())
+        else:
+            return '(submission:%s:%s)' % (unit_id, reviewee_key.id_or_name())
 
     @classmethod
-    def get_key(cls, unit_id, reviewee_key):
+    def get_key(cls, unit_id, reviewee_key, instance_id=None):
         """Returns a db.Key for a submission."""
-        return db.Key.from_path(
-            cls.kind(), cls.key_name(unit_id, reviewee_key))
+        return db.Key.from_path(cls.kind(), cls.key_name(
+            unit_id, reviewee_key, instance_id=instance_id))
 
     @classmethod
     def safe_key(cls, db_key, transform_fn):
-        _, unit_id, student_key_str = cls._split_key(db_key.name())
+        split_key = cls._split_key(db_key.name())
+        if len(split_key) == 3:
+            _, unit_id, student_key_str = split_key
+            instance_id = None
+        else:
+            _, unit_id, instance_id, student_key_str = split_key
+
         student_key = db.Key.from_path(models.Student.kind(), student_key_str)
         safe_student_key = models.Student.safe_key(student_key, transform_fn)
-        return db.Key.from_path(
-            cls.kind(), cls.key_name(unit_id, safe_student_key))
+        return db.Key.from_path(cls.kind(), cls.key_name(
+            unit_id, safe_student_key, instance_id=instance_id))
 
     @classmethod
-    def write(cls, unit_id, reviewee_key, contents):
+    def write(cls, unit_id, reviewee_key, contents, instance_id=None):
         """Updates or creates a student submission, and returns the key.
 
         Args:
@@ -232,20 +275,42 @@ class Submission(BaseEntity):
                 submission.
             contents: object. The contents of the submission, as a Python
                 object. This will be JSON-transformed before it is stored.
+            instance_id: string. The instance id of a component (e.g., file
+                upload) which submitted the content.
 
         Returns:
             db.Key of Submission.
         """
         return cls(
             unit_id=str(unit_id), reviewee_key=reviewee_key,
-            contents=transforms.dumps(contents)
+            contents=transforms.dumps(contents),
+            instance_id=instance_id,
+            updated_on=datetime.datetime.utcnow()
         ).put()
 
     @classmethod
-    def get_contents(cls, unit_id, reviewee_key):
+    def get(cls, unit_id, reviewee_key, instance_id=None):
+        submission_key = cls.get_key(
+            unit_id, reviewee_key, instance_id=instance_id)
+        submission = entities.get(submission_key)
+        # For backward compatibility, if no entry is found with the instance_id
+        # in the key, also look for an entry with no instance_id used.
+        if submission is None and instance_id:
+            submission = entities.get(cls.get_key(unit_id, reviewee_key))
+        return submission
+
+    @classmethod
+    def get_contents(cls, unit_id, reviewee_key, instance_id=None):
         """Returns the de-JSONified contents of a submission."""
-        submission_key = cls.get_key(unit_id, reviewee_key)
-        return cls.get_contents_by_key(submission_key)
+        submission_key = cls.get_key(
+            unit_id, reviewee_key, instance_id=instance_id)
+        contents = cls.get_contents_by_key(submission_key)
+        # For backward compatibility, if no entry is found with the instance_id
+        # in the key, also look for an entry with no instance_id used.
+        if contents is None and instance_id:
+            contents = cls.get_contents_by_key(
+                cls.get_key(unit_id, reviewee_key))
+        return contents
 
     @classmethod
     def get_contents_by_key(cls, submission_key):
@@ -275,3 +340,10 @@ class StudentWorkUtils(object):
             assert item['index'] == len(answer_list)
             answer_list.append(item['value'])
         return answer_list
+
+
+def register_for_data_removal():
+    data_removal.Registry.register_indexed_by_user_id_remover(
+        Review.delete_by_reviewee_id)
+    data_removal.Registry.register_indexed_by_user_id_remover(
+        Submission.delete_by_reviewee_id)

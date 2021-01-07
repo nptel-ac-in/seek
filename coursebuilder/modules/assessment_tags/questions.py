@@ -1,4 +1,4 @@
-# Copyright 2013 Google Inc. All Rights Reserved.
+    # Copyright 2013 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,6 +16,8 @@
 
 __author__ = 'sll@google.com (Sean Lip)'
 
+import base64
+import datetime
 import logging
 import os
 
@@ -35,7 +37,8 @@ RESOURCES_PATH = '/modules/assessment_tags/resources'
 
 @appengine_config.timeandlog('render_question', duration_only=True)
 def render_question(
-    quid, instanceid, embedded=False, weight=None, progress=None):
+    quid, instanceid, embedded=False, weight=None, progress=None,
+    due_date_exceeded=False, check_answers=False):
     """Generates the HTML for a question.
 
     Args:
@@ -78,9 +81,13 @@ def render_question(
     template_values['resources_path'] = RESOURCES_PATH
     if progress is not None:
         template_values['progress'] = progress
+    template_values['due_date_exceeded'] = due_date_exceeded
+    template_values['check_answers'] = check_answers
 
     template_file = None
-    js_data = {}
+    js_data = {
+        'quid': quid
+    }
     if question_dto.type == question_dto.MULTIPLE_CHOICE:
         template_file = 'templates/mc_question.html'
 
@@ -88,12 +95,34 @@ def render_question(
         template_values['button_type'] = 'checkbox' if multi else 'radio'
 
         choices = [{
-            'score': choice['score'], 'feedback': choice.get('feedback')
+            'text': choice['text'], 'score': choice['score'],
+            'feedback': choice.get('feedback')
         } for choice in template_values['choices']]
-        js_data['choices'] = choices
+        #for security reasons send the answer only
+        #when the due date is exceeded or check_answer is
+        #is enabled
+        if due_date_exceeded or check_answers:
+            js_data['choices'] = choices
+        else:
+            js_data['choices'] = []
+
+        js_data['defaultFeedback'] = template_values.get('defaultFeedback')
+        js_data['permuteChoices'] = (
+            template_values.get('permute_choices', False))
+        js_data['showAnswerWhenIncorrect'] = (
+            template_values.get('show_answer_when_incorrect', False))
+        js_data['allOrNothingGrading'] = (
+            template_values.get('all_or_nothing_grading', False))
     elif question_dto.type == question_dto.SHORT_ANSWER:
         template_file = 'templates/sa_question.html'
-        js_data['graders'] = template_values['graders']
+        #for security reasons send the answer only
+        #when the due date is exceeded or check_answer is
+        #is enabled
+        if due_date_exceeded or check_answers:
+            js_data['graders'] = template_values['graders']
+        else:
+            js_data['graders'] = []
+
         js_data['hint'] = template_values.get('hint')
         js_data['defaultFeedback'] = template_values.get('defaultFeedback')
 
@@ -116,9 +145,8 @@ def render_question(
               else round(weight, 2))
     template_values['displayed_weight'] = weight
 
-    if not embedded:
-        js_data['weight'] = float(weight)
-    template_values['js_data'] = transforms.dumps(js_data)
+    js_data['weight'] = float(weight)
+    template_values['js_data'] = base64.b64encode(transforms.dumps(js_data))
 
     template = jinja_utils.get_template(
         template_file, [os.path.dirname(__file__)])
@@ -157,34 +185,113 @@ class QuestionTag(tags.BaseTag):
                     handler.student, handler.unit_id, handler.lesson_id,
                     instanceid)
 
+        due_date_exceeded = False
+        check_answers = False
+
+        if handler.template_value.has_key("check_answers"):
+            check_answers = handler.template_value['check_answers']
+
+        course = handler.get_course()
+        if handler.template_value.has_key("unit_id"):
+            unit = course.find_unit_by_id(handler.template_value["unit_id"])
+            submission_due_date = unit.workflow.get_submission_due_date()
+            if submission_due_date and datetime.datetime.now() > submission_due_date:
+                due_date_exceeded = True
+            check_answers = unit.html_check_answers
+
         html_string = render_question(
             quid, instanceid, embedded=False, weight=weight,
-            progress=progress)
+            progress=progress, due_date_exceeded=due_date_exceeded,
+            check_answers=check_answers)
         return tags.html_string_to_element_tree(html_string)
 
     def get_schema(self, handler):
         """Get the schema for specifying the question."""
-        question_list = []
-        if handler:
-            questions = m_models.QuestionDAO.get_all()
-            question_list = [(
-                unicode(q.id),  # q.id is an int; schema requires a string
-                q.description) for q in questions]
-
-            if not question_list:
-                return self.unavailable_schema('No questions available')
-
         reg = schema_fields.FieldRegistry('Question')
-        reg.add_property(
+
+        if handler is None:
+            reg.add_property(schema_fields.SchemaField(
+                'quid', 'Question', 'string', optional=True, i18n=False))
+            reg.add_property(schema_fields.SchemaField(
+                'weight', 'Weight', 'number', optional=True, i18n=False))
+            return reg
+
+        reg.add_property(schema_fields.SchemaField(
+            'quid', None, 'string', hidden=True, optional=True, i18n=False))
+        reg.add_property(schema_fields.SchemaField(
+            'qu_type', None, 'string', hidden=True, optional=True, i18n=False))
+        reg.add_property(schema_fields.SchemaField(
+            'weight', None, 'number', hidden=True, optional=True, i18n=False))
+
+        select_schema = schema_fields.FieldRegistry(
+            'Select',
+            extra_schema_dict_values={'className': 'select-container'})
+
+        question_list = [(
+            unicode(q.id),  # q.id is an int; schema requires a string
+            q.description) for q in m_models.QuestionDAO.get_all()]
+
+        if question_list:
+            select_schema.add_property(
+                schema_fields.SchemaField(
+                    'quid', 'Question', 'string', optional=True, i18n=False,
+                    select_data=[
+                        ('', '-- Select Existing Question --')] + question_list
+            ))
+        else:
+            select_schema.add_property(
+                schema_fields.SchemaField(
+                    'unused_id', '', 'string', optional=True,
+                    editable=False, extra_schema_dict_values={
+                        'value': 'No questions available'}))
+
+        course = handler.get_course()
+        mc_schema = resources_display.ResourceMCQuestion.get_schema(
+            course, None)
+        sa_schema = resources_display.ResourceSAQuestion.get_schema(
+            course, None)
+
+        reg.add_sub_registry('mc_tab', registry=mc_schema)
+        reg.add_sub_registry('sa_tab', registry=sa_schema)
+        reg.add_sub_registry('select_tab', registry=select_schema)
+
+        # TODO(jorr): This trick of putting a second weight field in here is
+        # needed only because FieldRegistry.get_json_schema_dict() outputs all
+        # top-level fields before the subregistries. Fix that and do a thorough
+        # audit of its impact on other OEditor forms' layout.
+        weight_holder = schema_fields.FieldRegistry('Weight Holder')
+        weight_holder.add_property(
             schema_fields.SchemaField(
-                'quid', 'Question', 'string', optional=True, i18n=False,
-                select_data=question_list))
-        reg.add_property(
-            schema_fields.SchemaField(
-                'weight', 'Weight', 'string', optional=True, i18n=False,
-                extra_schema_dict_values={'value': '1'},
-                description='The number of points for a correct answer.'))
+                'weight', 'Weight', 'number', optional=True, i18n=False,
+                extra_schema_dict_values={
+                    'value': '1',
+                    'className': 'question-weight'},
+                description='The number of points for a correct answer. '
+                'If it is not set, it will default to one point.'))
+
+        reg.add_sub_registry(
+            'weight_holder', registry=weight_holder)
+
         return reg
+
+    @classmethod
+    def extra_js_files(cls):
+        return [
+            'question_editor_lib.js', 'mc_question_editor_lib.js',
+            'sa_question_editor_lib.js', 'questions_popup.js']
+
+    @classmethod
+    def extra_css_files(cls):
+        return ['questions_popup.css']
+
+    @classmethod
+    def additional_dirs(cls):
+        return [
+            os.path.join(appengine_config.BUNDLE_ROOT, 'modules',
+                'assessment_tags', 'templates'),
+            os.path.join(appengine_config.BUNDLE_ROOT, 'modules', 'dashboard',
+                'templates'),
+        ]
 
 
 class QuestionGroupTag(tags.BaseTag):
@@ -217,6 +324,23 @@ class QuestionGroupTag(tags.BaseTag):
         template_values['instanceid'] = group_instanceid
         template_values['resources_path'] = RESOURCES_PATH
 
+        due_date_exceeded = False
+        check_answers = False
+
+        if handler.template_value.has_key("check_answers"):
+            check_answers = handler.template_value['check_answers']
+
+        course = handler.get_course()
+        if handler.template_value.has_key("unit_id"):
+            unit = course.find_unit_by_id(handler.template_value["unit_id"])
+            submission_due_date = unit.workflow.get_submission_due_date()
+            if submission_due_date and datetime.datetime.now() > submission_due_date:
+                    due_date_exceeded = True
+            check_answers=unit.html_check_answers
+
+        template_values['due_date_exceeded'] = due_date_exceeded
+        template_values['check_answers'] = check_answers
+
         if (hasattr(handler, 'student') and not handler.student.is_transient
             and not handler.lesson_is_scored):
             progress = handler.get_course().get_progress_tracker(
@@ -232,10 +356,11 @@ class QuestionGroupTag(tags.BaseTag):
             question_instanceid = '%s.%s.%s' % (group_instanceid, ind, quid)
             template_values['question_html_array'].append(render_question(
                 quid, question_instanceid, weight=item['weight'],
-                embedded=True
+                embedded=True, due_date_exceeded=due_date_exceeded,
+                check_answers=check_answers
             ))
             js_data[question_instanceid] = item
-        template_values['js_data'] = transforms.dumps(js_data)
+        template_values['js_data'] = base64.b64encode(transforms.dumps(js_data))
 
         template_file = 'templates/question_group.html'
         template = jinja_utils.get_template(
@@ -278,9 +403,9 @@ def register_module():
             QuestionGroupTag.binding_name, QuestionGroupTag)
         for binding_name in (QuestionTag.binding_name,
                              QuestionGroupTag.binding_name):
-            for scope in (tags.EditorDenylists.COURSE_SCOPE,
-                          tags.EditorDenylists.DESCRIPTIVE_SCOPE):
-                tags.EditorDenylists.register(binding_name, scope)
+            for scope in (tags.EditorBlacklists.COURSE_SCOPE,
+                          tags.EditorBlacklists.DESCRIPTIVE_SCOPE):
+                tags.EditorBlacklists.register(binding_name, scope)
 
     def when_module_disabled():
         # Unregister custom tags.
@@ -288,9 +413,9 @@ def register_module():
         tags.Registry.remove_tag_binding(QuestionGroupTag.binding_name)
         for binding_name in (QuestionTag, binding_name,
                              QuestionGroupTag.binding_name):
-            for scope in (tags.EditorDenylists.COURSE_SCOPE,
-                          tags.EditorDenylists.DESCRIPTIVE_SCOPE):
-                tags.EditorDenylists.unregister(binding_name, scope)
+            for scope in (tags.EditorBlacklists.COURSE_SCOPE,
+                          tags.EditorBlacklists.DESCRIPTIVE_SCOPE):
+                tags.EditorBlacklists.unregister(binding_name, scope)
 
     # Add a static handler for icons shown in the rich text editor.
     global_routes = [(

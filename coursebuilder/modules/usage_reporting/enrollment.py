@@ -47,7 +47,7 @@ from modules.usage_reporting import messaging
 from google.appengine.ext import db
 
 SECONDS_PER_HOUR = 60 * 60
-
+MODULE_NAME = 'usage_reporting'
 
 class StudentEnrollmentEventEntity(models.BaseEntity):
     """Each record represents one enroll/unenroll event.  Contains no PII."""
@@ -70,7 +70,7 @@ class StudentEnrollmentEventDTO(object):
                     'personally identifiable information, and if so, take '
                     'appropriate measures to ensure that this information is '
                     'subject to wipeout restrictions: list the field in '
-                    'StudentEnrollmentEventEntity._PROPERTY_EXPORT_DENYLIST, '
+                    'StudentEnrollmentEventEntity._PROPERTY_EXPORT_BLACKLIST, '
                     'or implement safe_key() (for the key field), or '
                     'for_export() for non-key fields.  See '
                     'models.models.Student for example code.')
@@ -109,23 +109,17 @@ class StudentEnrollmentEventDAO(models.BaseJsonDao):
         cls.save(event)
 
 
-def _student_add_post_hook(unused_student):
-    """Hook called back when a student is added or re-added."""
-
+def _student_add_callback(user_id, timestamp):
     StudentEnrollmentEventDAO.insert(messaging.Message.METRIC_ENROLLED)
 
 
-def _student_update_post_hook(
-    profile, student, user_id, email, legal_name=None, nick_name=None,
-    date_of_birth=None, is_enrolled=None, final_grade=None,
-    course_info=None, labels=None, profile_only=False):
-    """Hook called back when student properties are changed."""
+def _student_unenroll_callback(user_id, timestamp):
+    StudentEnrollmentEventDAO.insert(messaging.Message.METRIC_UNENROLLED)
 
-    # Only report if 'is_enrolled' status is changing.
-    if is_enrolled is not None:
-        StudentEnrollmentEventDAO.insert(
-            messaging.Message.METRIC_ENROLLED if is_enrolled else
-            messaging.Message.METRIC_UNENROLLED)
+
+def _student_reenroll_callback(user_id, timestamp):
+    StudentEnrollmentEventDAO.insert(messaging.Message.METRIC_ENROLLED)
+
 
 
 class StudentEnrollmentEventCounter(jobs.AbstractCountingMapReduceJob):
@@ -197,7 +191,12 @@ class StudentEnrollmentEventCounter(jobs.AbstractCountingMapReduceJob):
 
 
 def notify_module_enabled():
-    models.StudentProfileDAO.UPDATE_POST_HOOKS.append(
-        _student_update_post_hook)
-    models.StudentProfileDAO.ADD_STUDENT_POST_HOOKS.append(
-        _student_add_post_hook)
+    models.StudentLifecycleObserver.EVENT_CALLBACKS[
+        models.StudentLifecycleObserver.EVENT_ADD][MODULE_NAME] = (
+          _student_add_callback)
+    models.StudentLifecycleObserver.EVENT_CALLBACKS[
+        models.StudentLifecycleObserver.EVENT_UNENROLL][MODULE_NAME] = (
+          _student_unenroll_callback)
+    models.StudentLifecycleObserver.EVENT_CALLBACKS[
+        models.StudentLifecycleObserver.EVENT_REENROLL][MODULE_NAME] = (
+          _student_reenroll_callback)

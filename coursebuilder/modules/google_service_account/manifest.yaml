@@ -1,0 +1,11 @@
+registration:
+  main_module: modules.google_service_account.register
+
+files:
+- modules/google_service_account/base.py
+- modules/google_service_account/google_service_account.py
+- modules/google_service_account/__init__.py
+- modules/google_service_account/manifest.yaml
+- modules/google_service_account/register.py
+- modules/google_service_account/service_account_models.py
+- modules/google_service_account/settings.py

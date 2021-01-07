@@ -22,6 +22,7 @@ import actions
 from common import utils
 from controllers import sites
 from models import courses
+from models import course_list
 from models import models
 from models import transforms
 from tests.functional import actions
@@ -32,6 +33,12 @@ class CourseElementsTest(actions.TestBase):
     def setUp(self):
         super(CourseElementsTest, self).setUp()
         sites.setup_courses('course:/test::ns_test, course:/:/')
+        name ='test'
+        namespace = 'ns_%s' % name
+        slug = '/%s' % name
+        course_list.CourseListDAO.add_new_course(namespace=namespace,path='/%s' % name,
+            course_admin_email= None, title=name, errors=[])
+
         self._course = courses.Course(
             None, app_context=sites.get_all_courses()[0])
         actions.login('admin@google.com', is_admin=True)
@@ -83,7 +90,7 @@ class CourseElementsTest(actions.TestBase):
         html_check_answers = True
         properties = {'a': 456, 'b': 789}
 
-        assessment1 = self._course.add_assessment()
+        assessment1 = self._course.add_assessment(None)
         assessment1.title = title
         assessment1.weight = weight
         assessment1.html_check_answers = html_check_answers
@@ -136,7 +143,7 @@ class CourseElementsTest(actions.TestBase):
         self.assertEquals(activity_title, response['data'][0]['activity_title'])
 
     def test_unit_and_assessment(self):
-        self._course.add_assessment()
+        self._course.add_assessment(None)
         self._course.add_unit()
         self._course.save()
 
@@ -151,19 +158,19 @@ class CourseElementsTest(actions.TestBase):
         self.assertEquals('New Assessment', response['data'][0]['title'])
 
     def test_stable_ids(self):
-        self._course.add_assessment()
+        self._course.add_assessment(None)
         unit2 = self._course.add_unit()
-        self._course.add_assessment()
+        self._course.add_assessment(None)
         self._course.add_unit()
-        self._course.add_assessment()
+        self._course.add_assessment(None)
         self._course.add_unit()
-        self._course.add_assessment()
+        self._course.add_assessment(None)
         self._course.add_unit()
-        self._course.add_assessment()
+        self._course.add_assessment(None)
         self._course.add_unit()
-        self._course.add_assessment()
-        self._course.add_assessment()
-        self._course.add_assessment()
+        self._course.add_assessment(None)
+        self._course.add_assessment(None)
+        self._course.add_assessment(None)
         self._course.add_unit()
         self._course.save()
 
@@ -186,6 +193,12 @@ class StudentsTest(actions.TestBase):
     def setUp(self):
         super(StudentsTest, self).setUp()
         sites.setup_courses('course:/test::ns_test, course:/:/')
+        name ='test'
+        namespace = 'ns_%s' % name
+        slug = '/%s' % name
+        course_list.CourseListDAO.add_new_course(namespace=namespace,path='/%s' % name,
+            course_admin_email= None, title=name, errors=[])
+
         self._course = courses.Course(
             None, app_context=sites.get_all_courses()[0])
         actions.login('admin@google.com', is_admin=True)
@@ -225,9 +238,9 @@ class StudentsTest(actions.TestBase):
             0,
             abs((expected_enrolled_on - actual_enrolled_on).total_seconds()), 1)
 
-    def test_modified_denylist_schema(self):
-        save_denylist = models.Student._PROPERTY_EXPORT_DENYLIST
-        models.Student._PROPERTY_EXPORT_DENYLIST = [
+    def test_modified_blacklist_schema(self):
+        save_blacklist = models.Student._PROPERTY_EXPORT_BLACKLIST
+        models.Student._PROPERTY_EXPORT_BLACKLIST = [
             'name',
             'additional_fields.age',
             'additional_fields.gender',
@@ -239,16 +252,16 @@ class StudentsTest(actions.TestBase):
         self.assertIn('user_id', response['schema'])
         self.assertIn('is_enrolled', response['schema'])
         self.assertIn('additional_fields', response['schema'])
-        models.Student._PROPERTY_EXPORT_DENYLIST = save_denylist
+        models.Student._PROPERTY_EXPORT_BLACKLIST = save_blacklist
 
-    def test_modified_denylist_contents(self):
-        save_denylist = models.Student._PROPERTY_EXPORT_DENYLIST
-        models.Student._PROPERTY_EXPORT_DENYLIST = [
+    def test_modified_blacklist_contents(self):
+        save_blacklist = models.Student._PROPERTY_EXPORT_BLACKLIST
+        models.Student._PROPERTY_EXPORT_BLACKLIST = [
             'name',
             'additional_fields.age',
             'additional_fields.gender',
         ]
-        denylisted = [
+        blacklisted = [
             {'name': 'age', 'value': '22'},
             {'name': 'gender', 'value': 'female'},
         ]
@@ -257,7 +270,7 @@ class StudentsTest(actions.TestBase):
             {'name': 'timezone', 'value': 'America/Los_Angeles'},
         ]
         additional_fields = transforms.dumps(
-            [[x['name'], x['value']] for x in denylisted + permitted])
+            [[x['name'], x['value']] for x in blacklisted + permitted])
         with utils.Namespace('ns_test'):
             models.Student(
                 user_id='123456', additional_fields=additional_fields).put()
@@ -265,7 +278,7 @@ class StudentsTest(actions.TestBase):
                 '/test/rest/data/students/items').body)
         self.assertEquals(permitted,
                           response['data'][0]['additional_fields'])
-        models.Student._PROPERTY_EXPORT_DENYLIST = save_denylist
+        models.Student._PROPERTY_EXPORT_BLACKLIST = save_blacklist
 
 
 class StudentScoresTest(actions.TestBase):
@@ -273,6 +286,11 @@ class StudentScoresTest(actions.TestBase):
     def setUp(self):
         super(StudentScoresTest, self).setUp()
         sites.setup_courses('course:/test::ns_test, course:/:/')
+        name ='test'
+        namespace = 'ns_%s' % name
+        slug = '/%s' % name
+        course_list.CourseListDAO.add_new_course(namespace=namespace,path='/%s' % name,
+            course_admin_email= None, title=name, errors=[])
         self._course = courses.Course(
             None, app_context=sites.get_all_courses()[0])
         actions.login('admin@google.com', is_admin=True)
@@ -300,8 +318,9 @@ class StudentScoresTest(actions.TestBase):
             '/test/rest/data/assessment_scores/items').body)
         self.assertListEqual([], response['data'])
 
-    def _score_data(self, unit_id, title, weight, score, assessment_rank):
+    def _score_data(self, show_scores, unit_id, title, weight, score, assessment_rank):
         return {
+            'show_scores': show_scores,
             'id': unit_id,
             'title': title,
             'weight': weight,
@@ -317,23 +336,25 @@ class StudentScoresTest(actions.TestBase):
     def test_one_student_one_score(self):
         scores = '{"1": 20}'
         with utils.Namespace('ns_test'):
-            self._course.add_assessment()
+            self._course.add_assessment(None)
             self._course.save()
             models.Student(user_id='123456', scores=scores).put()
         response = transforms.loads(self.get(
             '/test/rest/data/assessment_scores/items').body)
+        print str(response['data'])
+
         self.assertItemsEqual(
-            [self._score_data('1', 'New Assessment', 1, 20, 0)],
+            [self._score_data(True,'1', 'New Assessment', 1, 20, 0)],
             response['data'])
 
     def test_two_students_two_scores_each(self):
         s1_scores = '{"1": 20, "2": 30}'
         s2_scores = '{"1": 10, "2": 40}'
         with utils.Namespace('ns_test'):
-            a1 = self._course.add_assessment()
+            a1 = self._course.add_assessment(None)
             a1.title = 'A1'
             a1.weight = 1
-            a2 = self._course.add_assessment()
+            a2 = self._course.add_assessment(None)
             a2.title = 'A2'
             a2.weight = 2
             self._course.save()
@@ -341,20 +362,20 @@ class StudentScoresTest(actions.TestBase):
             models.Student(user_id='2', scores=s2_scores).put()
         response = transforms.loads(self.get(
             '/test/rest/data/assessment_scores/items').body)
-        self.assertItemsEqual([self._score_data('1', 'A1', 1, 20, 0),
-                               self._score_data('1', 'A1', 1, 10, 0),
-                               self._score_data('2', 'A2', 2, 30, 1),
-                               self._score_data('2', 'A2', 2, 40, 1)],
+        self.assertItemsEqual([self._score_data(True,'1', 'A1', 1, 20, 0),
+                               self._score_data(True,'1', 'A1', 1, 10, 0),
+                               self._score_data(True,'2', 'A2', 2, 30, 1),
+                               self._score_data(True,'2', 'A2', 2, 40, 1)],
                               response['data'])
 
     def test_two_students_partial_scores(self):
         s1_scores = '{"1": 20}'
         s2_scores = '{"1": 10, "2": 40}'
         with utils.Namespace('ns_test'):
-            a1 = self._course.add_assessment()
+            a1 = self._course.add_assessment(None)
             a1.title = 'A1'
             a1.weight = 1
-            a2 = self._course.add_assessment()
+            a2 = self._course.add_assessment(None)
             a2.title = 'A2'
             a2.weight = 2
             self._course.save()
@@ -362,7 +383,7 @@ class StudentScoresTest(actions.TestBase):
             models.Student(user_id='2', scores=s2_scores).put()
         response = transforms.loads(self.get(
             '/test/rest/data/assessment_scores/items').body)
-        self.assertItemsEqual([self._score_data('1', 'A1', 1, 20, 0),
-                               self._score_data('1', 'A1', 1, 10, 0),
-                               self._score_data('2', 'A2', 2, 40, 1)],
+        self.assertItemsEqual([self._score_data(True,'1', 'A1', 1, 20, 0),
+                               self._score_data(True,'1', 'A1', 1, 10, 0),
+                               self._score_data(True,'2', 'A2', 2, 40, 1)],
                               response['data'])

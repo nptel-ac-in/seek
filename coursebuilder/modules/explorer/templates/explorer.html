@@ -1,0 +1,133 @@
+<!doctype html>
+<html>
+  <head>
+    <script type="text/javascript" src="/modules/explorer/_static/js/mobile_redirect.js" charset="utf-8"></script>
+    <title>{{ institution_name }}</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="{{STATIC_CDN_PATH}}/assets/css/main.css" rel="stylesheet" type="text/css">
+     <link href="{{STATIC_CDN_PATH}}/modules/nptel/assets/css/nptel.css" rel="stylesheet" type="text/css">
+
+    <style>
+    html, body {
+      background: rgb(250, 250, 250);
+      height: 100%;
+      width: 100%;
+      padding: 0;
+      margin: 0;
+      font-family: 'Roboto', 'Noto', sans-serif;
+    }
+    a {
+      color: blue;
+      text-decoration: none;
+    }
+
+
+    #gcb-footer {
+      border-top: 1px solid #ebebeb;
+      background: #f0dcbc;
+      clear: both;
+      height: 6em;
+      bottom: 0;
+      color: #ab9882;
+      width:100%;
+      text-align: left;
+      margin-left:-15px;
+      margin-right:0px;
+      padding-top: 5px;
+      padding-right: 15px;
+      padding-bottom: 15px;
+      padding-left: 15px;
+      position:static;
+
+
+    }
+    </style>
+
+    <script src="/static/polymer-1.2.0/webcomponentsjs/webcomponents-lite.js"></script>
+    {% if use_flattened_html_imports %}
+      <link rel="import" href="/static/html-imports/explorer-imports.html">
+    {% endif %}
+    <link rel="import" href="/modules/explorer/_static/components/course-explorer/course-explorer.html">
+
+  </head>
+  <body>
+    {% include 'top_content.html' %}
+    <dom-module name="global-module">
+
+      {% raw %}
+      <template>
+        <course-explorer navbar_links="{{navbar_links}}"
+         filter_options="{{filter_options}}"
+         site="{{site}}"
+         courseCursor="{{courseCursor}}"
+         categories="{{categories}}"
+         pagelength="{{pagelength}}"
+         courses="{{courses}}"
+         ></course-explorer>
+      </template>
+      {% endraw %}
+
+      <script>
+        window.userLoggedIn = {% if currentUser.loggedIn %}true{% else %}false{% endif %};
+        addEventListener('WebComponentsReady', function() {
+          Polymer({
+            is: 'global-module',
+            properties: {
+              navbar_links: {
+                type: Object,
+                value: {{ navbar_links|to_json }}
+              },
+              filter_options: {
+                type: Object,
+                value: {
+                  filter: {{ filter_text|to_json }},
+                  category: 'all',
+                  tags: '',
+                  includeClosed: {{ include_closed|to_json }},
+                  status: 'all',
+                },
+              },
+              site: {
+                type: Object,
+                value: {{site|to_json if site else []}}
+              },
+              courses: {
+                type: Object,
+                value: {{courseList|to_json if courseList else []}}
+              },
+              categories: {
+                type: Array,
+                value: [
+                  {% for cat in categories %}
+                    {
+                      category: "{{cat.category|safe}}",
+                      name: "{{cat.name|safe}}"
+                    },
+                  {% endfor %}
+                ]
+              },
+              coursesLoaded: {
+                type: Boolean,
+                value: true,
+              },
+              courseCursor: {
+                type: String,
+                value: {{courseCursor|to_json}}
+              },
+              pagelength: {
+                type: Number,
+                value: {{page_length|to_json}}
+              },
+            },
+          });
+        });
+      </script>
+    </dom-module>
+
+    <global-module>
+    </global-module>
+      <script src="/modules/nptel/assets/js/main.js"></script>
+    {% include "footer.html" %}
+  </body>
+</html>

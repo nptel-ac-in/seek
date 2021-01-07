@@ -20,7 +20,6 @@ __author__ = 'Thejesh GN (tgn@google.com)'
 from models import analytics
 from models import data_sources
 from models import custom_modules
-from modules.dashboard import tabs
 from modules.watch_time import record_watchtime
 from modules.watch_time import analytics as panalytics
 
@@ -40,8 +39,7 @@ def register_module():
         tab_name, MODULE_NAME,
         'templates/watch_time_stats.html',
         data_source_classes=[panalytics.WatchTimeStatsDataSource])
-    tabs.Registry.register(
-        'analytics', tab_name, MODULE_NAME, [stats])
+
 
     global_routes = []
     watch_time_routes = [

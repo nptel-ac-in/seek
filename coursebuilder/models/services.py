@@ -22,6 +22,39 @@ class Service(object):
         raise NotImplementedError()
 
 
+class HelpUrls(Service):
+
+    def get(self, topic_id):
+        """Gets the help URL for a given topic_id string.
+
+        Args:
+            topic_id: string. The unique identifier of the topic to get a help
+                url for.
+
+        Returns:
+            String. The help URL for the requested topic_id.
+
+        Raises:
+            ValueError: if no URL mapping exists for the requested topic_id.
+        """
+        raise NotImplementedError()
+
+    def make_learn_more_message(self, text, topic_id, to_string=False):
+        """Makes a sanitized message with a 'Learn more' link for display in UI.
+
+        Args:
+            text: string. Text of the help message.
+            topic_id: string. Unique identifier for the help message to get a
+                redirect URL for.
+            to_string: boolean. If True, returns a string. If False, returns a
+                safe_dom.NodeList.
+
+        Raises:
+            ValueError: if no URL mapping exists for the requested topic_id.
+        """
+        raise NotImplementedError()
+
+
 class Notifications(Service):
 
     def query(self, to, intent):
@@ -42,7 +75,7 @@ class Notifications(Service):
         raise NotImplementedError()
 
     def send_async(
-        self, to, sender, intent, body, subject, audit_trail=None,
+        self, to, sender, intent, body, subject, audit_trail=None, html=None,
         retention_policy=None):
         """Asyncronously sends a notification via email.
 
@@ -68,6 +101,11 @@ class Notifications(Service):
           audit_trail: JSON-serializable object. An optional audit trail that,
               when used with the default retention policy, will be retained
               even after the body is scrubbed from the datastore.
+          html: optional string. The data payload of the notification as html.
+                  Must fit in a datastore entity when combined with the plain
+                  text version. Both the html and plain text body will be
+                  sent, and the recipient's mail client will decide which to
+                  show.
           retention_policy: RetentionPolicy. The retention policy to use for
               data after a Notification has been sent. By default, we retain the
               audit_trail but not the body.
@@ -127,5 +165,6 @@ class Unsubscribe(Service):
         raise NotImplementedError()
 
 
+help_urls = HelpUrls()
 notifications = Notifications()
 unsubscribe = Unsubscribe()

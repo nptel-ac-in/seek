@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Review processor that is used for managing human-reviewed assessments."""
+"""Review processor that is used for managing peer-reviewed assessments."""
 
 __author__ = [
     'sll@google.com (Sean Lip)',
 ]
 
 import entities
+import progress
 import student_work
 import transforms
 
@@ -121,8 +122,7 @@ class ReviewsProcessor(object):
             for (i, idx) in enumerate(nonempty_review_indices):
                 reviews[idx] = tmp_reviews[i]
 
-        return [(transforms.loads(rev.contents) if rev else None)
-                for rev in reviews]
+        return reviews
 
     def get_review_steps_by_keys(self, unit_id, review_step_keys):
         impl = self._get_impl(unit_id)
@@ -170,11 +170,11 @@ class ReviewsProcessor(object):
             str(unit_id), submission_key, reviewee_key)
 
     def write_review(
-        self, unit_id, review_step_key, review_payload, mark_completed):
+        self, unit_id, review_step_key, review_payload, mark_completed, review_score=None):
         impl = self._get_impl(unit_id)
         return impl.write_review(
             review_step_key, transforms.dumps(review_payload),
-            mark_completed=mark_completed)
+            mark_completed=mark_completed, review_score=review_score)
 
 
 class ReviewUtils(object):
@@ -204,7 +204,7 @@ class ReviewUtils(object):
 
     @classmethod
     def get_review_progress(
-        cls, review_steps, review_min_count, progress_tracker):
+        cls, review_steps, review_min_count):
         """Gets the progress value based on the number of reviews done.
 
         Args:
@@ -220,8 +220,8 @@ class ReviewUtils(object):
         completed_reviews = cls.count_completed_reviews(review_steps)
 
         if cls.has_completed_enough_reviews(review_steps, review_min_count):
-            return progress_tracker.COMPLETED_STATE
-        elif completed_reviews > 0:
-            return progress_tracker.IN_PROGRESS_STATE
+            return progress.UnitLessonCompletionTracker.COMPLETED_STATE
+        elif len(review_steps) > 0:
+            return progress.UnitLessonCompletionTracker.IN_PROGRESS_STATE
         else:
-            return progress_tracker.NOT_STARTED_STATE
+            return progress.UnitLessonCompletionTracker.NOT_STARTED_STATE

@@ -34,7 +34,6 @@ import jinja2
 
 import appengine_config
 from common import jinja_utils
-from models import models
 from modules.announcements import announcements
 
 from google.appengine.api import search
@@ -172,14 +171,10 @@ def _url_allows_robots(url):
 
 
 def get_locale_filtered_announcement_list(course):
-    # TODO(jorr): Restrict search in announcements by all tracking labels,
-    # not just locale.
-    announcement_list = (
-        announcements.AnnouncementEntity.get_announcements())
-    # pylint: disable=protected-access
-    return models.LabelDAO._apply_locale_labels_to_locale(
-        course.app_context.get_current_locale(), announcement_list)
-    # pylint: enable=protected-access
+    locale = course.app_context.get_current_locale()
+    if locale == course.app_context.default_locale:
+        locale = None
+    return announcements.AnnouncementEntity.get_announcements(locale=locale)
 
 
 class Resource(object):
@@ -296,7 +291,8 @@ class LessonResource(Resource):
         for lesson in course.get_lessons_for_all_units():
             unit = course.find_unit_by_id(lesson.unit_id)
             doc_id = cls._get_doc_id(lesson.unit_id, lesson.lesson_id)
-            if (lesson.now_available and unit.now_available and
+            if (course.is_unit_available(unit) and
+                course.is_lesson_available(unit, lesson) and
                 not cls._indexed_within_num_days(timestamps, doc_id,
                                                  cls.FRESHNESS_THRESHOLD_DAYS)):
                 try:
@@ -318,7 +314,8 @@ class LessonResource(Resource):
         self.lesson_id = lesson.lesson_id
         self.title = unicode(lesson.title)
         if lesson.notes:
-            self.notes = urlparse.urljoin(PROTOCOL_PREFIX, lesson.notes)
+            self.notes = urlparse.urljoin(
+                PROTOCOL_PREFIX, unicode(lesson.notes))
         else:
             self.notes = ''
         if lesson.objectives:
@@ -490,7 +487,8 @@ class YouTubeFragmentResource(Resource):
 
         for lesson in course.get_lessons_for_all_units():
             unit = course.find_unit_by_id(lesson.unit_id)
-            if not (lesson.now_available and unit.now_available):
+            if not (course.is_unit_available(unit) and
+                    course.is_lesson_available(unit, lesson)):
                 continue
             lesson_url = 'unit?unit=%s&lesson=%s' % (
                 lesson.unit_id, lesson.lesson_id)

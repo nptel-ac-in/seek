@@ -1,0 +1,75 @@
+
+<dom-module id="faq-page">
+  <template>
+    <style include="nptel-pwa-css"></style>
+    <style>
+      .longText {
+        color: gray;
+      }
+    </style>
+        <div style="padding-top:10px;height:90%">
+          <iron-list id="list" items="[[items]]" as="item" selection-enabled multi-selection >
+          <template scroll-target="list">
+            <div>
+              <div class$="[[getClassForItem(item, selected)]]" tabindex$="[[tabIndex]]">
+                <div class="pad">
+                  <div class="primary">[[item.name]]</div>
+                  <div class="longText" id='[[item.id]]'>
+                  </div>
+                </div>
+                <iron-icon icon$="[[iconForItem(item,selected)]]"></iron-icon>
+              </div>
+            </div>
+          </template>
+        </iron-list>
+      </div>
+    </template>
+    <script>
+      /**
+       * @customElement
+       * @polymer
+       */
+      class FaqPage extends Polymer.Element {
+        static get is() { return 'faq-page'; }
+        static get properties() {
+          return {
+            items: {
+            type: Array,
+            value: function() {
+              return faq;
+            }
+          },
+          header : {
+            type : String,
+            value : "FAQs",
+            notify : true
+          },
+          route : {
+            observer : '_isFaqSelected'
+          },
+          enrolled : {
+            type : String,
+            value : false,
+            notify : true
+          },
+          };
+        }
+        iconForItem(item,selected) {
+          return selected ? 'expand-less' : 'expand-more'
+        }
+        getClassForItem(item, selected) {
+          Polymer.dom(this.root).querySelector("#"+item.id).innerHTML = item.content;
+          return selected ? 'item expanded' : 'item';
+        }
+        _isFaqSelected()
+        {
+            if (Polymer.dom(this.parentElement).node.selected == 'faq')
+            {
+              this.header = "FAQs";
+              this.enrolled = false;
+            }
+        }
+      }
+      window.customElements.define(FaqPage.is, FaqPage);
+    </script>
+</dom-module>

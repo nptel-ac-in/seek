@@ -1,0 +1,10 @@
+registration:
+  main_module: modules.email_settings.register
+
+files:
+  - modules/email_settings/__init__.py
+  - modules/email_settings/manifest.yaml
+  - modules/email_settings/base.py
+  - modules/email_settings/email_settings_model.py
+  - modules/email_settings/email_settings.py
+  - modules/email_settings/register.py

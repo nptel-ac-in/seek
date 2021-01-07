@@ -43,7 +43,7 @@ class RecordWatchTime(BaseHandler, ReflectiveRequestHandler):
             if s is not None and e is not None and (start_val - e > 1):
                 merged_time_stamps.append((s, e))
                 s = start_val
-            if not s is not None:
+            if s is None:
                 s = start_val
             if end_val > e:
                 e = end_val

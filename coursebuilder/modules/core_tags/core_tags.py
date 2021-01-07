@@ -34,23 +34,24 @@ from models import courses
 from models import custom_modules
 from models import models
 from models import roles
+from models import services
 from models import transforms
+from modules.core_tags import messages
 from modules.oeditor import oeditor
 
 
-_RESOURCE_PREFIX = '/modules/core_tags'
-RESOURCE_FOLDER = _RESOURCE_PREFIX + '/resources/'
-_OEDITOR_RESOURCE_FOLDER = '/modules/oeditor/resources/'
+_MODULE_PATH = '/modules/core_tags'
+_STATIC_URL = _MODULE_PATH + '/_static/'
+_OEDITOR_STATIC_URL = '/modules/oeditor/_static/'
 
-_DRIVE_TAG_REFRESH_SCRIPT = RESOURCE_FOLDER + 'drive_tag_refresh.js'
-_IFRAME_RESIZE_SCRIPT = _OEDITOR_RESOURCE_FOLDER + 'resize_iframes.js'
-_PARENT_FRAME_SCRIPT = RESOURCE_FOLDER + 'drive_tag_parent_frame.js'
-_SCRIPT_MANAGER_SCRIPT = RESOURCE_FOLDER + 'drive_tag_script_manager.js'
+_DRIVE_TAG_REFRESH_SCRIPT = _STATIC_URL + 'js/drive_tag_refresh.js'
+_IFRAME_RESIZE_SCRIPT = _OEDITOR_STATIC_URL + 'js/resize_iframes.js'
+_PARENT_FRAME_SCRIPT = _STATIC_URL + 'js/drive_tag_parent_frame.js'
+_SCRIPT_MANAGER_SCRIPT = _STATIC_URL + 'js/drive_tag_script_manager.js'
 
-_RESOURCE_ABSPATH = os.path.join(os.path.dirname(__file__), 'resources')
 _TEMPLATES_ABSPATH = os.path.join(os.path.dirname(__file__), 'templates')
-_GOOGLE_DRIVE_TAG_PATH = _RESOURCE_PREFIX + '/googledrivetag'
-_GOOGLE_DRIVE_TAG_RENDERER_PATH = _RESOURCE_PREFIX + '/googledrivetagrenderer'
+_GOOGLE_DRIVE_TAG_PATH = _MODULE_PATH + '/googledrivetag'
+_GOOGLE_DRIVE_TAG_RENDERER_PATH = _MODULE_PATH + '/googledrivetagrenderer'
 
 
 def _escape_url(url, force_https=True):
@@ -79,14 +80,8 @@ class _Runtime(object):
     def can_edit(self):
         return roles.Roles.is_course_admin(self._app_context)
 
-    def courses_can_use_google_apis(self):
-        return courses.COURSES_CAN_USE_GOOGLE_APIS.value
-
     def configured(self):
-        return (
-            self.courses_can_use_google_apis() and
-            bool(self.get_api_key()) and
-            bool(self.get_client_id()))
+        return bool(self.get_api_key()) and bool(self.get_client_id())
 
     def get_api_key(self):
         course, google, api_key = courses.CONFIG_KEY_GOOGLE_API_KEY.split(':')
@@ -102,6 +97,11 @@ class _Runtime(object):
         ).get(
             client_id, '')
 
+    def get_client_secret(self):
+        course, google, client_id = courses.CONFIG_KEY_GOOGLE_CLIENT_ID.split(
+            ':')
+        return self._environ.get(course, {}).get(google, {}).get(client_id, '')
+
     def get_slug(self):
         return self._app_context.get_slug()
 
@@ -116,7 +116,7 @@ class CoreTag(tags.BaseTag):
     @classmethod
     def create_icon_url(cls, name):
         """Creates a URL for an icon with a specific name."""
-        return os.path.join(RESOURCE_FOLDER, name)
+        return os.path.join(_STATIC_URL, 'images', name)
 
 
 class GoogleDoc(CoreTag):
@@ -149,16 +149,13 @@ class GoogleDoc(CoreTag):
             # contents do not appear instantly.
             schema_fields.SchemaField(
                 'link', 'Document Link', 'string',
-                optional=True,
-                description=('Provide the "Document Link" from the Google Docs '
-                             '"Publish to the web" dialog')))
+                description=messages.DOCUMENT_LINK_DESCRIPTION))
         reg.add_property(
             schema_fields.SchemaField(
                 'height', 'Height', 'string', i18n=False,
                 optional=True,
                 extra_schema_dict_values={'value': '300'},
-                description=('Height of the document, in pixels. Width will be '
-                             'set automatically')))
+                description=messages.DOCUMENT_HEIGHT_DESCRIPTION))
         return reg
 
 
@@ -169,7 +166,7 @@ class GoogleDrive(CoreTag, tags.ContextAwareTag):
 
     @classmethod
     def additional_dirs(cls):
-        return [_RESOURCE_ABSPATH]
+        return [_TEMPLATES_ABSPATH]
 
     @classmethod
     def extra_css_files(cls):
@@ -194,14 +191,20 @@ class GoogleDrive(CoreTag, tags.ContextAwareTag):
             cls._oeditor_extra_script_tags_urls)
 
     @classmethod
+    def _get_tag_renderer_url(cls, slug, type_id, resource_id):
+        args = urllib.urlencode(
+            {'type_id': type_id, 'resource_id': resource_id})
+        slug = '' if slug == '/' else slug  # Courses may be at / or /slug.
+        return '%s%s?%s' % (slug, _GOOGLE_DRIVE_TAG_RENDERER_PATH, args)
+
+    @classmethod
     def _oeditor_extra_script_tags_urls(cls):
         script_urls = []
-        if courses.COURSES_CAN_USE_GOOGLE_APIS.value:
-            # Order matters here because scripts are inserted in the order they
-            # are found in this list, and later ones may refer to symbols from
-            # earlier ones.
-            script_urls.append(_SCRIPT_MANAGER_SCRIPT)
-            script_urls.append(_PARENT_FRAME_SCRIPT)
+        # Order matters here because scripts are inserted in the order they
+        # are found in this list, and later ones may refer to symbols from
+        # earlier ones.
+        script_urls.append(_SCRIPT_MANAGER_SCRIPT)
+        script_urls.append(_PARENT_FRAME_SCRIPT)
         return script_urls
 
     def get_icon_url(self):
@@ -214,10 +217,9 @@ class GoogleDrive(CoreTag, tags.ContextAwareTag):
             runtime = _Runtime(handler.app_context)
             if not runtime.configured():
                 return self.unavailable_schema(
-                    'Google Drive is not available. Please make sure the '
-                    'global gcb_courses_can_use_google_apis setting is True '
-                    'and set the Google API Key and Google Client ID in course '
-                    'settings in order to use this tag.')
+                    services.help_urls.make_learn_more_message(
+                        messages.GOOGLE_DRIVE_UNAVAILABLE,
+                        'core_tags:google_drive:unavailable'))
 
             api_key = runtime.get_api_key()
             client_id = runtime.get_client_id()
@@ -226,14 +228,13 @@ class GoogleDrive(CoreTag, tags.ContextAwareTag):
         reg.add_property(
             schema_fields.SchemaField(
                 'document-id', 'Document ID', 'string',
-                optional=True,  # Validation enforced by JS code.
-                description='The ID of the Google Drive item you want to '
-                'use', i18n=False, extra_schema_dict_values={
+                description=messages.DOCUMENT_ID_DESCRIPTION,
+                extra_schema_dict_values={
                     'api-key': api_key,
                     'client-id': client_id,
                     'type-id': self.CONTENT_CHUNK_TYPE,
                     'xsrf-token': GoogleDriveRESTHandler.get_xsrf_token(),
-                }))
+                }, i18n=False))
 
         return reg
 
@@ -298,11 +299,6 @@ class GoogleDrive(CoreTag, tags.ContextAwareTag):
 
         return (header, footer)
 
-    def _get_tag_renderer_url(self, slug, type_id, resource_id):
-        args = urllib.urlencode(
-            {'type_id': type_id, 'resource_id': resource_id})
-        return '%s%s?%s' % (slug, _GOOGLE_DRIVE_TAG_RENDERER_PATH, args)
-
 
 class GoogleDriveRESTHandler(utils.BaseRESTHandler):
 
@@ -314,10 +310,6 @@ class GoogleDriveRESTHandler(utils.BaseRESTHandler):
         return crypto.XsrfTokenManager.create_xsrf_token(cls._XSRF_TOKEN_NAME)
 
     def put(self):
-        if not courses.COURSES_CAN_USE_GOOGLE_APIS.value:
-            self.error(404)
-            return
-
         request = transforms.loads(self.request.get('request', ''))
 
         if not self.assert_xsrf_token_or_fail(
@@ -350,36 +342,17 @@ class GoogleDriveRESTHandler(utils.BaseRESTHandler):
             self, 200, 'Success.', payload_dict={'key': str(key)})
 
     def _save_content_chunk(self, contents, type_id, resource_id):
-        key = None
-        uid = models.ContentChunkDAO.make_uid(type_id, resource_id)
-        matches = models.ContentChunkDAO.get_by_uid(uid)
-
-        if not matches:
-            key = models.ContentChunkDAO.save(models.ContentChunkDTO({
-                'content_type': 'text/html',
-                'contents': contents,
-                'resource_id': resource_id,
-                'type_id': type_id,
-            }))
-        else:
-            # There is a data race in the DAO -- it's possible to create two
-            # entries at the same time with the same UID. If that happened,
-            # use the first one saved.
-            dto = matches[0]
-            dto.contents = contents
-            dto.content_type = 'text/html'
-            key = models.ContentChunkDAO.save(dto)
-
+        dto = models.ContentChunkDAO.get_or_new_by_uid(
+            models.ContentChunkDAO.make_uid(type_id, resource_id))
+        dto.content_type = 'text/html'
+        dto.contents = contents
+        key = models.ContentChunkDAO.save(dto)
         return key
 
 
 class GoogleDriveTagRenderer(utils.BaseHandler):
 
     def get(self):
-        if not courses.COURSES_CAN_USE_GOOGLE_APIS.value:
-            self.error(404)
-            return
-
         resource_id = self.request.get('resource_id')
         type_id = self.request.get('type_id')
 
@@ -387,17 +360,12 @@ class GoogleDriveTagRenderer(utils.BaseHandler):
             self._handle_error(400, 'Bad request')
             return
 
-        matches = models.ContentChunkDAO.get_by_uid(
+        chunk = models.ContentChunkDAO.get_one_by_uid(
             models.ContentChunkDAO.make_uid(type_id, resource_id))
 
-        if not matches:
+        if chunk is None:
             self._handle_error(404, 'Content chunk not found')
             return
-
-        # There is a data race in the DAO -- it's possible to create two entries
-        # at the same time with the same UID. If that happened, use the first
-        # one saved.
-        chunk = matches[0]
 
         template = jinja_utils.get_template(
             'drive_item.html', [_TEMPLATES_ABSPATH])
@@ -444,16 +412,13 @@ class GoogleSpreadsheet(CoreTag):
             # document or to its contents do not appear instantly.
             schema_fields.SchemaField(
                 'link', 'Link', 'string',
-                optional=True,
-                description=('Provide the link from the Google Spreadsheets '
-                             '"Publish to the web" dialog')))
+                description=messages.GOOGLE_SPREADSHEET_LINK_DESCRIPTION))
         reg.add_property(
             schema_fields.SchemaField(
-                'height', 'Height', 'string', i18n=False,
-                optional=True,
+                'height', 'Height', 'string',
+                description=messages.GOOGLE_SPREADSHEET_HEIGHT_DESCRIPTION,
                 extra_schema_dict_values={'value': '300'},
-                description=('Height of the spreadsheet, in pixels. Width will '
-                             'be set automatically')))
+                i18n=False, optional=True))
         return reg
 
 
@@ -463,9 +428,11 @@ class YouTube(CoreTag):
     def name(cls):
         return 'YouTube Video'
 
-    def render(self, node, unused_handler):
-        video_id = node.attrib.get('videoid')
-        if utils.CAN_PERSIST_TAG_EVENTS.value:
+    def render(self, node, handler):
+        video_id = common_utils.find_youtube_video_id(
+            node.attrib.get('videoid'))
+
+        if handler.can_record_student_events():
             return self._render_with_tracking(video_id)
         else:
             return self._render_no_tracking(video_id)
@@ -494,7 +461,8 @@ class YouTube(CoreTag):
     <script></script>
 </p>""")
         dom.attrib['id'] = uid
-        dom[0].attrib['src'] = os.path.join(RESOURCE_FOLDER, 'youtube_video.js')
+        dom[0].attrib['src'] = os.path.join(
+            _STATIC_URL, 'js', 'youtube_video.js')
         dom[1].text = 'gcbTagYoutubeEnqueueVideo("%s", "%s");' % (video_id, uid)
         return dom
 
@@ -504,9 +472,8 @@ class YouTube(CoreTag):
     def get_schema(self, unused_handler):
         reg = schema_fields.FieldRegistry(YouTube.name())
         reg.add_property(schema_fields.SchemaField(
-            'videoid', 'Video Id', 'string',
-            optional=True,
-            description='Provide YouTube video ID (e.g. Kdg2drcUjYI)'))
+            'videoid', 'Video URL', 'string',
+            description=messages.VIDEO_ID_DESCRIPTION))
         return reg
 
 
@@ -516,11 +483,11 @@ class Html5Video(CoreTag):
     def name(cls):
         return 'HTML5 Video'
 
-    def render(self, node, unused_handler):
-        if utils.CAN_PERSIST_TAG_EVENTS.value:
+    def render(self, node, handler):
+        if handler.can_record_student_events():
             tracking_text = (
                 '<script src="' + os.path.join(
-                    RESOURCE_FOLDER, 'html5_video.js') + '">' +
+                    _STATIC_URL, 'js', 'html5_video.js') + '">' +
                 '</script>' +
                 '<script>' +
                 '  gcbTagHtml5TrackVideo("%s");' % (
@@ -551,19 +518,16 @@ class Html5Video(CoreTag):
         reg.add_property(
             schema_fields.SchemaField(
                 'url', 'Video URL', 'url',
-                optional=False,
-                description='URL of the video.  Note that playing a video'
-                'from Google Docs is supported; add "&export=download".  E.g.,'
-                'https://docs.google.com/uc?authuser=0'
-                '&id=0B82t9jeypLokMERMQ1g5Q3NFU1E&export=download'))
+                description=messages.HTML5_VIDEO_URL_DESCRIPTION,
+                optional=False))
         reg.add_property(schema_fields.SchemaField(
             'width', 'Width', 'integer',
-            optional=True,
-            description='Width, in pixels.'))
+            description=messages.HTML5_VIDEO_WIDTH_DESCRIPTION,
+            optional=True))
         reg.add_property(schema_fields.SchemaField(
             'height', 'Height', 'integer',
-            optional=True,
-            description='Height, in pixels.'))
+            description=messages.HTML5_VIDEO_HEIGHT_DESCRIPTION,
+            optional=True))
         return reg
 
 
@@ -609,11 +573,13 @@ class GoogleGroup(CoreTag):
     def get_schema(self, unused_handler):
         reg = schema_fields.FieldRegistry(GoogleGroup.name())
         reg.add_property(schema_fields.SchemaField(
-            'group', 'Group Name', 'string', optional=True, i18n=False,
-            description='Name of the Google Group (e.g. mapping-with-google)'))
+            'group', 'Group Name', 'string', i18n=False,
+            description=services.help_urls.make_learn_more_message(
+                messages.RTE_GOOGLE_GROUP_GROUP_NAME,
+                'core_tags:google_group:name')))
         reg.add_property(schema_fields.SchemaField(
             'category', 'Category Name', 'string', optional=True, i18n=False,
-            description='Name of the Category (e.g. unit5-2-annotation)'))
+            description=messages.RTE_GOOGLE_GROUP_CATEGORY_NAME))
         return reg
 
 
@@ -641,27 +607,27 @@ class IFrame(CoreTag):
     def get_schema(self, unused_handler):
         reg = schema_fields.FieldRegistry(IFrame.name())
         reg.add_property(schema_fields.SchemaField(
-            'src', 'Source URL', 'string',
-            optional=True,
-            description='Provide source URL for iframe (including http/https)'))
+            'src', 'Embed URL', 'string',
+            description=messages.RTE_IFRAME_EMBED_URL,
+            extra_schema_dict_values={'_type': 'url', 'showMsg': True}))
         reg.add_property(schema_fields.SchemaField(
-            'title', 'Title', 'string',
-            optional=True,
-            description='Provide title of iframe'))
+            'title', 'Title', 'string', description=messages.RTE_IFRAME_TITLE))
         reg.add_property(schema_fields.SchemaField(
-            'height', 'Height', 'string', i18n=False,
-            optional=True,
+            'height', 'Height', 'string', i18n=False, optional=True,
             extra_schema_dict_values={'value': '400'},
-            description=('Height of the iframe')))
+            description=messages.RTE_IFRAME_HEIGHT))
         reg.add_property(schema_fields.SchemaField(
-            'width', 'Width', 'string', i18n=False,
-            optional=True,
+            'width', 'Width', 'string', i18n=False, optional=True,
             extra_schema_dict_values={'value': '650'},
-            description=('Width of the iframe')))
+            description=messages.RTE_IFRAME_WIDTH))
         return reg
 
 
 class Include(CoreTag):
+
+    @classmethod
+    def name(cls):
+        return 'HTML Asset'
 
     def render(self, node, handler):
         template_path = re.sub('^/+', '', node.attrib.get('path'))
@@ -699,10 +665,7 @@ class Include(CoreTag):
         reg.add_property(schema_fields.SchemaField(
             'path', 'File Path', 'string', optional=False,
             select_data=select_data,
-            description='Select a file from within assets/html.  '
-            'The contents of this file will be inserted verbatim '
-            'at this point.  Note: HTML files for inclusion may '
-            'also be uploaded as assets.'))
+            description=messages.HTML_ASSET_FILE_PATH_DESCRIPTION))
         return reg
 
 
@@ -713,12 +676,8 @@ class Markdown(tags.ContextAwareTag, CoreTag):
         return 'Markdown'
 
     @classmethod
-    def extra_js_files(cls):
-        """Returns a list of JS files to be loaded in the editor lightbox."""
-        if oeditor.CAN_HIGHLIGHT_CODE.value:
-            return ['markdown_popup.js']
-        else:
-            return []
+    def required_modules(cls):
+        return super(Markdown, cls).required_modules() + ['gcb-code']
 
     @classmethod
     def additional_dirs(cls):
@@ -731,28 +690,30 @@ class Markdown(tags.ContextAwareTag, CoreTag):
     def render(self, node, context):
         # The markdown is "text" type in the schema and so is presented in the
         # tag's body.
+        extension_list = node.attrib.get('extension', '').split()
         html = ''
         if node.text:
-            html = markdown.markdown(node.text)
+            html = markdown.markdown(node.text, extension_list)
         return tags.html_string_to_element_tree(
             '<div class="gcb-markdown">%s</div>' % html)
 
     def rollup_header_footer(self, context):
         """Include markdown css only when markdown tag is present."""
         header = tags.html_string_to_element_tree(
-            '<link href="%s/markdown.css" rel="stylesheet" '
-            'type="text/css">' % RESOURCE_FOLDER)
+            '<link href="{}css/markdown.css" rel="stylesheet">'.format(
+                _STATIC_URL))
         footer = tags.html_string_to_element_tree('')
         return (header, footer)
 
     def get_schema(self, unused_handler):
         reg = schema_fields.FieldRegistry(Markdown.name())
         reg.add_property(schema_fields.SchemaField(
-            'markdown', 'Markdown', 'text', optional=False,
-            description='Provide '
-            '<a target="_blank" '
-            'href="http://daringfireball.net/projects/markdown/syntax">'
-            'markdown</a> text'))
+            'markdown', 'Markdown', 'text',
+            description=services.help_urls.make_learn_more_message(
+                messages.RTE_MARKDOWN_MARKDOWN, 'core_tags:markdown:markdown'),
+            extra_schema_dict_values={
+                'mode': 'markdown', '_type': 'code',
+            }, optional=False))
         return reg
 
 
@@ -786,8 +747,7 @@ def register_module():
 
     global custom_module  # pylint: disable=global-statement
 
-    global_routes = [(
-        os.path.join(RESOURCE_FOLDER, '.*'), tags.ResourcesHandler)]
+    global_routes = []
     namespaced_routes = [
         (_GOOGLE_DRIVE_TAG_PATH, GoogleDriveRESTHandler),
         (_GOOGLE_DRIVE_TAG_RENDERER_PATH, GoogleDriveTagRenderer),

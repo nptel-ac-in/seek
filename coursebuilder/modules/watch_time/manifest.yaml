@@ -1,0 +1,10 @@
+registration:
+  main_module: modules.watch_time.register
+
+files:
+  - modules/watch_time/__init__.py
+  - modules/watch_time/analytics.py
+  - modules/watch_time/manifest.yaml
+  - modules/watch_time/record_watchtime.py
+  - modules/watch_time/register.py
+  - modules/watch_time/templates/watch_time_stats.html

@@ -1,0 +1,28 @@
+registration:
+  main_module: modules.programming_assignments.register
+
+files:
+  - modules/programming_assignments/__init__.py
+  - modules/programming_assignments/analytics.py
+  - modules/programming_assignments/assignment.py
+  - modules/programming_assignments/base.py
+  - modules/programming_assignments/dashboard.py
+  - modules/programming_assignments/evaluator.py
+  - modules/programming_assignments/manifest.yaml
+  - modules/programming_assignments/prog_models.py
+  - modules/programming_assignments/question.py
+  - modules/programming_assignments/reevaluator.py
+  - modules/programming_assignments/register.py
+  - modules/programming_assignments/result.py
+  - modules/programming_assignments/settings.py
+  - modules/programming_assignments/assets/css/prog.css
+  - modules/programming_assignments/templates/code_editor.html
+  - modules/programming_assignments/templates/compilation_response.html
+  - modules/programming_assignments/templates/pog_assignment_download_form.html
+  - modules/programming_assignments/templates/prog_assignment_stats.html
+  - modules/programming_assignments/templates/read_view.html
+  - modules/programming_assignments/templates/reevaluate_confirmation.html
+  - modules/programming_assignments/templates/reevaluate_confirmation_form.html
+  - modules/programming_assignments/templates/reevaluate_form.html
+  - modules/programming_assignments/templates/sample_tests.html
+  - modules/programming_assignments/templates/test_response.html

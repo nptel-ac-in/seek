@@ -1,0 +1,183 @@
+<script type="text/javascript" src="//www.google.com/jsapi"></script>
+<h3>Members for {{ local_chapter.name }} ({{ local_chapter.org_type }})</h3>
+<br/>
+<div id='navigation-div'>
+    <label>Number of rows to show in a page:</label>
+    <input id='no-of-entries' type='text' value='{{ no_of_entries }}'></input>
+    <label>Order By: </label>
+    <select id='order'>
+        <option value='email'
+            {% if order == 'email' %} selected {% endif %}>Email</option>
+        <option value='user_id'
+            {% if order == 'user_id' %} selected {% endif %}>User ID</option>
+    </select>
+    <input type='checkbox' id='invert_order'
+    {% if invert_order %} checked {% endif %}>Invert</input>
+    <button class='gcb-button' onclick='changeNoOfEntries()'>Go</button>
+    <span class='gcb-pull-right'>
+        <label>Search by email: </label>
+        <input id='search-email' placeholder="Email" value='{{ search_str }}'></input>
+        <button class='gcb-button' onclick='searchByEmail()'>Search</button>
+        <button class='gcb-button' onclick='clearSearch()'>Clear</button>
+    </span>
+</div>
+<br/>
+<div id='students-table'></div>
+<br/>
+<div id='nav-buttons'>
+    <a class='gcb-button' href='/spoc?action={{ list_action|safe }}&num={{ no_of_entries }}&cursor={{ cursor }}&order={% if invert_order %}-{% endif %}{{ order }}&reverse_query=yes'>Previous</a>
+    <a class='gcb-button' href='/spoc?action={{ list_action|safe }}&num={{ no_of_entries }}&cursor={{ new_cursor }}&order={% if invert_order %}-{% endif %}{{ order }}'>Next</a>
+
+    <span class='gcb-pull-right'>
+      <a class="gcb-button" href="/spoc?action=download_student_list">Download CSV dump</a>
+      <form method='post' action='{{ save_url }}' onsubmit="return parseToggles();">
+      <input style='display: none' id='xsrf_token' name='xsrf_token' value='{{ save_xsrf_token }}'></input>
+      <input style='display: none' id='scholarship-data' name='scholarship-data' type='text'></input>
+      <button class='gcb-button' type='submit'>Save</button>
+      </form>
+    </span>
+</div>
+<script type='text/javascript'>
+function parseToggles() {
+  var scholarship_data = {};
+  $('.scholarship-toggle').each(function(idx, el) {
+    if (el.checked !== el.dataset.old_value)
+    {
+      scholarship_data[el.dataset.user_id] = el.checked;
+    }
+  })
+  $('#scholarship-data')[0].value = JSON.stringify(scholarship_data);
+}
+function changeNoOfEntries() {
+    var no_of_entries = parseInt(document.getElementById('no-of-entries').value);
+    if (no_of_entries >= 1) {
+        order = document.getElementById('order').value;
+        invert = document.getElementById('invert_order').checked;
+        if (invert) {
+            order = '-' + order;
+        }
+        window.location.href = '{{ list_action|safe }}&num=' + no_of_entries
+                                + '&order=' + order;
+    }
+    else {
+        alert('Please enter a valid number');
+    }
+}
+
+function searchByEmail() {
+    var email = document.getElementById('search-email').value;
+    if (email) {
+        window.location.href = '{{ list_action|safe }}&email=' + email;
+    }
+    else {
+        alert('Please enter an email ID to search');
+    }
+}
+
+function clearSearch() {
+    {% if search_str %}
+        window.location.href = '{{ list_action|safe }}';
+    {% endif %}
+}
+
+function drawTables() {
+
+    {% if objects %}
+        var table = new google.visualization.DataTable();
+
+        // Store CourseList in javascript object
+        var namespaceToName = {{ namespace_to_name_dict|to_json }};
+
+        // TODO(rthakker) Add separate column for each unit (score).
+        // Use the list of units in this course for that.
+        table.addColumn('string', 'User ID');
+        table.addColumn('string', 'Email');
+        table.addColumn('string', 'Name');
+        table.addColumn('string', 'Date of Birth');
+        table.addColumn('string', 'Mobile');
+        table.addColumn('string', 'Enrolled Courses');
+        table.addColumn('string', 'Country');
+        table.addColumn('string', 'State');
+        table.addColumn('string', 'City');
+        table.addColumn('string', 'College');
+        table.addColumn('string', 'Roll Number');
+        table.addColumn('string', 'Employer');        
+        table.addColumn('string', 'Age Group');
+        table.addColumn('string', 'Graduation Year');
+        table.addColumn('string', 'Profession');
+        table.addColumn('string', 'Scholarship');
+        table.addColumn('string', 'Qualification');
+        table.addColumn('string', 'Degree');
+        table.addColumn('string', 'Department');
+        table.addColumn('string', 'Study Year');
+        table.addColumn('string', 'Motivation');
+        table.addColumn('string', 'Designation');
+        table.addColumn('string', 'Exam Taker');
+
+
+
+        {% for profile in objects %}
+            var enrolled_namespaces = Object.keys(JSON.parse("{{ profile.enrollment_info|js_string }}"));
+            var enrollmentInfo = enrolled_namespaces.map(function(el) {
+              return namespaceToName[el]
+            }).toString();
+            table.addRow(
+              [
+                '{{ profile.user_id if profile.user_id }}',
+                '<a href="{{ details_action }}&key={{ profile.key() }}">{{ profile.email }}</a>',
+                '{{ profile.nick_name if profile.nick_name }}',
+                '{{ profile.date_of_birth if profile.date_of_birth }}',
+                '{{ profile.mobile_number if profile.mobile_number }}',
+                enrollmentInfo,
+                '{{ profile.country_of_residence if profile.country_of_residence }}',
+                '{{ profile.state_of_residence if profile.state_of_residence }}',
+                '{{ profile.city_of_residence if profile.city_of_residence }}',
+                '{{ profile.name_of_college if profile.name_of_college }}',
+                '{{ profile.college_roll_no if profile.college_roll_no }}',
+                '{{ profile.employer_name if profile.employer_name }}',
+                '{{ profile.age_group if profile.age_group }}',
+                '{{ profile.graduation_year if profile.graduation_year }}',
+                '{{ profile.profession if profile.profession }}',
+                '<input id="scholarship_{{ profile.user_id }}" \
+                class="disable-before-submit scholarship-toggle" \
+                data-user_id="{{ profile.user_id }}" \
+                type="checkbox" \
+                {% if profile.scholarship %} \
+                  checked \
+                  data-old_value=true \
+                {% else %} \
+                  data-old_value=false \
+                {% endif %} \
+                {% if allow_update_scholarship and profile.profession =="student" %} \
+                    "" \
+                {% else %} \
+                disabled \
+                {% endif %}></input>',
+                '{{ profile.qualification if profile.qualification }}',
+                '{{ profile.degree if profile.degree }}',
+                '{{ profile.department if profile.department }}',
+                '{{ profile.study_year if profile.study_year }}',
+                '{{ profile.motivation if profile.motivation }}',
+                '{{ profile.designation if profile.designation }}',
+                '{{ "Yes" if profile.exam_taker else "No" }}'
+              ]
+            );
+        {% endfor %}
+
+        new google.visualization.Table(
+            document.getElementById('students-table')
+        ).draw(
+            table, {
+                allowHtml: true,
+                showRowNumber: true,
+                title: 'Enrolled Students'
+            }
+        )
+    {% else %}
+        document.getElementById('students-table').innerHTML = 'No records found';
+    {% endif %}
+}
+
+google.load('visualization', '1', {packages: ['table']});
+google.setOnLoadCallback(drawTables);
+</script>

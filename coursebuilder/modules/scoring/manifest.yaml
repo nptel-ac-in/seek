@@ -1,0 +1,14 @@
+registration:
+  main_module: modules.scoring.register
+
+files:
+  - modules/scoring/__init__.py
+  - modules/scoring/base.py
+  - modules/scoring/dashboard.py
+  - modules/scoring/manifest.yaml
+  - modules/scoring/register.py
+  - modules/scoring/rescorer.py
+  - modules/scoring/scorer.py
+  - modules/scoring/templates/rescore_confirmation.html
+  - modules/scoring/templates/rescore_confirmation_form.html
+  - modules/scoring/templates/rescore_form.html

@@ -23,6 +23,7 @@ import cgi
 import copy
 import urllib
 
+from common import utils as common_utils
 from common.crypto import XsrfTokenManager
 from controllers import utils
 from models import roles
@@ -59,12 +60,14 @@ class BaseDatastoreAssetEditor(utils.ApplicationHandler):
             schema.get_json_schema(),
             schema.get_schema_dict(),
             key, rest_url, exit_url,
+            additional_dirs=getattr(rest_handler, 'ADDITIONAL_DIRS', None),
             auto_return=auto_return,
             delete_url=delete_url, delete_method='delete',
-            required_modules=rest_handler.REQUIRED_MODULES,
-            extra_js_files=rest_handler.EXTRA_JS_FILES,
+            display_types=schema.get_display_types(),
             extra_css_files=getattr(rest_handler, 'EXTRA_CSS_FILES', None),
-            additional_dirs=getattr(rest_handler, 'ADDITIONAL_DIRS', None),)
+            extra_js_files=rest_handler.EXTRA_JS_FILES,
+            extra_required_modules=
+                getattr(rest_handler, 'EXTRA_REQUIRED_MODULES', None))
 
 
 class BaseDatastoreRestHandler(utils.BaseRESTHandler):
@@ -88,6 +91,43 @@ class BaseDatastoreRestHandler(utils.BaseRESTHandler):
     'get' methods, there are a number of hook functions you may need
     to override.  The only mandatory function is 'get_default_version()'.
     """
+
+    # Enable other modules to add transformations to the schema. Each member
+    # must be a function of the form:
+    #     callback(question_field_registry)
+    # where the argument is the root FieldRegistry for the schema
+    SCHEMA_LOAD_HOOKS = ()
+
+    # Enable other modules to add transformations to the load. Each member must
+    # be a function of the form:
+    #     callback(question, question_dict)
+    # and the callback should update fields of the question_dict, which will be
+    # returned to the caller of a GET request.
+
+    PRE_LOAD_HOOKS = ()
+
+    # Enable other modules to add transformations to the save. Each member must
+    # be a function of the form:
+    #     callback(question, question_dict)
+    # and the callback should update fields of the question with values read
+    # from the dict which was the payload of a PUT request.
+    PRE_SAVE_HOOKS = ()
+
+    # Enable other modules to act after an instance is deleted. Each member must
+    # be a function of the form:
+    #     callback(question)
+    PRE_DELETE_HOOKS = ()
+
+    # Enable other modules to validate incoming data and report errors.
+    #     callback(python_dict, key, version, errors)
+    VALIDATE_HOOKS = ()
+
+    EXTRA_JS_FILES = ()
+    SCHEMA_VERSIONS = ['1.0']
+
+    # Determines whether this handler can create new items.  If not, it can only
+    # update existing items.
+    CAN_CREATE = True
 
     def sanitize_input_dict(self, json_dict):
         """Give subclasses a hook to clean up incoming data before storage.
@@ -129,6 +169,9 @@ class BaseDatastoreRestHandler(utils.BaseRESTHandler):
         """Give subclasses a hook to perform an action after saving."""
         pass
 
+    def pre_delete_hook(self, dto):
+        pass
+
     def is_deletion_allowed(self, dto):
         """Allow subclasses to check referential integrity before delete.
 
@@ -157,10 +200,26 @@ class BaseDatastoreRestHandler(utils.BaseRESTHandler):
         """Subclass provides default values to initialize editor form."""
         raise NotImplementedError('Subclasses must override this function.')
 
+    def get_and_populate_dto(self, key, python_dict):
+        """Find the record and update its dict, but do not save it yet."""
+        if key:
+            return self.DAO.DTO(key, python_dict)
+        else:
+            return self.DAO.DTO(None, python_dict)
+
+    @classmethod
+    def get_schema(cls):
+        raise NotImplementedError('Subclasses must override this function.')
+
     def put(self):
         """Store a DTO in the datastore in response to a PUT."""
         request = transforms.loads(self.request.get('request'))
         key = request.get('key')
+
+        if not key and not self.CAN_CREATE:
+            transforms.send_json_response(
+                self, 404, 'Key is required in URL.', {})
+            return
 
         if not self.assert_xsrf_token_or_fail(
                 request, self.XSRF_TOKEN, {'key': key}):
@@ -186,18 +245,18 @@ class BaseDatastoreRestHandler(utils.BaseRESTHandler):
             else:
                 python_dict = self.transform_after_editor_hook(python_dict)
                 self.validate(python_dict, key, version, errors)
-        except ValueError as err:
+                common_utils.run_hooks(
+                    self.VALIDATE_HOOKS, python_dict, key, version, errors)
+        except (TypeError, ValueError) as err:
             errors.append(str(err))
         if errors:
-            self.validation_error('\n'.join(errors), key=key)
+            self.validation_error('\n'.join(
+                error.replace('\n', ' ') for error in errors), key=key)
             return
 
-        if key:
-            item = self.DAO.DTO(key, python_dict)
-        else:
-            item = self.DAO.DTO(None, python_dict)
-
+        item = self.get_and_populate_dto(key, python_dict)
         self.pre_save_hook(item)
+        common_utils.run_hooks(self.PRE_SAVE_HOOKS, item, python_dict)
         key_after_save = self.DAO.save(item)
         self.after_save_hook()
 
@@ -224,6 +283,8 @@ class BaseDatastoreRestHandler(utils.BaseRESTHandler):
             return
 
         if self.is_deletion_allowed(item):
+            self.pre_delete_hook(item)
+            common_utils.run_hooks(self.PRE_DELETE_HOOKS, item)
             self.DAO.delete(item)
             transforms.send_json_response(self, 200, 'Deleted.')
 
@@ -237,17 +298,26 @@ class BaseDatastoreRestHandler(utils.BaseRESTHandler):
 
         if key:
             item = self.DAO.load(key)
+            if item is None:
+                transforms.send_json_response(
+                    self, 404, 'Not found.', {'key': key})
+                return
             version = item.dict.get('version')
             if version not in self.SCHEMA_VERSIONS:
                 transforms.send_json_response(
-                    self, 403, 'Version %s not supported.' % version,
+                    self, 400, 'Version %s not supported.' % version,
                     {'key': key})
                 return
             display_dict = copy.copy(item.dict)
             display_dict['id'] = item.id
+            common_utils.run_hooks(self.PRE_LOAD_HOOKS, item, display_dict)
             payload_dict = self.transform_for_editor_hook(display_dict)
-        else:
+        elif self.CAN_CREATE:
             payload_dict = self.get_default_content()
+        else:
+            transforms.send_json_response(
+                self, 404, 'Key is required in URL.', {})
+            return
 
         transforms.send_json_response(
             self, 200, 'Success',

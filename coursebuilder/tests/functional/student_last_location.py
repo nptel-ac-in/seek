@@ -41,23 +41,23 @@ class StudentRedirectTestBase(actions.TestBase):
         course = courses.Course(None, context)
         self.unit = course.add_unit()
         self.unit.title = 'The Unit'
-        self.unit.now_available = True
+        self.unit.availability = courses.AVAILABILITY_AVAILABLE
         self.lesson_one = course.add_lesson(self.unit)
         self.lesson_one.title = 'Lesson One'
-        self.lesson_one.now_available = True
+        self.lesson_one.availability = courses.AVAILABILITY_AVAILABLE
         self.lesson_two = course.add_lesson(self.unit)
         self.lesson_two.title = 'Lesson Two'
-        self.lesson_two.now_available = True
+        self.lesson_two.availability = courses.AVAILABILITY_AVAILABLE
         self.assessment = course.add_assessment()
         self.assessment.title = 'The Assessment'
-        self.assessment.now_available = True
+        self.assessment.availability = courses.AVAILABILITY_AVAILABLE
         course.save()
 
         actions.login(REGISTERED_STUDENT_EMAIL)
         actions.register(self, REGISTERED_STUDENT_NAME, COURSE_NAME)
         # Actions.register views the student's profile page; clear this out.
         with common_utils.Namespace(NAMESPACE):
-            prefs = models.StudentPreferencesDAO.load_or_create()
+            prefs = models.StudentPreferencesDAO.load_or_default()
             prefs.last_location = None
             models.StudentPreferencesDAO.save(prefs)
 

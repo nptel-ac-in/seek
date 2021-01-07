@@ -21,8 +21,7 @@ from common.schema_fields import FieldArray
 from common.schema_fields import FieldRegistry
 from common.schema_fields import SchemaField
 from models import courses
-from modules.dashboard import tabs
-
+from modules.courses import settings as course_settings
 
 THEME_SECTION = 'course_theme'
 
@@ -72,8 +71,9 @@ class CourseThemeSettings(object):
             'logo_alt_text': '' }
 
         courses.Course.OPTIONS_SCHEMA_PROVIDERS[
-            THEME_SECTION] += cls.get_fields()
-        tabs.Registry.register('settings', 'course_theme', 'Theme', THEME_SECTION)
+        THEME_SECTION] += cls.get_fields()
+        course_settings.CourseSettingsHandler.register_settings_section(
+                                        THEME_SECTION, title='Course Theme ')    
 
     @classmethod
     def unregister(cls):

@@ -1,0 +1,7 @@
+registration:
+  main_module: modules.mooshak.mooshak
+
+files:
+  - modules/mooshak/__init__.py
+  - modules/mooshak/mooshak.py
+  - modules/mooshak/manifest.yaml

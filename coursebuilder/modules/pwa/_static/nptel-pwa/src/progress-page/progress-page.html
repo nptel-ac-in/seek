@@ -1,0 +1,153 @@
+
+<dom-module id="progress-page">
+  <template>
+    <style include="nptel-pwa-css"></style>
+      <style>
+          .table {
+            border-spacing: 0;
+            width: 100%;
+            table-layout: fixed;
+          }
+          td {
+            height: 45px;
+            padding: 0 28px;
+            text-align: left;
+            word-wrap: break-word;
+            vertical-align: middle;
+            width: 100%;
+          }
+          .matCard {
+            padding-bottom: 16px;
+            display: block;
+          }
+      </style>
+      <app-route
+          route="{{route}}"
+          pattern="/:id"
+          data="{{pcourseID}}"
+          tail="{{pcourseData}}"
+          >
+      </app-route>
+        <paper-spinner-lite class="spinner" active alt="Loading content.."></paper-spinner-lite>
+        <div class="matCard">
+          <table class="table">
+            <tr>
+              <td>Date Enrolled :</td>
+              <td>[[date]]</td>
+            </tr>
+            <tr>
+              <td>Email :</td>
+              <td>[[email]]</td>
+            </tr>
+            <tr>
+              <td>Name :</td>
+              <td>[[studentName]]</td>
+            </tr>
+          </table>
+        </div>
+        <div class="matCard">
+          <table class="table">
+            <tr>
+              <td colspan="2"><b>Your Assessment Scores</b></td>
+            </tr>
+            <template is="dom-repeat" items="[[_scores]]">
+              <tr>
+                <td>[[item.title]]</td>
+                <td style="text-align:center;">[[item.score]]</td>
+              </tr>
+            </template>
+        </table>
+      </div>
+  </template>
+  <script>
+    class ProgressPage extends Polymer.Element {
+      static get is() { return 'progress-page'; }
+      static get properties() {
+        return {
+          header :{
+            type : String,
+            value:"Course Progress",
+            notify: true
+          },
+          route : {
+            type: Boolean,
+            observer : '_isProgressPageSelected'
+          },
+          studentName : String,
+          email : String,
+          _scores : Array,
+          date : String,
+          enrolled : {
+            type : String,
+            value : false,
+            notify : true
+          }
+        };
+      }
+      processResponse(payload){
+        if (payload)
+        {
+          if(payload.student_name) this.studentName = payload.student_name;
+          if(payload.student_email) this.email = payload.student_email;
+          if(payload.date_enrolled) this.date = payload.date_enrolled;
+          this._scores = [];
+          if(payload.score_list)
+          {
+            for (var i in payload.score_list)
+            {
+              var item = payload.score_list[i];
+              var score_item = {
+                title : null,
+                score : null
+              }
+              score_item.title = item.title;
+              if(item.human_graded) {
+                if (item.completed)
+                  score_item.score = 'Completed';
+                else
+                  score_item.score = 'Incomplete'
+              }
+              else if(item.attempted && item.show_scores && typeof(item.score) != "undefined") {
+                score_item.score = item.score;
+              }
+              else {
+                score_item.score = '--';
+              }
+              this.push('_scores',score_item);
+            }
+          }
+          this.enrolled = true;
+        }
+      }
+      _isProgressPageSelected()
+      {
+        if(this.pcourseID)
+        {
+          if (Polymer.dom(this.parentElement).node.selected == 'progress')
+          {
+            this.header = "Course Progress";
+            if(this.pcourseID.id)
+            {
+              var main=this; // to access "this" context in the anonymous function
+              showSpinnerHideError(this);
+              fetch('/'+this.pcourseID.id+'/m/progress',{
+                method: 'GET',
+                credentials: 'include'
+              })
+              .then( obj => {
+                validateResponse(main,obj);
+              })
+              .catch( obj =>{
+                logError(obj);
+              });
+            }
+            else {
+              showErrorHideSpinner(this,"Course ID is missing in the url");
+            }
+          }
+        }
+      }
+    }
+    window.customElements.define(ProgressPage.is, ProgressPage);
+  </script>
+</dom-module>

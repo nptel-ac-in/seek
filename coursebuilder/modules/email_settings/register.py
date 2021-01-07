@@ -26,9 +26,9 @@ from models.models import Student
 from modules.dashboard import dashboard
 from modules.email_settings import base
 from modules.email_settings import email_settings
-from modules.dashboard import tabs
 from models.config import ConfigProperty
 from models.config import ConfigPropertyEntity
+from modules.admin import admin
 # Module registration
 custom_module = None
 
@@ -43,6 +43,25 @@ def register_module():
         (email_settings.AddNewQueueSettingsRESTHandler.URI, email_settings.AddNewQueueSettingsRESTHandler),
         (email_settings.QueueSettingsRESTHandler.URI, email_settings.QueueSettingsRESTHandler),
     ]
+
+    admin.BaseAdminHandler.add_menu_item(
+        'analytics', 'email_settings', 'Email Settings',
+        action='email_settings', sub_group_name='advanced')
+
+    admin.GlobalAdminHandler.add_custom_get_action('edit_email_settings',
+        email_settings.EmailSettingsBaseAdminHandler.get_edit_email_settings)
+
+    admin.GlobalAdminHandler.add_custom_get_action('email_settings',
+        email_settings.EmailSettingsBaseAdminHandler.get_email_settings)
+
+    admin.GlobalAdminHandler.add_custom_get_action('add_email_settings',
+        email_settings.EmailSettingsBaseAdminHandler.get_add_email_settings)
+
+    admin.GlobalAdminHandler.add_custom_get_action('add_queue_settings',
+        email_settings.EmailSettingsBaseAdminHandler.get_add_queue_settings)
+
+    admin.GlobalAdminHandler.add_custom_get_action('edit_queue_settings',
+        email_settings.EmailSettingsBaseAdminHandler.get_edit_queue_settings)
 
     global custom_module
     custom_module = custom_modules.Module(

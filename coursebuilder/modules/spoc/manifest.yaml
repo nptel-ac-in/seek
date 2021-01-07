@@ -1,0 +1,11 @@
+registration:
+  main_module: modules.spoc.register
+
+files:
+  - modules/spoc/__init__.py
+  - modules/spoc/base.py
+  - modules/spoc/dashboard.py
+  - modules/spoc/manifest.yaml
+  - modules/spoc/roles.py
+  - modules/spoc/register.py
+  - modules/spoc/settings.py

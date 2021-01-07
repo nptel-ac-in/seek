@@ -286,7 +286,8 @@ class ModuleIncorporationTest(TestWithTempDir):
         self.scripts_dir = os.path.join(self.cb_dir, 'scripts')
         self.lib_dir = os.path.join(self.cb_dir, 'lib')
         self.modules_dir = os.path.join(self._tmpdir,
-                                        'coursebuilder_resources', 'modules')
+                                        self._get_resources_path_fragment(),
+                                        'modules')
         for dirname in (self.foo_dir, self.foo_src_dir, self.foo_scripts_dir,
                         self.bar_dir, self.bar_src_dir, self.bar_scripts_dir,
                         self.cb_dir, self.scripts_dir, self.lib_dir,
@@ -386,6 +387,10 @@ class ModuleIncorporationTest(TestWithTempDir):
         self.log_stream.reset()
         return ret
 
+    def _get_resources_path_fragment(self):
+        return 'coursebuilder_resources_%s' % (
+            os.environ['GCB_PRODUCT_VERSION'].replace('.', '_'))
+
     def _expect_logs(self, expected_lines):
         actual_lines = self._get_log().split('\n')
         for expected, actual in zip(expected_lines, actual_lines):
@@ -407,6 +412,53 @@ class ModuleIncorporationTest(TestWithTempDir):
             ]
         self._assert_content_equals(self.third_party_tests_path, expected)
 
+        expected = [
+            'Downloading module foo',
+            'Installing module foo',
+            'Updating scripts/third_party_tests.yaml',
+            'Updating app.yaml',
+            'You should change this from its default',
+            ]
+        self._expect_logs(expected)
+
+    def test_install_with_file_localhost_url(self):
+        self._install('--targets=foo@file://localhost%s' %
+                      os.path.abspath(self.foo_dir))
+        expected = [
+            'Downloading module foo',
+            'Installing module foo',
+            'Updating scripts/third_party_tests.yaml',
+            'Updating app.yaml',
+            'You should change this from its default',
+            ]
+        self._expect_logs(expected)
+
+    def test_install_with_file_nohost_url(self):
+        self._install('--targets=foo@file://%s' %
+                      os.path.abspath(self.foo_dir))
+        expected = [
+            'Downloading module foo',
+            'Installing module foo',
+            'Updating scripts/third_party_tests.yaml',
+            'Updating app.yaml',
+            'You should change this from its default',
+            ]
+        self._expect_logs(expected)
+
+    def test_install_with_relative_path_url(self):
+        self._install('--targets=foo@file://%s' %
+                      os.path.relpath(self.foo_dir))
+        expected = [
+            'Downloading module foo',
+            'Installing module foo',
+            'Updating scripts/third_party_tests.yaml',
+            'Updating app.yaml',
+            'You should change this from its default',
+            ]
+        self._expect_logs(expected)
+
+    def test_install_with_relative_path(self):
+        self._install('--targets=foo@%s' % os.path.relpath(self.foo_dir))
         expected = [
             'Downloading module foo',
             'Installing module foo',

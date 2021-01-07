@@ -19,40 +19,60 @@ __author__ = 'Mike Gainer (mgainer@google.com)'
 from common import schema_fields
 from models import models
 from modules.dashboard import dto_editor
+from modules.dashboard import messages
 from modules.dashboard import utils as dashboard_utils
 
 
 class LabelManagerAndEditor(dto_editor.BaseDatastoreAssetEditor):
-
     def lme_prepare_template(self, key):
         return {
             'page_title': self.format_title('Edit Label'),
             'main_content': self.get_form(
                 LabelRestHandler, key,
-                dashboard_utils.build_assets_url('labels'))
+                dashboard_utils.build_assets_url('edit_labels'))
         }
 
     def get_add_label(self):
-        self.render_page(self.lme_prepare_template(''),
-                         'assets', 'labels')
+        self.render_page(
+            self.lme_prepare_template(''), in_action='edit_labels')
 
     def get_edit_label(self):
         key = self.request.get('key')
         label = models.LabelDAO.load(key)
 
         if not label:
-            raise Exception('No label found')
-        self.render_page(self.lme_prepare_template(key=key),
-                         'assets', 'labels')
+            self.error(404)
+            return
+        self.render_page(
+            self.lme_prepare_template(key=key), in_action='edit_labels')
 
 
-class LabelRestHandler(dto_editor.BaseDatastoreRestHandler):
+class TrackManagerAndEditor(dto_editor.BaseDatastoreAssetEditor):
+    def tme_prepare_template(self, key):
+        return {
+            'page_title': self.format_title('Edit Track'),
+            'main_content': self.get_form(
+                TrackRestHandler, key,
+                dashboard_utils.build_assets_url('edit_tracks'))
+        }
 
-    URI = '/rest/label'
+    def get_add_track(self):
+        self.render_page(
+            self.tme_prepare_template(''), in_action='edit_tracks')
 
-    REQUIRED_MODULES = [
-        'gcb-rte', 'inputex-radio', 'inputex-string', 'inputex-number',
-        'inputex-hidden', 'inputex-uneditable']
+    def get_edit_track(self):
+        key = self.request.get('key')
+        label = models.LabelDAO.load(key)
+
+        if not label:
+            self.error(404)
+            return
+        self.render_page(
+            self.tme_prepare_template(key=key), in_action='edit_tracks')
+
+
+class AbstractLabelRestHandler(dto_editor.BaseDatastoreRestHandler):
+
     EXTRA_JS_FILES = []
 
     XSRF_TOKEN = 'label-edit'
@@ -62,40 +82,25 @@ class LabelRestHandler(dto_editor.BaseDatastoreRestHandler):
     DAO = models.LabelDAO
 
     @classmethod
-    def get_schema(cls):
-        schema = schema_fields.FieldRegistry('Label', 'label')
+    def get_templated_schema(
+            cls, title, title_description, description_description):
+        schema = schema_fields.FieldRegistry(title, 'label')
         schema.add_property(schema_fields.SchemaField(
             'version', '', 'string', optional=True, hidden=True))
         schema.add_property(schema_fields.SchemaField(
-            'id', 'ID', 'string', optional=True, editable=False))
+            'id', 'ID', 'string', editable=False, hidden=True, optional=True))
         schema.add_property(schema_fields.SchemaField(
-            'title', 'Title', 'string'))
+            'title', 'Title', 'string',
+            description=title_description))
         schema.add_property(schema_fields.SchemaField(
             'description', 'Description', 'string', optional=True,
-            description='A brief statement outlining similarities among '
-            'items marked with this label.'))
-        schema.add_property(schema_fields.SchemaField(
-            'type', 'Type', 'integer',
-            description='The purpose for which this label will be used. '
-            'E.g., <b>Course Track</b> labels are used to match to labels on '
-            'students to select which units the student will see when '
-            'taking the course. <b>Locale</b> labels are automatically '
-            'created by the system and are used to select content applicable '
-            'to a specific language and/or country. More types of label will '
-            'be added as more features are added.',
-            select_data=[
-                (lt.type, lt.title) for lt in (
-                    models.LabelDTO.USER_EDITABLE_LABEL_TYPES)],
-            extra_schema_dict_values={
-                '_type': 'radio',
-                'className': 'label-selection'}))
+            description=description_description))
         return schema
 
     def sanitize_input_dict(self, json_dict):
         json_dict['id'] = None
         json_dict['title'] = json_dict['title'].strip()
         json_dict['description'] = json_dict['description'].strip()
-        json_dict['type'] = int(json_dict['type'])
 
     def validate(self, label_dict, key, version, errors):
         # Only one version currently supported, and version has already
@@ -103,20 +108,6 @@ class LabelRestHandler(dto_editor.BaseDatastoreRestHandler):
         self._validate_10(label_dict, key, errors)
 
     def _validate_10(self, label_dict, key, errors):
-        existing_label = models.LabelDAO.load(key)
-        for label in models.LabelDTO.SYSTEM_EDITABLE_LABEL_TYPES:
-            # prevent adding
-            if label.type == label_dict['type']:
-                errors.append(
-                    'Unable to add system-managed label '
-                    'type %s.' % label.type)
-            # prevent edit
-            if existing_label:
-                if label.type == existing_label.type:
-                    errors.append(
-                        'Unable to edit system-managed label '
-                        'type %s.' % label.type)
-
         for label in models.LabelDAO.get_all():
             if (label.title == label_dict['title'] and
                 (not key or label.id != long(key))):
@@ -139,7 +130,34 @@ class LabelRestHandler(dto_editor.BaseDatastoreRestHandler):
     def get_default_content(self):
         return {
             'version': self.SCHEMA_VERSIONS[0],
-            'title': 'New Label',
+            'title': self.DEFAULT_TITLE,
             'description': '',
-            'type': models.LabelDTO.LABEL_TYPE_GENERAL,
-            }
+        }
+
+    def transform_after_editor_hook(self, data):
+        data['type'] = self.LABEL_TYPE
+        return data
+
+
+class LabelRestHandler(AbstractLabelRestHandler):
+    URI = '/rest/label'
+    DEFAULT_TITLE = 'New Label'
+    LABEL_TYPE = models.LabelDTO.LABEL_TYPE_GENERAL
+
+    @classmethod
+    def get_schema(cls):
+        return cls.get_templated_schema(
+            'Label', messages.LABELS_TITLE_DESCRIPTION,
+            messages.LABELS_DESCRIPTION_DESCRIPTION)
+
+
+class TrackRestHandler(AbstractLabelRestHandler):
+    URI = '/rest/track'
+    DEFAULT_TITLE = 'New Track'
+    LABEL_TYPE = models.LabelDTO.LABEL_TYPE_COURSE_TRACK
+
+    @classmethod
+    def get_schema(cls):
+        return cls.get_templated_schema(
+            'Track', messages.TRACKS_TITLE_DESCRIPTION,
+            messages.TRACKS_DESCRIPTION_DESCRIPTION)

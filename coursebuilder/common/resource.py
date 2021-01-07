@@ -119,7 +119,7 @@ class AbstractResourceHandler(object):
 
           resource: Whatever is returned from get_resource() (q.v.)
         Returns:
-          A *relative* URL.  E.g., dashboard?action=foo&tab=bar Such a
+          A *relative* URL.  E.g., dashboard?action=foo_bar Such a
           URL can be placed unmmodified on a page which has been set
           up with the default URL prefix pointing to the namespace for
           the current course.
@@ -138,7 +138,7 @@ class AbstractResourceHandler(object):
           key: A small fact (string or integer, typically) representing
               the primary key for the desired instance.
         Returns:
-          A *relative* URL.  E.g., dashboard?action=foo&tab=bar Such a
+          A *relative* URL.  E.g., dashboard?action=foo_bar Such a
           URL can be placed unmmodified on a page which has been set
           up with the default URL prefix pointing to the namespace for
           the current course.
@@ -167,6 +167,12 @@ class Registry(object):
         cls._RESOURCE_HANDLERS[type_name] = resource_handler
 
     @classmethod
+    def unregister(cls, resource_handler):
+        type_name = resource_handler.TYPE
+        if type_name in cls._RESOURCE_HANDLERS:
+            del cls._RESOURCE_HANDLERS[type_name]
+
+    @classmethod
     def get(cls, name):
         if not cls.is_valid_name(name):
             raise ValueError('Unknown resource type: %s' % name)
@@ -185,6 +191,8 @@ class Key(object):
     manages serialization/deserialization as strings.
     """
 
+    SEPARATOR = ':'
+
     def __init__(self, type_str, key, course=None):
         self._type = type_str
         self._key = key
@@ -193,7 +201,10 @@ class Key(object):
             'Unknown resource type: %s' % type_str)
 
     def __str__(self):
-        return '%s:%s' % (self._type, self._key)
+        return '%s%s%s' % (self._type, self.SEPARATOR, self._key)
+
+    def __repr__(self):
+        return "<{} {}>".format(self.__class__.__name__, str(self))
 
     @property
     def type(self):
@@ -205,7 +216,7 @@ class Key(object):
 
     @classmethod
     def fromstring(cls, key_str):
-        index = key_str.index(':')
+        index = key_str.index(cls.SEPARATOR)
         return Key(key_str[:index], key_str[index + 1:])
 
     def get_resource(self, course):

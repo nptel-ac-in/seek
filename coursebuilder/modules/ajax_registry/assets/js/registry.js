@@ -1,20 +1,4 @@
 /**
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-/**
  * @fileoverview Utility to add AJAX handler to pages.
  */
 
@@ -30,6 +14,15 @@ function updateInnerHTML(elmId, value) {
 function updateValue(elmId, value) {
   element(elmId).value = value;
 }
+
+function parseAjaxResponse(s) {
+  // console.log(s);
+  var xssiPrefix = ")]}'";
+  if (s)
+  return JSON.parse(String(s).replace(xssiPrefix, ''));
+  else return;
+}
+
 
 function getSelectValue(id) {
   var selectEl = element(id);
@@ -69,9 +62,15 @@ function installFunction(end_point, functionName, callback, xsrf_token) {
       type: type,
       async: async,
       data: data,
-      dataType: 'json',
-      success: callback,
-      error: my_error,
+      dataType:"text",
+      success: function(data){
+        json_data = parseAjaxResponse(data);
+        callback(json_data);
+      },
+      error: function (request, status, error) {
+        console.log(status);
+        console.log(error);
+      }
     });
   };
 }

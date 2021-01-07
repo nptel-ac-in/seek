@@ -19,6 +19,7 @@ __authors__ = [
     'Rishav Thakker (rthakker@google.com)'
 ]
 
+import logging
 import jinja2
 import os
 import datetime
@@ -28,13 +29,36 @@ from google.appengine.ext import db
 from models import roles
 from models import transforms
 from models import models
-from controllers import utils
 from modules.watch_time import record_watchtime
 
 from modules.student_list import base
+from modules.student_list import handlers
 
-class StudentListDashboardHandler(base.StudentListBase):
+class StudentListDashboardHandler(base.StudentListBase,
+                                  handlers.InteractiveTableHandler):
     """Handler for Student List"""
+
+    SEARCH_STR_PARAM = 'email'
+    DEFAULT_ORDER = 'email'
+
+    # TODO(rthakker) make search by user_id default.
+    # Also need to edit the templates accordingly.
+    # if not search_str:
+    #     search_str = handler.request.get('email')
+    #     get_by_search_str_fn = models.StudentProfileDAO.get_profile_by_email
+
+    @classmethod
+    def get_by_search_str(cls, email):
+        obj, unique = models.Student.get_first_by_email(email)
+        if not unique:
+            logging.error('Multiple students with email: %s', email)
+        return obj
+
+    @classmethod
+    def run_query(cls, cursor=None):
+        if cursor:
+            return db.Query(models.Student, cursor=cursor)
+        return db.Query(models.Student)
 
     @classmethod
     def display_html(cls, handler):
@@ -46,97 +70,41 @@ class StudentListDashboardHandler(base.StudentListBase):
         course = handler.get_course()
         if not course:
             handler.error(404)
-            return 'Course not found'
-
-        try:
-            cursor = handler.request.get('cursor')
-            old_cursor = handler.request.get('old_cursor')
-            no_of_entries = int(handler.request.get('num', '50'))
-            reverse_query = handler.request.get('reverse_query')
-        except ValueError:
-            handler.error(400)
-            return 'Invalid parameters `start` and `num`'
-
-        order = handler.request.get('order', 'email')
-        # Since email is the key name, and we don't want the url to look like
-        # &order=__key__, we replace 'email' with '__key__' when required.
-        if order == 'email':
-            order = '__key__'
-        elif order == '-email':
-            order = '-__key__'
-
-        email = handler.request.get('email')
+            handler.render_page({
+                'page_title': cls.NAME,
+                'main_content': 'Course not found'
+            })
+            return
 
         template_value = dict()
 
-        # Get a list of students
-        students = None
-        students_query = None
-        new_cursor = None
-        if email:
-            # Settings offset and no_of_entries manually
-            no_of_entries = 1
-            student = models.Student.get_by_email(email)
-            if student:
-                students = [student]
-            else:
-                students = []
+        cls.LIST_ACTION = handler.get_action_url(
+            cls.DASHBOARD_CATEGORY + '_' + cls.DASHBOARD_NAV)
+        cls.DETAILS_ACTION = handler.get_action_url(
+            cls.DETAILS_ACTION)
 
-            template_value['search_email_query'] = email
-            template_value['last_page'] = True
-        else:
-            try:
-                students_query = None
-                if cursor:
-                    students_query = db.Query(models.Student, cursor=cursor)
-                else:
-                    students_query = db.Query(models.Student)
-
-                if reverse_query:
-                    students_query = students_query.order(
-                        cls.get_reverse_order(order))
-                else:
-                    students_query = students_query.order(order)
-
-                students = students_query.fetch(no_of_entries)
-
-                if reverse_query:
-                    students.reverse()
-                    new_cursor = cursor
-                    cursor = students_query.cursor()
-                else:
-                    new_cursor = students_query.cursor()
-
-            except db.PropertyError:
-                handler.error(400)
-                return 'Invalid order by parameters'
-
-        template_value['students'] = students
+        if not cls.generate_table(handler, template_value):
+            handler.error(400)
+            handler.render_page({
+                'page_title': cls.NAME,
+                'main_content': 'Invalid parameters'
+            })
+            return
 
         # parse the student scores
         template_value['student_scores_list'] = []
-        for student in students:
+        for student in template_value['objects']:
             scores = {}
             if student.scores:
                 scores = transforms.loads(student.scores)
             template_value['student_scores_list'].append(scores)
-
-        template_value['new_cursor'] = new_cursor
-        template_value['cursor'] = cursor
-        template_value['no_of_entries'] = no_of_entries
-        template_value['order'] = order.replace('-', '').replace(
-            '__key__', 'email')
-        template_value['invert_order'] = order[0] == '-'
 
 
         # List of all units
         units = course.get_units()
         template_value['units'] = units
 
-        template_value['list_action'] = handler.get_action_url(
-            cls.DASHBOARD_NAV) + '&tab=' + cls.DASHBOARD_TAB
-        template_value['details_action'] = handler.get_action_url(
-            cls.DETAILS_ACTION)
+
         template_value['enroll_action'] = handler.get_action_url(
             cls.ENROLL_ACTION)
         template_value['enroll_xsrf'] = handler.create_xsrf_token(
@@ -228,7 +196,7 @@ class StudentListDashboardHandler(base.StudentListBase):
             template_value['watch_time'] = watch_time_dict
 
         template_value['back_action'] = handler.get_action_url(
-            cls.DASHBOARD_NAV)
+            cls.DASHBOARD_CATEGORY + '_' + cls.DASHBOARD_NAV)
         template_value['enroll_action'] = handler.get_action_url(
             cls.ENROLL_ACTION)
         template_value['unenroll_action'] = handler.get_action_url(
@@ -246,8 +214,7 @@ class StudentListDashboardHandler(base.StudentListBase):
         handler.render_page({
             'page_title': handler.format_title(cls.NAME),
             'main_content': content},
-            in_action=cls.DASHBOARD_NAV,
-            in_tab=cls.DASHBOARD_TAB)
+            in_action=cls.DASHBOARD_NAV)
 
     @classmethod
     def post_enroll(cls, handler):
@@ -287,8 +254,7 @@ class StudentListDashboardHandler(base.StudentListBase):
             'page_title': handler.format_title(cls.NAME),
             'main_content': ('Successfully enrolled student %s'
                              % profile.email)},
-            in_action=cls.DASHBOARD_NAV,
-            in_tab=cls.DASHBOARD_TAB)
+            in_action=cls.DASHBOARD_NAV)
 
     @classmethod
     def post_unenroll(cls, handler):
@@ -327,5 +293,4 @@ class StudentListDashboardHandler(base.StudentListBase):
             'page_title': handler.format_title(cls.NAME),
             'main_content': ('Successfully unenrolled student %s'
                              % student.email)},
-            in_action=cls.DASHBOARD_NAV,
-            in_tab=cls.DASHBOARD_TAB)
+            in_action=cls.DASHBOARD_NAV)

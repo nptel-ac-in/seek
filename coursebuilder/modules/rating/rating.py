@@ -24,15 +24,16 @@ import jinja2
 import appengine_config
 from common import schema_fields
 from common import tags
-from controllers import lessons
+from common import users
 from controllers import utils
 from models import courses
 from models import custom_modules
+from models import data_removal
 from models import data_sources
 from models import models
 from models import transforms
-
-from google.appengine.api import users
+from modules.courses import lessons
+from modules.rating import messages
 
 RESOURCES_PATH = '/modules/rating/resources'
 
@@ -54,12 +55,11 @@ class StudentRatingProperty(models.StudentPropertyEntity):
     PROPERTY_NAME = 'student-rating-property'
 
     @classmethod
-    def load_or_create(cls, student):
+    def load_or_default(cls, student):
         entity = cls.get(student, cls.PROPERTY_NAME)
         if entity is None:
             entity = cls.create(student, cls.PROPERTY_NAME)
             entity.value = '{}'
-            entity.put()
         return entity
 
     def get_rating(self, key):
@@ -109,7 +109,7 @@ class RatingHandler(utils.BaseRESTHandler):
             transforms.send_json_response(self, 401, access_denied_msg, {})
             return (None, None)
 
-        student = models.Student.get_enrolled_student_by_email(user.email())
+        student = models.Student.get_enrolled_student_by_user(user)
         if student is None:
             transforms.send_json_response(self, 401, access_denied_msg, {})
             return (None, None)
@@ -122,7 +122,7 @@ class RatingHandler(utils.BaseRESTHandler):
             return
 
         key = payload.get('key')
-        prop = StudentRatingProperty.load_or_create(student)
+        prop = StudentRatingProperty.load_or_default(student)
         rating = prop.get_rating(key)
 
         payload_dict = {
@@ -142,7 +142,7 @@ class RatingHandler(utils.BaseRESTHandler):
         additional_comments = payload.get('additional_comments')
 
         if rating is not None:
-            prop = StudentRatingProperty.load_or_create(student)
+            prop = StudentRatingProperty.load_or_default(student)
             prop.set_rating(key, rating)
             prop.put()
 
@@ -260,16 +260,12 @@ def _rating__is_enabled_in_course_settings(app_context):
     return env .get('unit', {}).get('ratings_module', {}).get('enabled')
 
 
-def extra_content(app_context):
+def extra_content(app_context, course, unit, lesson, assessment,
+                  student_view, student):
     if not _rating__is_enabled_in_course_settings(app_context):
         return None
-
-    user = users.get_current_user()
-    if user is None or (
-        models.Student.get_enrolled_student_by_email(user.email()) is None
-    ):
+    if not student or student.is_transient:
         return None
-
     template_data = {
         'xsrf_token': utils.XsrfTokenManager.create_xsrf_token(XSRF_TOKEN_NAME)
     }
@@ -281,9 +277,8 @@ def extra_content(app_context):
 
 def get_course_settings_fields(unused_course):
     return schema_fields.SchemaField(
-        'unit:ratings_module:enabled', 'Ratings widget', 'boolean',
-        description='Whether to show user rating widget at the bottom of '
-        'each unit and lesson.')
+        'unit:ratings_module:enabled', 'Show Ratings Widget', 'boolean',
+        description=messages.SHOW_RATINGS_WIDGET, optional=True)
 
 
 def register_module():
@@ -294,6 +289,10 @@ def register_module():
         ].append(get_course_settings_fields)
         lessons.UnitHandler.EXTRA_CONTENT.append(extra_content)
         data_sources.Registry.register(RatingEventDataSource)
+        data_removal.Registry.register_indexed_by_user_id_remover(
+            StudentRatingProperty.delete_by_user_id_prefix)
+        data_removal.Registry.register_unindexed_entity_class(
+            StudentRatingEvent)
 
     global_routes = [
         (os.path.join(RESOURCES_PATH, 'js', '.*'), tags.JQueryHandler),

@@ -16,16 +16,20 @@
 
 __author__ = 'John Orr (jorr@google.com)'
 
-import copy
-
 from common import schema_fields
+from common.crypto import XsrfTokenManager
+from common import tags
+from common import utils as common_utils
 from models import roles
 from models import transforms
 from models import models
 from models import resources_display
+from models import services
+from models import courses
 from modules.assessment_tags import gift
 from modules.dashboard import dto_editor
 from modules.dashboard import utils as dashboard_utils
+from modules.dashboard import messages
 
 
 class QuestionManagerAndEditor(dto_editor.BaseDatastoreAssetEditor):
@@ -37,24 +41,24 @@ class QuestionManagerAndEditor(dto_editor.BaseDatastoreAssetEditor):
         template_values['page_title'] = self.format_title('Edit Question')
         template_values['main_content'] = self.get_form(
             rest_handler, key,
-            dashboard_utils.build_assets_url('questions'),
+            dashboard_utils.build_assets_url('edit_questions'),
             auto_return=auto_return)
 
         return template_values
 
     def get_add_mc_question(self):
         self.render_page(self.qmae_prepare_template(McQuestionRESTHandler),
-                         'assets', 'questions')
+                         in_action='edit_questions')
 
     def get_add_sa_question(self):
         self.render_page(self.qmae_prepare_template(SaQuestionRESTHandler),
-                         'assets', 'questions')
+                         in_action='edit_questions')
 
     def get_import_gift_questions(self):
         self.render_page(
             self.qmae_prepare_template(
                 GiftQuestionRESTHandler, auto_return=True),
-            'assets', 'questions')
+            in_action='edit_questions')
 
     def get_edit_question(self):
         key = self.request.get('key')
@@ -66,11 +70,11 @@ class QuestionManagerAndEditor(dto_editor.BaseDatastoreAssetEditor):
         if question.type == models.QuestionDTO.MULTIPLE_CHOICE:
             self.render_page(
                 self.qmae_prepare_template(McQuestionRESTHandler, key=key),
-                'assets', 'questions')
+                in_action='edit_questions')
         elif question.type == models.QuestionDTO.SHORT_ANSWER:
             self.render_page(
                 self.qmae_prepare_template(SaQuestionRESTHandler, key=key),
-                'assets', 'questions')
+                in_action='edit_questions')
         else:
             raise Exception('Unknown question type: %s' % question.type)
 
@@ -80,9 +84,26 @@ class QuestionManagerAndEditor(dto_editor.BaseDatastoreAssetEditor):
         cloned_question.description += ' (clone)'
         models.QuestionDAO.save(cloned_question)
 
+    def get_question_preview(self):
+        # Enable check answers in question preview
+        self.template_value['check_answers'] = True
+
+        template_values = {}
+        template_values['gcb_course_base'] = self.get_base_href(self)
+        template_values['question'] = tags.html_to_safe_dom(
+            '<question quid="{}">'.format(self.request.get('quid')), self)
+        self.response.write(self.get_template(
+            'question_preview.html').render(template_values))
+
 
 class BaseQuestionRESTHandler(dto_editor.BaseDatastoreRestHandler):
     """Common methods for handling REST end points with questions."""
+
+    SCHEMA_LOAD_HOOKS = []
+
+    PRE_LOAD_HOOKS = []
+
+    PRE_SAVE_HOOKS = []
 
     def sanitize_input_dict(self, json_dict):
         json_dict['description'] = json_dict['description'].strip()
@@ -108,16 +129,50 @@ class BaseQuestionRESTHandler(dto_editor.BaseDatastoreRestHandler):
             errors.append(
                 'The description must be different from existing questions.')
 
+    def validate_if_unit_is_locked(self, item_dict, key, errors):
+        if key is None or key == "":
+            pass
+        else:
+            course = courses.Course.get(self.app_context);
+            used_by_groups = models.QuestionDAO.used_by(key)
+            location_maps = course.get_component_locations()
+            (qulocations_map, qglocations_map) = location_maps
+            qulocations = qulocations_map.get(int(key), None)
+            assessments = qulocations['assessments'] if qulocations and qulocations.has_key('assessments') else {}
+
+            for assessment, value in assessments.iteritems():
+                if assessment.is_locked:
+                    error_msg = "You can't edit this question as its part of locked Assessment - %s" % (assessment.title)
+                    print error_msg
+                    errors.append(error_msg)
+                else:
+                    pass
+
+            for group in used_by_groups:
+                qglocations = qglocations_map.get(group.id, None)
+                assessments = qglocations['assessments'] if qglocations and qglocations.has_key('assessments') else {}
+
+                for assessment, value in assessments.iteritems():
+                    if assessment.is_locked:
+                        error_msg = "You can't edit this question as its part of locked Assessment - %s - Group %s" % (assessment.title, group.description)
+                        print error_msg
+                        errors.append(error_msg)
+                    else:
+                        pass
+
+
 
 class McQuestionRESTHandler(BaseQuestionRESTHandler):
     """REST handler for editing multiple choice questions."""
 
     URI = '/rest/question/mc'
 
-    REQUIRED_MODULES = [
-        'array-extras', 'gcb-rte', 'inputex-radio', 'inputex-select',
-        'inputex-string', 'inputex-list', 'inputex-number', 'inputex-hidden']
-    EXTRA_JS_FILES = ['mc_question_editor_lib.js', 'mc_question_editor.js']
+    EXTRA_REQUIRED_MODULES = ['array-extras']
+    EXTRA_JS_FILES = [
+        'question_editor_lib.js', 'mc_question_editor_lib.js',
+        'mc_question_editor.js']
+
+    ADDITIONAL_DIRS = []
 
     XSRF_TOKEN = 'mc-question-edit'
 
@@ -127,30 +182,22 @@ class McQuestionRESTHandler(BaseQuestionRESTHandler):
 
     @classmethod
     def get_schema(cls):
-        return resources_display.ResourceMCQuestion.get_schema(
+        question_schema = resources_display.ResourceMCQuestion.get_schema(
             course=None, key=None)
+        common_utils.run_hooks(cls.SCHEMA_LOAD_HOOKS, question_schema)
+        return question_schema
 
     def pre_save_hook(self, question):
         question.type = models.QuestionDTO.MULTIPLE_CHOICE
-
-    def transform_for_editor_hook(self, q_dict):
-        p_dict = copy.deepcopy(q_dict)
-        # InputEx does not correctly roundtrip booleans, so pass strings
-        p_dict['multiple_selections'] = (
-            'true' if q_dict.get('multiple_selections') else 'false')
-        return p_dict
 
     def get_default_content(self):
         return {
             'version': self.SCHEMA_VERSIONS[0],
             'question': '',
             'description': '',
-            'multiple_selections': 'false',
+            'multiple_selections': False,
             'choices': [
-                {'score': '1', 'text': '', 'feedback': ''},
-                {'score': '0', 'text': '', 'feedback': ''},
-                {'score': '0', 'text': '', 'feedback': ''},
-                {'score': '0', 'text': '', 'feedback': ''}
+                {'score': '1', 'text': '', 'feedback': ''}
             ]}
 
     def validate(self, question_dict, key, version, errors):
@@ -159,11 +206,12 @@ class McQuestionRESTHandler(BaseQuestionRESTHandler):
         self._validate15(question_dict, key, errors)
 
     def _validate15(self, question_dict, key, errors):
+        self.validate_if_unit_is_locked(question_dict, key, errors)
         if not question_dict['question'].strip():
-            errors.append('The question must have a non-empty body.')
+            errors.append('The question can\'t be blank.')
 
         if not question_dict['description']:
-            errors.append('The description must be non-empty.')
+            errors.append('The description can\'t be blank.')
 
         self.validate_no_description_collision(
             question_dict['description'], key, errors)
@@ -191,8 +239,14 @@ class SaQuestionRESTHandler(BaseQuestionRESTHandler):
 
     REQUIRED_MODULES = [
         'gcb-rte', 'inputex-select', 'inputex-string', 'inputex-list',
-        'inputex-hidden', 'inputex-integer', 'inputex-textarea']
-    EXTRA_JS_FILES = []
+        'inputex-hidden', 'inputex-integer', 'inputex-textarea',
+        'inputex-number']
+
+    EXTRA_JS_FILES = [
+        'question_editor_lib.js', 'sa_question_editor.js',
+        'sa_question_editor_lib.js']
+
+    ADDITIONAL_DIRS = []
 
     XSRF_TOKEN = 'sa-question-edit'
 
@@ -202,8 +256,10 @@ class SaQuestionRESTHandler(BaseQuestionRESTHandler):
 
     @classmethod
     def get_schema(cls):
-        return resources_display.ResourceSAQuestion.get_schema(
+        question_schema = resources_display.ResourceSAQuestion.get_schema(
             course=None, key=None)
+        common_utils.run_hooks(cls.SCHEMA_LOAD_HOOKS, question_schema)
+        return question_schema
 
     def pre_save_hook(self, question):
         question.type = models.QuestionDTO.SHORT_ANSWER
@@ -225,11 +281,12 @@ class SaQuestionRESTHandler(BaseQuestionRESTHandler):
         self._validate15(question_dict, key, errors)
 
     def _validate15(self, question_dict, key, errors):
+        self.validate_if_unit_is_locked(question_dict, key, errors)
         if not question_dict['question'].strip():
-            errors.append('The question must have a non-empty body.')
+            errors.append('The question can\'t be blank.')
 
         if not question_dict['description']:
-            errors.append('The description must be non-empty.')
+            errors.append('The description can\'t be blank.')
 
         self.validate_no_description_collision(
             question_dict['description'], key, errors)
@@ -261,6 +318,22 @@ class SaQuestionRESTHandler(BaseQuestionRESTHandler):
                 in resources_display.ResourceSAQuestion.GRADER_TYPES]
             if not grader['response'].strip():
                 errors.append('Answer %s has no response text.' % (index + 1))
+            if grader['matcher'] == 'numeric' :
+                try:
+                    float(grader['response'].strip())
+                except ValueError:
+                    errors.append('Answer %s is not numeric.' % (index + 1))
+            if grader['matcher'] == 'range_match':
+                start,end = grader['response'].split(",")
+                if start and end:
+                    try:
+                        float(start.strip())
+                        float(end.strip())
+                    except ValueError:
+                        errors.append('Answer %s Range value is not numeric.' % (index + 1))
+                else:
+                    errors.append('Answer %s invalid range format.' % (index + 1))
+
             try:
                 float(grader['score'])
             except ValueError:
@@ -273,8 +346,6 @@ class GiftQuestionRESTHandler(dto_editor.BaseDatastoreRestHandler):
 
     URI = '/rest/question/gift'
 
-    REQUIRED_MODULES = [
-        'inputex-string', 'inputex-hidden', 'inputex-textarea']
     EXTRA_JS_FILES = []
 
     XSRF_TOKEN = 'import-gift-questions'
@@ -290,15 +361,15 @@ class GiftQuestionRESTHandler(dto_editor.BaseDatastoreRestHandler):
         gift_questions.add_property(schema_fields.SchemaField(
             'version', '', 'string', optional=True, hidden=True))
         gift_questions.add_property(schema_fields.SchemaField(
-            'description', 'Description', 'string', optional=True,
+            'description', 'Question Group Description', 'string',
+            optional=True,
+            description=messages.GIFT_GROUP_DESCRIPTION_DESCRIPTION,
             extra_schema_dict_values={'className': 'gift-description'}))
         gift_questions.add_property(schema_fields.SchemaField(
-            'questions', 'Questions', 'text', optional=True,
-            description=(
-                'List of <a href="https://docs.moodle.org/23/en/GIFT_format" '
-                'target="_blank"> GIFT question-types</a> supported by Course '
-                'Builder: Multiple choice, True-false, Short answer, and '
-                'Numerical.'),
+            'questions', 'Questions', 'text',
+            description=services.help_urls.make_learn_more_message(
+                messages.GIFT_QUESTIONS_DESCRIPTION,
+                'dashboard:gift_questions:questions'),
             extra_schema_dict_values={'className': 'gift-questions'}))
         return gift_questions
 
@@ -365,12 +436,14 @@ class GiftQuestionRESTHandler(dto_editor.BaseDatastoreRestHandler):
             questions = gift.GiftParser.parse_questions(
                 python_dict['questions'])
             self.validate_question_descriptions(questions, errors)
-            self.validate_group_description(
-                python_dict['description'], errors)
+            description = python_dict['description']
+            if description:
+                self.validate_group_description(description, errors)
             if not errors:
                 dtos = self.convert_to_dtos(questions)
                 question_ids = models.QuestionDAO.save_all(dtos)
-                self.create_group(python_dict['description'], question_ids)
+                if description:
+                    self.create_group(description, question_ids)
         except ValueError as e:
             errors.append(str(e))
         except gift.ParseError as e:
@@ -384,3 +457,56 @@ class GiftQuestionRESTHandler(dto_editor.BaseDatastoreRestHandler):
         msg = 'Saved: %s.' % python_dict['description']
         transforms.send_json_response(self, 200, msg)
         return
+
+
+class GeneralQuestionRESTHandler(BaseQuestionRESTHandler):
+    """REST handler for editing questions of any type."""
+
+    URI = '/rest/question/all'
+
+    def get(self):
+        key = self.request.get('key')
+        if not roles.Roles.is_course_admin(self.app_context):
+            transforms.send_json_response(
+                self, 401, 'Access denied.', {'key': key})
+            return
+
+        if key:
+            question_dto = models.QuestionDAO.load(key)
+            if question_dto.type == models.QuestionDTO.MULTIPLE_CHOICE:
+                mc_dict = question_dto.dict
+                sa_dict = SaQuestionRESTHandler().get_default_content()
+                qu_type = 'mc'
+            elif question_dto.type == models.QuestionDTO.SHORT_ANSWER:
+                mc_dict = McQuestionRESTHandler().get_default_content()
+                sa_dict = question_dto.dict
+                qu_type = 'sa'
+            else:
+                raise ValueError(
+                    'Unrecognized question type ' + question_dto.type)
+        else:
+            mc_dict = McQuestionRESTHandler().get_default_content()
+            sa_dict = SaQuestionRESTHandler().get_default_content()
+            qu_type = None
+
+        question_dict = {
+            'quid': key,
+            'qu_type': qu_type,
+            'mc_tab': mc_dict,
+            'sa_tab': sa_dict,
+            'select_tab': {
+                'quid': key
+            }
+        }
+
+        xsrf_token_dict = {
+            'mc_tab': XsrfTokenManager.create_xsrf_token(
+                McQuestionRESTHandler.XSRF_TOKEN),
+            'sa_tab': XsrfTokenManager.create_xsrf_token(
+                SaQuestionRESTHandler.XSRF_TOKEN)
+        }
+
+        transforms.send_json_response(
+            self, 200, 'Success',
+            payload_dict=question_dict,
+            xsrf_token=transforms.dumps(xsrf_token_dict))

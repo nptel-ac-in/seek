@@ -137,15 +137,15 @@ class OfflineAssignmentHandler(BaseHandler,
                 student.email, course, assessment_id, 'Unit not found'))
             return False
 
-        if cls.has_deadline_passed(unit):
+        if not cls.has_deadline_passed(unit):
             errors.append(error_str % (
-                student.email, course._namespace, assessment_id, 'Deadline Passed'))
+                student.email, course._namespace, assessment_id, 'Can update only after deadline'))
             return False
 
         submit_only_once = unit.workflow.submit_only_once()
         already_submitted = False
         submitted_contents = cls.get_student_answer(unit, student)
-        if submitted_contents and submitted_contents['submitted']:
+        if submitted_contents and submitted_contents.get('submitted'):
             already_submitted = True
         if submit_only_once and already_submitted:
             errors.append(error_str % (
@@ -173,7 +173,7 @@ class OfflineAssignmentHandler(BaseHandler,
 
         csv list should be of the following format:
         [
-            [email, assessment_id, score],
+            [user_id, assessment_id, score],
             .
             .
         ]
@@ -183,7 +183,7 @@ class OfflineAssignmentHandler(BaseHandler,
         students = []
 
         student_ids = [entry[0].strip() for entry in csv_list]
-        students = models.StudentProfileDAO.bulk_get_student_by_email(
+        students = models.StudentProfileDAO.bulk_get_student_by_id(
             student_ids)
         modified_students = []
 
@@ -237,7 +237,7 @@ class OfflineAssignmentHandler(BaseHandler,
 
         csv_list should be a dict of the following format:
         [
-            [namespace1, email, assessment_id, score],
+            [namespace1, user_id, assessment_id, score],
             .
             .
         ]

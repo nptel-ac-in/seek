@@ -1,0 +1,16 @@
+registration:
+  main_module: modules.course_staff.register
+
+files:
+  - modules/course_staff/__init__.py
+  - modules/course_staff/base.py
+  - modules/course_staff/course_staff.html
+  - modules/course_staff/course_staff.py
+  - modules/course_staff/evaluate.py
+  - modules/course_staff/manage.py
+  - modules/course_staff/manifest.yaml
+  - modules/course_staff/navbar.html
+  - modules/course_staff/register.py
+  - modules/course_staff/summary.html
+  - modules/course_staff/templates/course_staff_list.html
+  - modules/course_staff/templates/custom_action_template.html

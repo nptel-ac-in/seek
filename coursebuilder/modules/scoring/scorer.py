@@ -14,7 +14,8 @@
 
 """Module for scoring assessments."""
 
-__author__ = 'abhinavk@google.com (Abhinav Khandelwal)'
+__author__ = ['abhinavk@google.com (Abhinav Khandelwal)',
+'sagarkothari@google.com (Sagar Kothari)']
 
 import logging
 import re
@@ -44,14 +45,38 @@ def check_regex(user_response, correct_answer):
     res = re.match(regexp, user_response, flags=flags)
     return res is not None
 
+def extract_digits(str):
+    num=''
+    dotcnt=0
+    for i in range(len(str)):
+        if i==0 and str[i]=='-':
+            num+=str[i]
+        else:
+            if str[i]=='.' and dotcnt < 1:
+                dotcnt+=1
+                num+=str[i]
+            elif str[i].isdigit():
+                num+=str[i]
+            else:
+                break
+    return num
+
 def check_numeric(user_response, correct_answer):
+    # sanitize user response.
     try:
         return float(user_response) == float(correct_answer)
     except Exception:
-        return False
+        try:
+            return float(extract_digits(user_response)) == float(correct_answer)
+        except Exception:
+            return False
 
 def check_range(user_response, correct_answer):
-    answer_range = correct_answer.split('-');
+    if ',' in correct_answer:
+        answer_range = correct_answer.split(',');
+    else:
+        # Backward compatibility
+        answer_range = correct_answer.split('-');
     val1 = float(answer_range[0])
     val2 = float(answer_range[1])
     if val1 >= val2:
@@ -88,6 +113,8 @@ def get_question_object(node):
         return None
     instanceid = node.attrib.get('instanceid')
     weight = node.attrib.get('weight')
+    if weight is None or weight.strip() == '':
+        weight = '1'
     return {'q' : question, 'weight': weight}
 
 def get_question_group_object(node):
@@ -144,16 +171,31 @@ def get_assement_objects(html_string):
 def score_mc_question(response, question, negative_marking):
     choices = question.dict['choices']
     score = 0
-    for index in range(len(response)):
-        res = response[index]
-        if res:
-            choice = choices[index]
-            if negative_marking is True:
-                score += float(choice['score'])
-            else:
-                if float(choice['score']) < 0.0:
-                    return 0.0
-                score += float(choice['score'])
+    total_score = sum(c['score'] for c in choices if c['score'] > 0)
+    all_or_nothing = question.dict.get('all_or_nothing_grading')
+    if isinstance(response, list):
+        for index in range(len(response)):
+            res = response[index]
+            if res:
+                choice = choices[index]
+                if negative_marking is True:
+                    score += float(choice['score'])
+                else:
+                    if float(choice['score']) < 0.0:
+                        return 0.0
+                    score += float(choice['score'])
+    elif isinstance(response, dict):
+        for index, res in enumerate(response['responses']):
+            if res:
+                choice = choices[index]
+                if negative_marking is True:
+                    score += float(choice['score'])
+                else:
+                    if float(choice['score']) < 0.0:
+                        return 0.0
+                    score += float(choice['score'])
+    if all_or_nothing and score != total_score:
+        return 0.0
     return score
 
 def score_sa_question(response, question):
@@ -173,7 +215,14 @@ def score_sa_question(response, question):
         elif matcher == 'range_match':
             matched = check_range(user_response, correct_answer)
         if matched:
-            score += float(grader['score'])
+            # ISSUE: https://github.com/abhinaviitb/nptel/issues/238
+            # If there are multiple answers and
+            # If one of them matches. That should be the end.
+            # Doesn't have to check one more right?
+            score = float(grader['score'])
+            break
+
+
     return max(score, 0)
 
 def get_question_for_give_key_ignore_order(questions, key_with_order):

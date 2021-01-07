@@ -28,6 +28,7 @@ from models import custom_modules
 from modules.nptel import analytics
 from modules.nptel import settings
 from modules.nptel import transform
+from modules.nptel import backup
 
 MODULE_NAME = 'NPTEL Library'
 
@@ -54,12 +55,22 @@ def register_module():
     global_routes = [
         ('/modules/nptel/assets/.*', tags.ResourcesHandler),
         ('/modules/nptel/generate_student_report', analytics.GenerateStudentReportHandler),
+        ('/modules/nptel/generate_question_wise_score_dump', analytics.GenerateQuestionWiseScoreDumpHandler),
         ('/modules/nptel/dump_qualified_students', analytics.DumpQualifiedStudents),
         ('/modules/nptel/dump_student_profile', analytics.DumpProfilesHandler),
         ('/modules/nptel/reindex_student_profile', analytics.ReIndexStudentProfileHandler),
+        ('/modules/nptel/reindex_student_profile_map_reduce', analytics.ReIndexPersonalProfileMapReduceHandler),
+        ('/modules/nptel/reindex_course_list_map_reduce', analytics.ReIndexCourseListMapReduceHandler),
+        ('/modules/nptel/port_explorer_fields_map_reduce', analytics.PortExplorerFieldsMapReduceHandler),
         ('/modules/nptel/reindex_pa', transform.ReFormatProgrammingAssignmentsHandler),
         ('/modules/nptel/save_course', analytics.SaveCourseSettingsHandler),
         ('/modules/nptel/all_courses_profile_data_dump', analytics.AllCoursesProfileDumpHandler),
+        ('/modules/nptel/all_courses_mentor_dump', analytics.AllCoursesMentorDumpHandler),
+        ('/modules/nptel/all_courses_student_report', analytics.ComputeStudentReportAllCoursesHandler),
+        ('/modules/nptel/fix_spoc_role_issues', analytics.FixSPOCRoleHandler),
+        ('/modules/nptel/reenroll', analytics.ReEnrollToGroupMapReduceHandler),
+        ('/modules/nptel/videomissing', analytics.VideoIdMissingHandler),
+        ('/modules/nptel/open_courses_backup', backup.OpenCoursesBackupHandler),
     ]
 
     nptel_routes = [

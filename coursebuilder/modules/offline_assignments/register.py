@@ -25,10 +25,10 @@ import appengine_config
 from controllers import sites
 from models import custom_modules
 from models import custom_units
+from modules.admin import admin
 from modules.dashboard import dashboard
 from modules.course_staff import evaluate
 from modules.course_staff import course_staff
-from modules.dashboard import tabs
 from modules.offline_assignments import question
 from modules.offline_assignments import base
 from modules.offline_assignments import assignment
@@ -54,20 +54,12 @@ def import_assignment(src_course, src_unit, dst_course, dst_unit):
 def register_module():
     """Registers this module in the registry."""
 
-    # Course Dashboard
-    tabs.Registry.register(
-        base.OfflineAssignmentBase.DASHBOARD_NAV,
-        base.OfflineAssignmentBase.DASHBOARD_TAB,
-        base.OfflineAssignmentBase.DESCRIPTION,
-        off_ass_dashboard.OfflineAssignmentDashboardHandler)
-
-    dashboard.DashboardHandler.add_custom_get_action(
-        base.OfflineAssignmentBase.DASHBOARD_DEFAULT_ACTION, None)
-
-    dashboard.DashboardHandler.add_nav_mapping(
+    dashboard.DashboardHandler.add_sub_nav_mapping(
+        base.OfflineAssignmentBase.DASHBOARD_CATEGORY,
         base.OfflineAssignmentBase.DASHBOARD_NAV,
         base.OfflineAssignmentBase.NAME,
-    )
+        contents=(off_ass_dashboard.OfflineAssignmentDashboardHandler
+                  .display_html))
     dashboard.DashboardHandler.add_custom_get_action(
         base.OfflineAssignmentBase.OFFLINE_ASSIGNMENT_DETAILS_ACTION,
         off_ass_dashboard.OfflineAssignmentDashboardHandler.get_assignment_scores
@@ -97,6 +89,20 @@ def register_module():
     evaluate.EvaluationHandler.add_custom_post_action(
         offline_course_staff.OfflineAssignmentsCourseStaffBase.POST_SCORE_ACTION,
         offline_course_staff.OfflineAssignmentsCourseStaffHandler.post_score_offline
+    )
+
+    # Global admin view
+    admin.BaseAdminHandler.add_menu_item(
+        base.OfflineAssignmentBase.ADMIN_CATEGORY,
+        base.OfflineAssignmentBase.ADMIN_NAV,
+        base.OfflineAssignmentBase.ADMIN_NAME,
+        action=base.OfflineAssignmentBase.ADMIN_ACTION,
+        sub_group_name=base.OfflineAssignmentBase.ADMIN_SUBGROUP
+    )
+
+    admin.GlobalAdminHandler.add_custom_get_action(
+        base.OfflineAssignmentBase.ADMIN_ACTION,
+        settings.OfflineAssignmentBaseAdminHandler.get_offline_assignment
     )
 
     associated_js_files_handlers = [

@@ -18,7 +18,7 @@ Course authors may specify custom criteria for award of a certificate.
 In order to be invoked, all of the following must all apply:
   * The function name is specified as a custom_criteria field
     in the certificate_criteria group of course.yaml.
-  * The function name is added to the registration_table allowlist below.
+  * The function name is added to the registration_table whitelist below.
   * The function is defined in this module.
 The arguments and return type of the function are described in
 example_custom_criterion below.
@@ -29,12 +29,12 @@ __author__ = 'Glenn De Jonghe (gdejonghe@google.com)'
 
 from models import transforms
 
-# List of str. Holds allowlist of function names which maybe invoked by
+# List of str. Holds whitelist of function names which maybe invoked by
 # the certificate_criteria > custom_criteria fields in course.yaml.
 registration_table = ['example_custom_criterion', 'power_searching_criteria']
 
 
-def example_custom_criterion(unused_student, unused_course):
+def example_custom_criterion(unused_student, unused_course, explanations=None):
     """Example of what a custom criterion function should look like.
 
     Adapt or insert new functions with the same signature for custom criteria.
@@ -49,6 +49,8 @@ def example_custom_criterion(unused_student, unused_course):
         unused_course: modesl.courses.Course. The course which the student is
             enrolled in. Test on this to implement course-specific criteria for
             earning a certificate.
+        explanations: list. Holder for a list of explanatory strings. Typically
+            this will hold explanation of which criteria remain to be be met.
 
     Returns:
         Boolean value indicating whether the student satisfies the criterion.
@@ -56,7 +58,7 @@ def example_custom_criterion(unused_student, unused_course):
     return True
 
 
-def power_searching_criteria(student, unused_course):
+def power_searching_criteria(student, unused_course, explanations=None):
     """Criteria for Power Searching with Google."""
     scores = transforms.loads(student.scores or '{}')
     final_assessment_score = scores.get('Fin', 0)

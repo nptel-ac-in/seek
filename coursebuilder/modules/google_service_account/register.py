@@ -17,6 +17,7 @@
 __author__ = 'Rishav Thakker (rthakker@google.com)'
 
 from models import custom_modules
+from modules.admin import admin
 from modules.dashboard import dashboard
 from modules.google_service_account import base
 from modules.google_service_account import settings
@@ -42,5 +43,13 @@ def register_module():
 
     # Initialize the module
     google_service_account.GoogleServiceManager.initialize_credentials()
+
+    settings.GoogleServiceAccountBaseAdminHandler.add_to_menu(
+        'analytics', base.GoogleServiceAccountBase.DASHBOARD_NAV,
+        base.GoogleServiceAccountBase.DASHBOARD_PAGE_TITLE,
+        sub_group_name='advanced'
+    )
+    settings.EditGoogleServiceAccountAdminHandler.register_get_action()
+
 
     return custom_module

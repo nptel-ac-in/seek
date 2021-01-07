@@ -1,0 +1,36 @@
+{
+  "name": "nptel-pwa",
+  "description": "nptel pwa app",
+  "main": "index.html",
+  "dependencies": {
+    "polymer": "Polymer/polymer#^2.0.0",
+    "app-layout": "PolymerElements/app-layout#^2.0.5",
+    "paper-button": "^2.0.0",
+    "paper-styles": "^2.1.0",
+    "paper-icon-button": "^2.1.0",
+    "paper-drawer": "^2.0.2",
+    "google-youtube": "^2.0.0",
+    "google-apis": "GoogleWebComponents/google-apis#^2.0.1",
+    "mp-video": "^2.0.0",
+    "app-route": "PolymerElements/app-route#^2.1.0",
+    "paper-listbox": "PolymerElements/paper-listbox#^2.1.0",
+    "app-menu": "^2.1.1",
+    "iron-list": "^2.0.13",
+    "iron-flex-layout": "^2.0.3",
+    "iron-pages": "^2.1.0",
+    "paper-input": "^2.2.0",
+    "paper-dropdown-menu": "^2.1.0",
+    "paper-toast": "PolymerElements/paper-toast#^2.1.0",
+    "paper-card": "PolymerElements/paper-card#^2.1.0",
+    "paper-spinner": "PolymerElements/paper-spinner#^2.1.0",
+    "l2t-paper-slider": "Link2Twenty/l2t-paper-slider#^2.0.4"
+  },
+  "devDependencies": {
+    "web-component-tester": "Polymer/web-component-tester#^6.0.0",
+    "webcomponentsjs": "webcomponents/webcomponentsjs#^1.0.0"
+  },
+  "resolutions": {
+    "polymer": "^2.0.0",
+    "webcomponentsjs": "^v1.0.19"
+  }
+}

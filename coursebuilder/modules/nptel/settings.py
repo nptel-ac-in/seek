@@ -22,7 +22,8 @@ from common.schema_fields import FieldArray
 from common.schema_fields import FieldRegistry
 from common.schema_fields import SchemaField
 from models import courses
-from modules.dashboard import tabs
+from modules.courses import settings as course_settings
+from modules.nptel import service_account
 from modules.subjective_assignments import drive_service
 
 
@@ -62,7 +63,8 @@ class NptelSettings(object):
     def register(cls):
         courses.Course.OPTIONS_SCHEMA_PROVIDERS[
             NPTEL_SECTION] += cls.get_fields()
-        tabs.Registry.register('settings', 'nptel', 'NPTEL', NPTEL_SECTION)
+        course_settings.CourseSettingsHandler.register_settings_section(
+                                        NPTEL_SECTION, title='NPTEL')
 
 
     @classmethod

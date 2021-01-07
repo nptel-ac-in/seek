@@ -18,6 +18,7 @@ __author__ = 'Abhinav Khandelwal (abhinavk@google.com)'
 
 import collections
 import copy
+import itertools
 import json
 
 
@@ -77,15 +78,22 @@ class Property(object):
 class Registry(object):
     """Registry is a collection of Property's."""
 
+    SCHEMA_PATH_SEPARATOR = '/'
+
     def __init__(self, title, description=None, extra_schema_dict_values=None):
+        self._name = None
         self._title = title
         self._registry = {'id': title, 'type': 'object'}
         self._description = description
         if description:
             self._registry['description'] = description
-        self._extra_schema_dict_values = extra_schema_dict_values
+        self._extra_schema_dict_values = extra_schema_dict_values or {}
         self._properties = []
         self._sub_registries = collections.OrderedDict()
+
+    @property
+    def name(self):
+        return self._name
 
     @property
     def title(self):
@@ -94,6 +102,10 @@ class Registry(object):
     @property
     def sub_registries(self):
         return self._sub_registries
+
+    @property
+    def properties(self):
+        return self._properties
 
     def add_property(self, schema_field):
         """Add a Property to this Registry."""
@@ -113,11 +125,15 @@ class Registry(object):
         if prop:
             return self._properties.pop(self._properties.index(prop))
 
-    def add_sub_registry(
-        self, name, title=None, description=None, registry=None):
-        """Add a sub registry to for this Registry."""
+    def add_sub_registry(self, name, title=None, description=None,
+        registry=None, extra_schema_dict_values=None):
+        """Add a sub registry to this Registry."""
+        if name in self._sub_registries:
+            raise Exception('Already have registry undr name %s' % name)
         if not registry:
-            registry = Registry(title, description)
+            registry = self.__class__(title=title, description=description,
+                extra_schema_dict_values=extra_schema_dict_values)
+        registry._name = name  # pylint: disable=protected-access
         self._sub_registries[name] = registry
         return registry
 
@@ -163,7 +179,7 @@ class Registry(object):
         # Build a tree of nodes from the given paths.
         root = treebuilder()
         for path in paths:
-            parts = path.split('/')
+            parts = path.split(self.SCHEMA_PATH_SEPARATOR)
             node = root
             for part in parts:
                 node = node[part]
@@ -175,6 +191,12 @@ class Registry(object):
             for prop in copy.copy(registry._properties):
                 if prop.name not in node:
                     registry._properties.remove(prop)
+
+                # If this is an array of complex types, recurse.
+                if (node[prop.name] and
+                    isinstance(prop, FieldArray) and
+                    isinstance(prop._item_type, Registry)):
+                    delete_all_but(prop._item_type, node[prop.name])
             for name, value in registry._sub_registries.iteritems():
                 # If this subregistry is not named at all, remove it.
                 if name not in node:
@@ -196,7 +218,7 @@ class SchemaField(Property):
     def __init__(
         self, name, label, property_type, select_data=None, description=None,
         optional=False, hidden=False, editable=True, i18n=None,
-        extra_schema_dict_values=None, validator=None):
+        extra_schema_dict_values=None, validator=None, default_value=None):
         Property.__init__(
             self, name, label, property_type, select_data=select_data,
             description=description, optional=optional,
@@ -205,6 +227,7 @@ class SchemaField(Property):
         self._editable = editable
         self._validator = validator
         self._i18n = i18n
+        self._default_value = default_value
 
     @property
     def hidden(self):
@@ -218,6 +241,23 @@ class SchemaField(Property):
     def i18n(self):
         return self._i18n
 
+    @property
+    def _override_type(self):
+        """The final type, if it differs from the validation type"""
+        if '_type' in self._extra_schema_dict_values:
+            return self._extra_schema_dict_values['_type']
+        if self._hidden:
+            return 'hidden'
+        elif not self._editable:
+            return 'uneditable'
+        elif self._select_data:
+            return 'select'
+        return None
+
+    def get_display_types(self):
+        """List of types needed to render this"""
+        return [self._override_type or self.type]
+
     def get_json_schema_dict(self):
         """Get the JSON schema for this field."""
         prop = {}
@@ -230,12 +270,11 @@ class SchemaField(Property):
             prop['i18n'] = self._i18n
         return prop
 
-    def _get_schema_dict(self, prefix_key, extra_select_options):
+    def _get_schema_dict(self, prefix_key, extra_select_options=dict({})):
         """Get Schema annotation dictionary for this field."""
-        if self._extra_schema_dict_values:
-            schema = self._extra_schema_dict_values
-        else:
-            schema = {}
+
+        schema = self._extra_schema_dict_values
+
         schema['label'] = self._label
         if self._hidden:
             schema['_type'] = 'hidden'
@@ -244,7 +283,11 @@ class SchemaField(Property):
         elif (self._select_data or extra_select_options) and '_type' not in schema:
             schema['_type'] = 'select'
 
-        if 'date' is self._property_type:
+        override_type = self._override_type
+        if override_type:
+            schema['_type'] = override_type
+
+        if self._property_type == 'date':
             if 'dateFormat' not in schema:
                 schema['dateFormat'] = 'Y/m/d'
             if 'valueFormat' not in schema:
@@ -268,17 +311,21 @@ class SchemaField(Property):
         if self._validator:
             self._validator(value, errors)
 
+    def __repr__(self):
+        return '<{} {}>'.format(self.__class__.__name__, self.name)
+
 
 class FieldArray(SchemaField):
     """FieldArray is an array with object or simple items."""
 
     def __init__(
         self, name, label, description=None, item_type=None,
-        optional=False, extra_schema_dict_values=None):
+        optional=False, extra_schema_dict_values=None, select_data=None):
 
         super(FieldArray, self).__init__(
             name, label, 'array', description=description, optional=optional,
-            extra_schema_dict_values=extra_schema_dict_values)
+            extra_schema_dict_values=extra_schema_dict_values,
+            select_data=select_data)
         self._item_type = item_type
 
     @property
@@ -292,7 +339,7 @@ class FieldArray(SchemaField):
 
     def _get_schema_dict(self, prefix_key, extra_select_options):
         dict_list = super(FieldArray, self)._get_schema_dict(
-            prefix_key, None)
+            prefix_key, {})
         # pylint: disable=protected-access
         dict_list += self._item_type._get_schema_dict(
             prefix_key + ['items'], extra_select_options)
@@ -305,27 +352,56 @@ class FieldArray(SchemaField):
         display_dict['item_type'] = self.item_type.get_display_dict()
         return display_dict
 
+    def get_display_types(self):
+        """List of types needed to render this"""
+        return itertools.chain(
+            super(FieldArray, self).get_display_types(),
+            self.item_type.get_display_types())
+
 
 class FieldRegistry(Registry):
     """FieldRegistry is an object with SchemaField properties."""
 
-    def add_sub_registry(
-        self, name, title=None, description=None, registry=None):
-        """Add a sub registry to for this Registry."""
-        if not registry:
-            registry = FieldRegistry(title, description=description)
-        self._sub_registries[name] = registry
-        return registry
+    def _iter_fields(self):
+        """Iterate fields like dict.iteritems"""
+        for schema_field in self._properties:
+            yield (schema_field.name, schema_field)
+
+    def _iter_sub_registries(self):
+        """Iterate sub-registries like dict.iteritems"""
+        return self._sub_registries.iteritems()
+
+    def _iter_fields_and_sub_registries(self):
+        """Iterate fields and sub-registries like dict.iteritems"""
+        return itertools.chain(self._iter_fields(), self._iter_sub_registries())
+
+    def _deep_iter_fields(self):
+        """Iterate fields in this registry and its sub-registries recursively.
+
+        Results look like dict.iteritems.  Keys are just the field names.  They
+        don't incorporate parent keys."""
+        # pylint: disable=protected-access
+        return itertools.chain(self._iter_fields(),
+            itertools.chain.from_iterable(
+                item._deep_iter_fields()
+                for (key, item) in self._iter_sub_registries()))
+
+    def _get_display_type(self):
+        return self._extra_schema_dict_values.get('_type', 'group')
+
+    def get_display_types(self):
+        """List of types needed to render this"""
+        return itertools.chain(
+            [self._get_display_type()],
+            itertools.chain.from_iterable([
+                item.get_display_types()
+                for (key, item) in self._deep_iter_fields()]))
 
     def get_json_schema_dict(self):
         schema_dict = dict(self._registry)
-        schema_dict['properties'] = collections.OrderedDict()
-        for schema_field in self._properties:
-            schema_dict['properties'][schema_field.name] = (
-                schema_field.get_json_schema_dict())
-        for key in self._sub_registries.keys():
-            schema_dict['properties'][key] = (
-                self._sub_registries[key].get_json_schema_dict())
+        schema_dict['properties'] = collections.OrderedDict(
+            (key, schema_field.get_json_schema_dict())
+            for key, schema_field in self._iter_fields_and_sub_registries())
         return schema_dict
 
     def get_json_schema(self):
@@ -367,8 +443,13 @@ class FieldRegistry(Registry):
             for entry in sub_registry._get_schema_dict(
                 sub_registry_key_prefix, sopts):
                 schema_dict.append(entry)
+        return schema_dict + list(itertools.chain.from_iterable(
+            # pylint: disable=protected-access
+            item._get_schema_dict(base_key + [key],  extra_select_options=(
+                extra_select_options[key] if key in extra_select_options
+                else dict({})))
             # pylint: enable=protected-access
-        return schema_dict
+            for key, item in self._iter_fields_and_sub_registries()))
 
     def get_schema_dict(self, extra_select_options=dict()):
         """Get schema dict for this API."""
@@ -404,33 +485,63 @@ class FieldRegistry(Registry):
         return field_name_parts
 
     @classmethod
-    def _get_field_value(cls, key_part_list, entity):
+    def _get_field_value(cls, key_part_list, entity, default):
         if len(key_part_list) == 1:
             if type(entity) == dict and entity.has_key(key_part_list[0]):
                 return entity[key_part_list[0]]
-            return None
+            return default
         key = key_part_list.pop()
         if entity.has_key(key):
-            return cls._get_field_value(key_part_list, entity[key])
-        return None
+            return cls._get_field_value(key_part_list, entity[key], default)
+        return default
+
+    @classmethod
+    def get_field_value(cls, schema_field, entity):
+        return cls._get_field_value(
+            cls._get_field_name_parts(schema_field.name), entity,
+            schema_field._default_value)  # pylint: disable=protected-access
 
     def convert_entity_to_json_entity(self, entity, json_entry):
         for schema_field in self._properties:
-            field_name = schema_field.name
-            field_name_parts = self._get_field_name_parts(field_name)
-            value = self._get_field_value(field_name_parts, entity)
+            value = self.get_field_value(schema_field, entity)
             if type(value) != type(None):
-                json_entry[field_name] = value
+                json_entry[schema_field.name] = value
 
         for key in self._sub_registries.keys():
             json_entry[key] = {}
             self._sub_registries[key].convert_entity_to_json_entity(
                 entity, json_entry[key])
 
+    def redact_entity_to_schema(self, entity, only_writable=True):
+        property_names = {p.name: p for p in self._properties}
+        registry_names = set(self._sub_registries.keys())
+        for name in copy.copy(entity.keys()):
+            if name not in property_names and name not in registry_names:
+                del entity[name]
+            elif name in registry_names:
+                self._sub_registries[name].redact_entity_to_schema(
+                    entity[name], only_writable)
+                if not entity[name]:
+                    del entity[name]
+            elif name in property_names:
+                prop = property_names[name]
+                if not prop.editable and only_writable:
+                    del entity[name]
+                elif (isinstance(prop, FieldArray) and
+                      isinstance(prop.item_type, Registry)):
+                    all_empty = True
+                    for item in entity[name]:
+                        prop.item_type.redact_entity_to_schema(
+                            item, only_writable)
+                        if item:
+                            all_empty = False
+                    if all_empty:
+                        del entity[name]
+
+
     def validate(self, payload, errors):
         for schema_field in self._properties:
-            field_name_parts = self._get_field_name_parts(schema_field.name)
-            value = self._get_field_value(field_name_parts, payload)
+            value = self.get_field_value(schema_field, payload)
             schema_field.validate(value, errors)
 
         for registry in self._sub_registries.values():
@@ -512,7 +623,10 @@ class FieldRegistryIndex(object):
                 complex_name = field.name
                 if complex_name in self._complex_name_to_field:
                     raise KeyError('Field already defined: %s.' % complex_name)
-                if isinstance(field, FieldArray):
+                # TODO(nretallack): arrays of primitive types are not indexed.
+                # We will need to fix this if we want to translate them.
+                if isinstance(field, FieldArray) and isinstance(
+                        field.item_type, FieldRegistry):
                     self._inspect_registry(
                         [complex_name, '[]'], field.item_type)
                 self._complex_name_to_field[complex_name] = field
@@ -521,7 +635,10 @@ class FieldRegistryIndex(object):
                 computed_name = ':'.join(parent_names + [field.name])
                 if computed_name in self._computed_name_to_field:
                     raise KeyError('Field already defined: %s.' % computed_name)
-                if isinstance(field, FieldArray):
+                # TODO(nretallack): arrays of primitive types are not indexed.
+                # We will need to fix this if we want to translate them.
+                if isinstance(field, FieldArray) and isinstance(
+                        field.item_type, FieldRegistry):
                     self._inspect_registry(
                         parent_names + [field.name, '[]'], field.item_type)
                 self._computed_name_to_field[computed_name] = field

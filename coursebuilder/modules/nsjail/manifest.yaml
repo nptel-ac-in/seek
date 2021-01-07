@@ -1,0 +1,12 @@
+registration:
+  main_module: modules.nsjail.nsjail
+
+files:
+  - modules/nsjail/__init__.py
+  - modules/nsjail/manifest.yaml
+  - modules/nsjail/nsjail.py
+  - modules/nsjail/proto/__init__.py
+  - modules/nsjail/proto/README
+  - modules/nsjail/proto/common_pb2.py
+  - modules/nsjail/proto/default_settings_pb2.py
+  - modules/nsjail/proto/request_pb2.py

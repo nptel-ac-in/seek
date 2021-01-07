@@ -99,23 +99,23 @@ def register_module():
 
     def on_module_disable():
         tags.Registry.remove_tag_binding(Activity.binding_name)
-        tags.EditorDenylists.unregister(
+        tags.EditorBlacklists.unregister(
             Activity.binding_name,
-            tags.EditorDenylists.COURSE_SCOPE)
-        tags.EditorDenylists.unregister(
-            Activity.binding_name, tags.EditorDenylists.ASSESSMENT_SCOPE)
-        tags.EditorDenylists.unregister(
-            Activity.binding_name, tags.EditorDenylists.DESCRIPTIVE_SCOPE)
+            tags.EditorBlacklists.COURSE_SCOPE)
+        tags.EditorBlacklists.unregister(
+            Activity.binding_name, tags.EditorBlacklists.ASSESSMENT_SCOPE)
+        tags.EditorBlacklists.unregister(
+            Activity.binding_name, tags.EditorBlacklists.DESCRIPTIVE_SCOPE)
 
     def on_module_enable():
         tags.Registry.add_tag_binding(Activity.binding_name, Activity)
-        tags.EditorDenylists.register(
+        tags.EditorBlacklists.register(
             Activity.binding_name,
-            tags.EditorDenylists.COURSE_SCOPE)
-        tags.EditorDenylists.register(
-            Activity.binding_name, tags.EditorDenylists.ASSESSMENT_SCOPE)
-        tags.EditorDenylists.register(
-            Activity.binding_name, tags.EditorDenylists.DESCRIPTIVE_SCOPE)
+            tags.EditorBlacklists.COURSE_SCOPE)
+        tags.EditorBlacklists.register(
+            Activity.binding_name, tags.EditorBlacklists.ASSESSMENT_SCOPE)
+        tags.EditorBlacklists.register(
+            Activity.binding_name, tags.EditorBlacklists.DESCRIPTIVE_SCOPE)
 
     global custom_module  # pylint: disable=global-statement
 

@@ -207,6 +207,7 @@ class SubjectiveAssignmentCourseStaffHandler(
     @classmethod
     def post_save_comments(cls, handler):
         cls.store_feedback(handler, False)
+        transforms.send_json_response(handler, 200, 'OK')
 
 
     @classmethod

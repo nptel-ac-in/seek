@@ -32,12 +32,11 @@ function getFreshTag() {
 }
 
 // controls sending events to the server; off by default; override to enable
-var gcbCanPostTagEvents = false;
-var gcbCanPostPageEvents = false;
-var gcbCanPostEvents = false;
+var gcbCanPostTagEvents = true;
+var gcbCanPostPageEvents = true;
+var gcbCanPostEvents = true;
 
 // various XSRF tokens
-var eventXsrfToken = '';
 var assessmentXsrfToken = '';
 
 function gcbTagEventAudit(data_dict, name) {
@@ -66,7 +65,7 @@ function gcbAudit(can_post, data_dict, source, is_async) {
   if (can_post) {
     data_dict['location'] = '' + window.location;
     data_dict['loc'] = {}
-    data_dict['loc']['page_locale'] = $('body').data('gcb-page-locale')
+    data_dict['loc']['page_locale'] = $('body').data('data-gcb-page-locale')
     var request = {
         'source': source,
         'payload': JSON.stringify(data_dict),

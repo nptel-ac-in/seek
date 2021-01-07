@@ -21,7 +21,6 @@ import logging
 import os
 from collections import defaultdict
 
-import courses
 import transforms
 
 from common import utils
@@ -105,6 +104,7 @@ class UnitLessonCompletionTracker(object):
 
     def __init__(self, course):
         self._course = course
+        self._progress_by_user_id = {}
 
     def _get_course(self):
         return self._course
@@ -360,8 +360,11 @@ class UnitLessonCompletionTracker(object):
             if question.type == question.MULTIPLE_CHOICE:
                 q_id = 'u.%s.l.%s.c.%s' % (
                     unit.unit_id, lesson.lesson_id, cpt['instanceid'])
+                lesson_label = str(lesson.index or lesson.title)
+                if lesson_label.startswith('Lesson '):
+                    lesson_label = lesson_label.replace('Lesson ', '', 1)
                 label = 'Unit %s Lesson %s, Question %s' % (
-                    unit.index, lesson.index, question.description)
+                    unit.index, lesson_label, question.description)
                 link = self._get_link_for_lesson(unit.unit_id, lesson.lesson_id)
                 num_choices = len(question.dict['choices'])
                 return self._create_v15_question_dict(
@@ -383,8 +386,11 @@ class UnitLessonCompletionTracker(object):
                 if question.type == question.MULTIPLE_CHOICE:
                     q_id = 'u.%s.l.%s.c.%s.i.%s' % (
                         unit.unit_id, lesson.lesson_id, cpt['instanceid'], ind)
+                    lesson_label = str(lesson.index or lesson.title)
+                    if lesson_label.startswith('Lesson '):
+                        lesson_label = lesson_label.replace('Lesson ', '', 1)
                     label = ('Unit %s Lesson %s, Question Group %s Question %s'
-                             % (unit.index, lesson.index,
+                             % (unit.index, lesson_label,
                                 question_group.description,
                                 question.description))
                     link = self._get_link_for_lesson(
@@ -504,7 +510,8 @@ class UnitLessonCompletionTracker(object):
 
         self._set_entity_value(progress, event_key, self.IN_PROGRESS_STATE)
         course = self._get_course()
-        for unit in course.get_track_matching_student(student):
+        units, lessons = course.get_track_matching_student(student)
+        for unit in units:
             if course.get_parent_unit(unit.unit_id):
                 # Completion of an assessment-as-lesson rolls up to its
                 # containing unit; it is not considered for overall course
@@ -547,16 +554,15 @@ class UnitLessonCompletionTracker(object):
                     unit_id, lesson.lesson_id) != self.COMPLETED_STATE):
                 return
 
-        # Check whether pre/post assessments in this unit have been completed.
-        unit = self._get_course().find_unit_by_id(unit_id)
-        pre_assessment_id = unit.pre_assessment
-        if (pre_assessment_id and
-            not self.get_assessment_status(progress, pre_assessment_id)):
-            return
-        post_assessment_id = unit.post_assessment
-        if (post_assessment_id and
-            not self.get_assessment_status(progress, post_assessment_id)):
-            return
+        # Check whether assessments in this unit have been completed.
+        sub_units = self._get_course().get_subunits(unit_id)
+        for sub_unit in sub_units:
+            if sub_unit.type == verify.UNIT_TYPE_ASSESSMENT:
+                assessment_id = sub_unit.unit_id
+                if (assessment_id and
+                    not self.get_assessment_status(progress, assessment_id)):
+                    return
+
 
         # Record that all lessons in this unit have been completed.
         self._set_entity_value(progress, event_key, self.COMPLETED_STATE)
@@ -914,13 +920,20 @@ class UnitLessonCompletionTracker(object):
         value = self.get_custom_unit_status(progress, unit_id)
         return self.COMPLETED_STATE == value
 
-    @classmethod
-    def get_or_create_progress(cls, student):
-        progress = StudentPropertyEntity.get(student, cls.PROPERTY_KEY)
+    def get_or_create_progress(self, student):
+        if student.user_id in self._progress_by_user_id:
+            # Use per-instance cache of student progress entities.  This is
+            # necessary due to multiple calls to this function during
+            # callbacks to POST_UPDATE_PROGRESS_HOOK functions.  Note that
+            # this relies on callers being disciplined about getting the
+            # progress entity via Course.get_progress_tracker().
+            return self._progress_by_user_id[student.user_id]
+        progress = StudentPropertyEntity.get(student, self.PROPERTY_KEY)
         if not progress:
             progress = StudentPropertyEntity.create(
-                student=student, property_name=cls.PROPERTY_KEY)
+                student=student, property_name=self.PROPERTY_KEY)
             progress.put()
+        self._progress_by_user_id[student.user_id] = progress
         return progress
 
     def get_course_progress(self, student):
@@ -967,6 +980,7 @@ class UnitLessonCompletionTracker(object):
             if unit.type == verify.UNIT_TYPE_ASSESSMENT:
                 result[unit.unit_id] = assessment_scores[unit.unit_id]
             elif unit.type == verify.UNIT_TYPE_UNIT:
+                #[TODO]Thej - Should I do it for all subunits?
                 if (unit.pre_assessment and
                     assessment_scores[unit.pre_assessment] >= 1.0):
                     # Use pre-assessment iff it exists and student scored 100%
@@ -1098,7 +1112,7 @@ class UnitLessonCompletionTracker(object):
                     'activity': self.get_activity_status(
                         progress, unit.unit_id, lesson.lesson_id) or 0,
                     }
-        return result                    
+        return result
 
     @classmethod
     def get_elements_from_key(cls, key):
@@ -1171,37 +1185,36 @@ class ProgressStats(object):
 
             will have the following dictionary representation:
                 {
-                    's': {
-                        1: {
-                            'label': 'Pre Assessment'
-                        }
-                    },
-                    'u': {
-                        2: {
-                            'l': {
-                                3: {
-                                    'label': 1
-                                }
-                            },
-                            'label': 1
-                        },
-                        4: {
-                            'label': 2
-                        }
-                    }
+                    's': [{
+                        'child_id': 1,
+                        'child_val': {'label': 'Pre Assessment'}
+                        }],
+                    'u': [{
+                        'child_id': 2,
+                        'child_val': {
+                            'l': [{
+                                'child_id': 3,
+                                'child_val': {'label': 1}}],
+                            'label': 1}, {
+                        'child_id': 4,
+                        'child_val': {'label': 2}
+                        }]
                     'label': 'UNTITLED COURSE'
                 }
         """
         entity_dict = {'label': self._get_label(entity, parent_ids)}
         for child_entity, get_children_ids in self.COURSE_STRUCTURE_DICT[
                 entity]['children']:
-            child_entity_dict = {}
+            child_entity_list = []
             for child_id in get_children_ids(self, *parent_ids):
                 new_parent_ids = parent_ids + [child_id]
-                child_entity_dict[child_id] = self.compute_entity_dict(
-                    child_entity, new_parent_ids)
+                child_entity_list.append({
+                    'child_id': child_id,
+                    'child_val': self.compute_entity_dict(
+                        child_entity, new_parent_ids)
+                })
             entity_dict[UnitLessonCompletionTracker.EVENT_CODE_MAPPING[
-                child_entity]] = child_entity_dict
+                child_entity]] = child_entity_list
         return entity_dict
 
     def _get_course(self):
@@ -1212,8 +1225,17 @@ class ProgressStats(object):
         return [unit.unit_id for unit in units]
 
     def _get_assessment_ids(self):
+        contained = set()
+        #[TODO]Thej Now we dont have any UNIT_TYPE_ASSESSMENT which is not a child
+        #this should just reply with get_assessment_list() right?
+        for unit in self._get_course().get_units_of_type(verify.UNIT_TYPE_UNIT):
+            if unit.pre_assessment:
+                contained.add(unit.pre_assessment)
+            if unit.post_assessment:
+                contained.add(unit.post_assessment)
+
         assessments = self._get_course().get_assessment_list()
-        return [a.unit_id for a in assessments]
+        return [a.unit_id for a in assessments if a.unit_id not in contained]
 
     def _get_lesson_ids(self, unit_id):
         lessons = self._get_course().get_lessons(unit_id)
@@ -1240,15 +1262,16 @@ class ProgressStats(object):
 
     def _get_course_label(self):
         # pylint: disable=protected-access
-        return courses.Course.get_environ(self._get_course().app_context)[
-            'course']['title']
+        return self._get_course().app_context.get_environ()['course']['title']
 
     def _get_unit_label(self, unit_id):
         unit = self._get_course().find_unit_by_id(unit_id)
         return 'Unit %s' % unit.index
 
-    def _get_assessment_label(self, unit_id):
-        assessment = self._get_course().find_unit_by_id(unit_id)
+    def _get_assessment_label(self, unit_id, assessment_id=None):
+        if not assessment_id:
+            assessment_id = unit_id
+        assessment = self._get_course().find_unit_by_id(assessment_id)
         return assessment.title
 
     def _get_lesson_label(self, unit_id, lesson_id):
@@ -1276,6 +1299,14 @@ class ProgressStats(object):
         return self._get_block_label(
             unit_id, lesson_id, unused_html_id, component_id)
 
+    def _get_children_assessments(self, unit_id):
+        ret = []
+        sub_units = self._get_course().get_subunits(unit_id)
+        for sub_unit in sub_units:
+            if sub_unit.type == verify.UNIT_TYPE_ASSESSMENT:
+                ret.append(sub_unit.unit_id)
+        return ret
+
     # Outlines the structure of the course. The key is the entity level, and
     # its value is a dictionary with following keys and its values:
     #   'children': list of tuples. Each tuple consists of string representation
@@ -1293,7 +1324,8 @@ class ProgressStats(object):
                          ('assessment', _get_assessment_ids)],
         },
         'unit': {
-            'children': [('lesson', _get_lesson_ids)],
+            'children': [('lesson', _get_lesson_ids),
+                         ('assessment', _get_children_assessments)]
         },
         'assessment': {
             'children': [],

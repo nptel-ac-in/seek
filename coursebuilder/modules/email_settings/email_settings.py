@@ -148,14 +148,14 @@ class EmailSettingsBaseAdminHandler(base.EmailSettingsBase):
 
         template_values['main_content'] = content
 
-        handler.render_page(template_values)
+        handler.render_page(template_values,  in_action='email_settings')
 
     @classmethod
     def get_add_email_settings(self, handler):
         """Handles 'get_add_email_settings' action."""
 
         if roles.Roles.is_super_admin():
-            exit_url = '%s?tab=email_settings' % handler.LINK_URL
+            exit_url = '%s?action=email_settings' % handler.LINK_URL
         else:
             exit_url = self.request.referer
         rest_url = AddNewEmailSettingsRESTHandler.URI
@@ -168,7 +168,7 @@ class EmailSettingsBaseAdminHandler(base.EmailSettingsBase):
             None, rest_url, exit_url,
             auto_return=True,
             save_button_caption='Add New Email Settings')
-        handler.render_page(template_values, in_tab='email_settings')
+        handler.render_page(template_values, in_action='email_settings')
 
 
     @classmethod
@@ -176,7 +176,7 @@ class EmailSettingsBaseAdminHandler(base.EmailSettingsBase):
         """Handles 'edit_email_settingsr' action and renders new course entry editor."""
 
         if roles.Roles.is_super_admin():
-            exit_url = '%s?tab=email_settings' % handler.LINK_URL
+            exit_url = '%s?action=email_settings' % handler.LINK_URL
         else:
             exit_url = self.request.referer
         rest_url = EmailSettingsRESTHandler.URI
@@ -199,7 +199,7 @@ class EmailSettingsBaseAdminHandler(base.EmailSettingsBase):
             auto_return=True, delete_url=delete_url,
             delete_method='delete',
             save_button_caption='Update Email Settings')
-        handler.render_page(template_values, in_tab='email_settings')
+        handler.render_page(template_values, in_action='email_settings')
 
 
     @classmethod
@@ -207,7 +207,7 @@ class EmailSettingsBaseAdminHandler(base.EmailSettingsBase):
         """Handles 'add_queue_settings' action."""
 
         if roles.Roles.is_super_admin():
-            exit_url = '%s?tab=email_settings' % handler.LINK_URL
+            exit_url = '%s?action=email_settings' % handler.LINK_URL
         else:
             exit_url = self.request.referer
         rest_url = AddNewQueueSettingsRESTHandler.URI
@@ -220,7 +220,7 @@ class EmailSettingsBaseAdminHandler(base.EmailSettingsBase):
             None, rest_url, exit_url,
             auto_return=True,
             save_button_caption='Add New Email Queue Settings')
-        handler.render_page(template_values, in_tab='email_settings')
+        handler.render_page(template_values, in_action='email_settings')
 
 
     @classmethod
@@ -228,7 +228,7 @@ class EmailSettingsBaseAdminHandler(base.EmailSettingsBase):
         """Handles 'edit_email_settingsr' action and renders new course entry editor."""
 
         if roles.Roles.is_super_admin():
-            exit_url = '%s?tab=email_settings' % handler.LINK_URL
+            exit_url = '%s?action=email_settings' % handler.LINK_URL
         else:
             exit_url = self.request.referer
         rest_url = QueueSettingsRESTHandler.URI
@@ -251,7 +251,7 @@ class EmailSettingsBaseAdminHandler(base.EmailSettingsBase):
             auto_return=True, delete_url=delete_url,
             delete_method='delete',
             save_button_caption='Update Queue Settings')
-        handler.render_page(template_values, in_tab='email_settings')
+        handler.render_page(template_values, in_action='email_settings')
 
 
 def create_queue_settings_registry():

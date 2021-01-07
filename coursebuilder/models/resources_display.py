@@ -28,16 +28,17 @@ from common import safe_dom
 from common import schema_fields
 from common import tags
 from common import utils as common_utils
+from models import services
 from tools import verify
 
-DRAFT_TEXT = 'Private'
-PUBLISHED_TEXT = 'Public'
+DRAFT_TEXT = messages.DRAFT_TEXT
+PUBLISHED_TEXT = messages.PUBLISHED_TEXT
 
 # Allowed graders. Keys of this dict represent internal keys for the grader
 # type, and the value represents the corresponding string that will appear in
 # the dashboard UI.
-AUTO_GRADER_NAME = 'Automatic Grading'
-HUMAN_GRADER_NAME = 'Peer Review'
+AUTO_GRADER_NAME = 'Automatic grading'
+HUMAN_GRADER_NAME = 'Peer review'
 ALLOWED_GRADERS_NAMES = {
     courses.AUTO_GRADER: AUTO_GRADER_NAME,
     courses.HUMAN_GRADER: HUMAN_GRADER_NAME,
@@ -89,6 +90,19 @@ class ResourceQuestionBase(resource.AbstractResourceHandler):
     def get_edit_url(cls, key):
         return 'dashboard?action=edit_question&key=%s' % key
 
+    @classmethod
+    def _add_html_field_to(
+            cls, registry, name, label, class_name, supportCustomTags,
+            description=None, optional=True):
+        registry.add_property(schema_fields.SchemaField(
+            name, label, 'html', optional=optional,
+            extra_schema_dict_values={
+                'supportCustomTags': supportCustomTags,
+                'excludedCustomTags': TAGS_EXCLUDED_FROM_QUESTIONS,
+                'rteButtonSet': 'reduced',
+                'className': class_name},
+            description=description))
+
 
 class ResourceSAQuestion(ResourceQuestionBase):
 
@@ -98,11 +112,14 @@ class ResourceSAQuestion(ResourceQuestionBase):
         ('case_insensitive', 'Case insensitive string match'),
         ('regex', 'Regular expression'),
         ('numeric', 'Numeric'),
-        ('range_match', 'Range Match (inclusive)')]
+        ('range_match', 'Range Match'),]
 
     @classmethod
-    def get_schema(cls, course, key):
+    def get_schema(cls, course, key, forbidCustomTags=False):
         """Get the InputEx schema for the short answer question editor."""
+        supportCustomTags = (
+            not forbidCustomTags and tags.CAN_USE_DYNAMIC_TAGS.value)
+
         sa_question = schema_fields.FieldRegistry(
             'Short Answer Question',
             description='short answer question',
@@ -110,26 +127,16 @@ class ResourceSAQuestion(ResourceQuestionBase):
 
         sa_question.add_property(schema_fields.SchemaField(
             'version', '', 'string', optional=True, hidden=True))
-        sa_question.add_property(schema_fields.SchemaField(
-            'question', 'Question', 'html', optional=True,
-            extra_schema_dict_values={
-                'supportCustomTags': tags.CAN_USE_DYNAMIC_TAGS.value,
-                'excludedCustomTags': TAGS_EXCLUDED_FROM_QUESTIONS,
-                'className': 'sa-question'}))
-        sa_question.add_property(schema_fields.SchemaField(
-            'description', 'Description', 'string', optional=True,
-            extra_schema_dict_values={'className': 'sa-description'},
-            description=messages.QUESTION_DESCRIPTION))
-        sa_question.add_property(schema_fields.SchemaField(
-            'hint', 'Hint', 'html', optional=True,
-            extra_schema_dict_values={'className': 'sa-hint'}))
-        sa_question.add_property(schema_fields.SchemaField(
-            'defaultFeedback', 'Feedback', 'html', optional=True,
-            extra_schema_dict_values={
-                'supportCustomTags': tags.CAN_USE_DYNAMIC_TAGS.value,
-                'excludedCustomTags': TAGS_EXCLUDED_FROM_QUESTIONS,
-                'className': 'sa-feedback'},
-            description=messages.INCORRECT_ANSWER_FEEDBACK))
+        cls._add_html_field_to(
+            sa_question, 'question', 'Question', 'sa-question',
+            supportCustomTags, optional=False)
+        cls._add_html_field_to(
+            sa_question, 'hint', 'Hint', 'sa-hint', supportCustomTags,
+            description=messages.SHORT_ANSWER_HINT_DESCRIPTION)
+        cls._add_html_field_to(
+            sa_question, 'defaultFeedback', 'Feedback', 'sa-feedback',
+            supportCustomTags,
+            description=messages.INCORRECT_ANSWER_FEEDBACK)
 
         sa_question.add_property(schema_fields.SchemaField(
             'rows', 'Rows', 'string', optional=True, i18n=False,
@@ -150,30 +157,44 @@ class ResourceSAQuestion(ResourceQuestionBase):
             'Answer',
             extra_schema_dict_values={'className': 'sa-grader'})
         grader_type.add_property(schema_fields.SchemaField(
-            'score', 'Score', 'string', optional=True, i18n=False,
-            extra_schema_dict_values={'className': 'sa-grader-score'}))
-        grader_type.add_property(schema_fields.SchemaField(
-            'matcher', 'Grading', 'string', optional=True, i18n=False,
-            select_data=cls.GRADER_TYPES,
-            extra_schema_dict_values={'className': 'sa-grader-score'}))
-        grader_type.add_property(schema_fields.SchemaField(
-            'response', 'Response', 'text', optional=True,
-            extra_schema_dict_values={'className': 'sa-grader-text'}))
-        grader_type.add_property(schema_fields.SchemaField(
-            'feedback', 'Feedback', 'html', optional=True,
+            'score', 'Score', 'string',
+            description=messages.SHORT_ANSWER_SCORE_DESCRIPTION,
             extra_schema_dict_values={
-                'supportCustomTags': tags.CAN_USE_DYNAMIC_TAGS.value,
-                'excludedCustomTags': TAGS_EXCLUDED_FROM_QUESTIONS,
-                'className': 'sa-grader-feedback'}))
+                'className': 'sa-grader-score',
+                'value': '1.0',
+                'readonly' : 'true'
+            }, i18n=False))
+        grader_type.add_property(schema_fields.SchemaField(
+            'matcher', 'Type', 'string',
+            description=messages.SHORT_ANSWER_TYPE_DESCRIPTION,
+            extra_schema_dict_values={'className': 'sa-grader-score'},
+            i18n=False, optional=True, select_data=cls.GRADER_TYPES))
+        grader_type.add_property(schema_fields.SchemaField(
+            'response', 'Answer', 'string',
+            description=messages.SHORT_ANSWER_ANSWER_DESCRIPTION,
+            extra_schema_dict_values={
+                'className': 'inputEx-Field sa-grader-text'},
+            optional=False))
+        cls._add_html_field_to(
+            grader_type, 'feedback', 'Feedback', 'sa-grader-feedback',
+            supportCustomTags,
+            description=messages.SHORT_ANSWER_FEEDBACK_DESCRIPTION)
 
         graders_array = schema_fields.FieldArray(
             'graders', '', item_type=grader_type,
             extra_schema_dict_values={
                 'className': 'sa-grader-container',
                 'listAddLabel': 'Add an answer',
-                'listRemoveLabel': 'Delete this answer'})
+                'listRemoveLabel': 'Delete this answer'},
+            optional=True)
 
         sa_question.add_property(graders_array)
+
+        sa_question.add_property(schema_fields.SchemaField(
+            'description', 'Description', 'string', optional=False,
+            extra_schema_dict_values={
+                'className': 'inputEx-Field sa-description'},
+            description=messages.QUESTION_DESCRIPTION))
 
         return sa_question
 
@@ -183,8 +204,11 @@ class ResourceMCQuestion(ResourceQuestionBase):
     TYPE = ResourceQuestionBase.TYPE_MC_QUESTION
 
     @classmethod
-    def get_schema(cls, course, key):
+    def get_schema(cls, course, key, forbidCustomTags=False):
         """Get the InputEx schema for the multiple choice question editor."""
+        supportCustomTags = (
+            not forbidCustomTags and tags.CAN_USE_DYNAMIC_TAGS.value)
+
         mc_question = schema_fields.FieldRegistry(
             'Multiple Choice Question',
             description='multiple choice question',
@@ -192,22 +216,38 @@ class ResourceMCQuestion(ResourceQuestionBase):
 
         mc_question.add_property(schema_fields.SchemaField(
             'version', '', 'string', optional=True, hidden=True))
+        cls._add_html_field_to(
+            mc_question, 'question', 'Question', 'mc-question',
+            supportCustomTags, optional=False)
+        cls._add_html_field_to(
+            mc_question, 'defaultFeedback', 'Feedback', 'mc-question',
+            supportCustomTags,
+            description=messages.MULTIPLE_CHOICE_FEEDBACK_DESCRIPTION)
+
+        # mc_question.add_property(schema_fields.SchemaField(
+        #     'permute_choices', 'Randomize Choices', 'boolean',
+        #     description=messages.MULTIPLE_CHOICE_RANDOMIZE_CHOICES_DESCRIPTION,
+        #     extra_schema_dict_values={'className': 'mc-bool-option'},
+        #     optional=True))
+
         mc_question.add_property(schema_fields.SchemaField(
-            'question', 'Question', 'html', optional=True,
-            extra_schema_dict_values={
-                'supportCustomTags': tags.CAN_USE_DYNAMIC_TAGS.value,
-                'excludedCustomTags': TAGS_EXCLUDED_FROM_QUESTIONS,
-                'className': 'mc-question'}))
+            'all_or_nothing_grading', 'All or Nothing', 'boolean',
+            optional=True, description='Disallow partial credit. Assign a '
+            'score of 0.0 to a question unless its raw score is 1.0.',
+            extra_schema_dict_values={'className': 'mc-bool-option'}))
+
         mc_question.add_property(schema_fields.SchemaField(
-            'description', 'Description', 'string', optional=True,
-            extra_schema_dict_values={'className': 'mc-description'},
-            description=messages.QUESTION_DESCRIPTION))
+            'show_answer_when_incorrect', 'Display Correct', 'boolean',
+            optional=True, description='Display the correct choice if '
+            'answer is incorrect.',
+            extra_schema_dict_values={'className': 'mc-bool-option'}))
+
         mc_question.add_property(schema_fields.SchemaField(
             'multiple_selections', 'Selection', 'boolean',
             optional=True,
             select_data=[
-                ('false', 'Allow only one selection'),
-                ('true', 'Allow multiple selections')],
+                (False, 'Allow only one selection'),
+                (True, 'Allow multiple selections')],
             extra_schema_dict_values={
                 '_type': 'radio',
                 'className': 'mc-selection'}))
@@ -219,27 +259,27 @@ class ResourceMCQuestion(ResourceQuestionBase):
             'score', 'Score', 'string', optional=True, i18n=False,
             extra_schema_dict_values={
                 'className': 'mc-choice-score', 'value': '0'}))
-        choice_type.add_property(schema_fields.SchemaField(
-            'text', 'Text', 'html', optional=True,
-            extra_schema_dict_values={
-                'supportCustomTags': tags.CAN_USE_DYNAMIC_TAGS.value,
-                'excludedCustomTags': TAGS_EXCLUDED_FROM_QUESTIONS,
-                'className': 'mc-choice-text'}))
-        choice_type.add_property(schema_fields.SchemaField(
-            'feedback', 'Feedback', 'html', optional=True,
-            extra_schema_dict_values={
-                'supportCustomTags': tags.CAN_USE_DYNAMIC_TAGS.value,
-                'excludedCustomTags': TAGS_EXCLUDED_FROM_QUESTIONS,
-                'className': 'mc-choice-feedback'}))
+        cls._add_html_field_to(
+            choice_type, 'text', 'Text', 'mc-choice-text', supportCustomTags)
+        cls._add_html_field_to(
+            choice_type, 'feedback', 'Feedback', 'mc-choice-feedback',
+            supportCustomTags,
+            description=messages.MULTIPLE_CHOICE_CHOICE_FEEDBACK_DESCRIPTION)
 
         choices_array = schema_fields.FieldArray(
-            'choices', '', item_type=choice_type,
+            'choices', None, item_type=choice_type,
             extra_schema_dict_values={
                 'className': 'mc-choice-container',
                 'listAddLabel': 'Add a choice',
                 'listRemoveLabel': 'Delete choice'})
 
         mc_question.add_property(choices_array)
+
+        mc_question.add_property(schema_fields.SchemaField(
+            'description', 'Description', 'string', optional=False,
+            extra_schema_dict_values={
+                'className': 'inputEx-Field mc-description'},
+            description=messages.QUESTION_DESCRIPTION))
 
         return mc_question
 
@@ -273,7 +313,7 @@ class ResourceQuestionGroup(resource.AbstractResourceHandler):
             'Item',
             extra_schema_dict_values={'className': 'question-group-item'})
         item_type.add_property(schema_fields.SchemaField(
-            'weight', 'Weight', 'string', optional=True, i18n=False,
+            'weight', 'Weight', 'number', optional=True, i18n=False,
             extra_schema_dict_values={'className': 'question-group-weight'}))
 
         question_select_data = [(q.id, q.description) for q in sorted(
@@ -289,7 +329,7 @@ class ResourceQuestionGroup(resource.AbstractResourceHandler):
             item_array_classes += ' empty-question-list'
 
         item_array = schema_fields.FieldArray(
-            'items', '', item_type=item_type,
+            'items', None, item_type=item_type,
             extra_schema_dict_values={
                 'className': item_array_classes,
                 'sortable': 'true',
@@ -344,7 +384,8 @@ class ResourceCourseSettings(resource.AbstractResourceHandler):
 
     @classmethod
     def get_edit_url(cls, key):
-        return 'dashboard?action=settings&tab=%s' % key
+        action = 'settings_{}'.format(key)
+        return 'dashboard?action={}'.format(action)
 
 
 def workflow_key(key):
@@ -354,102 +395,102 @@ def workflow_key(key):
 class LabelGroupsHelper(object):
     """Various methods that make it easier to attach labels to objects."""
 
-    @classmethod
-    def make_labels_group_schema_field(cls):
-        label = schema_fields.FieldRegistry(None, description='label')
-        label.add_property(schema_fields.SchemaField(
-            'id', 'ID', 'integer',
-            hidden=True,
-            editable=False))
-        label.add_property(schema_fields.SchemaField(
-            'checked', None, 'boolean'))
-        label.add_property(schema_fields.SchemaField(
-            'title', None, 'string',
-            optional=True,
-            editable=False))
-        label.add_property(schema_fields.SchemaField(
-            'description', None, 'string',
-            optional=True,
-            editable=False,
-            extra_schema_dict_values={
-                'className': 'label-description'}))
-        label.add_property(schema_fields.SchemaField(
-            'no_labels', None, 'string',
-            optional=True,
-            editable=False,
-            extra_schema_dict_values={
-                'className': 'label-none-in-group'}))
+    LABELS_FIELD_NAME = 'labels'
+    TRACKS_FIELD_NAME = 'tracks'
+    LOCALES_FIELD_NAME = 'locales'
 
-        label_group = schema_fields.FieldRegistry(
-            '', description='label groups')
-        label_group.add_property(schema_fields.SchemaField(
-            'title', None, 'string',
-            editable=False))
-        label_group.add_property(schema_fields.FieldArray(
-            'labels', None,
-            item_type=label,
-            extra_schema_dict_values={
-                'className': 'label-group'}))
-        return label_group
+    FIELDS = [
+        {
+            'name': LABELS_FIELD_NAME,
+            'label': 'Labels',
+            'description':
+                'The {content} is tagged with these labels for your reference.',
+            'type_id': models.LabelDTO.LABEL_TYPE_GENERAL,
+        },
+        {
+            'name': TRACKS_FIELD_NAME,
+            'label': 'Tracks',
+            'description':
+                'The {content} is part of these tracks. If none are selected, '
+                'it will be part of all tracks.',
+            'type_id': models.LabelDTO.LABEL_TYPE_COURSE_TRACK,
+            'topic_id': 'labels:%s' % TRACKS_FIELD_NAME,
+        },
+        {
+            'name': LOCALES_FIELD_NAME,
+            'label': 'Languages',
+            'description':
+                'The {content} is available in these languages, in addition to '
+                'the base language.',
+            'type_id': models.LabelDTO.LABEL_TYPE_LOCALE,
+        },
+    ]
 
     @classmethod
-    def decode_labels_group(cls, label_groups):
-        """Decodes label_group JSON."""
+    def add_labels_schema_fields(cls, schema, type_name, exclude_types=None):
+        """Creates multiple form fields for choosing labels"""
+        if exclude_types is None:
+            exclude_types = []
+
+        for field in cls.FIELDS:
+            if field['name'] not in exclude_types:
+                description = field['description'].format(content=type_name)
+                topic_id = field.get('topic_id')
+                if topic_id:
+                    description = services.help_urls.make_learn_more_message(
+                        description, topic_id)
+
+                schema.add_property(schema_fields.FieldArray(
+                    field['name'], field['label'], description=str(description),
+                    extra_schema_dict_values={
+                        '_type': 'checkbox-list',
+                        'noItemsHideField': True,
+                    },
+                    item_type=schema_fields.SchemaField(None, None, 'string',
+                        extra_schema_dict_values={'_type': 'boolean'},
+                        i18n=False),
+                    optional=True,
+                    select_data=cls._labels_to_choices(field['type_id'])))
+
+    @classmethod
+    def _labels_to_choices(cls, label_type):
+        """Produces select_data for a label type"""
+        return [(label.id, label.title) for label in sorted(
+            models.LabelDAO.get_all_of_type(label_type),
+            key=lambda label: label.title)]
+
+    @classmethod
+    def remove_label_field_data(cls, data):
+        """Deletes label field data from a payload"""
+        for field in cls.FIELDS:
+            del data[field['name']]
+
+    @classmethod
+    def field_data_to_labels(cls, data):
+        """Collects chosen labels from all fields into a single set"""
         labels = set()
-        for label_group in label_groups:
-            for label in label_group['labels']:
-                if label['checked'] and label['id'] > 0:
-                    labels.add(label['id'])
+        for field in cls.FIELDS:
+            if field['name'] in data:
+                labels |= set(data[field['name']])
         return labels
 
     @classmethod
-    def announcement_labels_to_dict(cls, announcement):
-        return cls._all_labels_to_dict(
-            common_utils.text_to_list(announcement.labels))
+    def _filter_labels(cls, labels, label_type):
+        """Filters chosen labels by a given type"""
+        return [label.id for label in sorted(
+            models.LabelDAO.get_all_of_type(label_type),
+            key=lambda label: label.title)
+        if str(label.id) in labels]
 
     @classmethod
-    def unit_labels_to_dict(cls, course, unit):
-        parent_unit = course.get_parent_unit(unit.unit_id)
-        labels = common_utils.text_to_list(unit.labels)
-
-        def should_skip(label_type):
-            return (
-                parent_unit and
-                label_type.type == models.LabelDTO.LABEL_TYPE_COURSE_TRACK)
-
-        return cls._all_labels_to_dict(labels, should_skip=should_skip)
-
-    @classmethod
-    def _all_labels_to_dict(cls, labels, should_skip=None):
-        all_labels = models.LabelDAO.get_all()
-        label_groups = []
-        for label_type in sorted(models.LabelDTO.LABEL_TYPES,
-                                 lambda a, b: cmp(a.menu_order, b.menu_order)):
-            if should_skip is not None and should_skip(label_type):
-                continue
-            label_group = []
-            for label in sorted(all_labels, lambda a, b: cmp(a.title, b.title)):
-                if label.type == label_type.type:
-                    label_group.append({
-                        'id': label.id,
-                        'title': label.title,
-                        'description': label.description,
-                        'checked': str(label.id) in labels,
-                        'no_labels': '',
-                        })
-            if not label_group:
-                label_group.append({
-                    'id': -1,
-                    'title': '',
-                    'description': '',
-                    'checked': False,
-                    'no_labels': '-- No labels of this type --',
-                    })
-            label_groups.append({
-                'title': label_type.title,
-                'labels': label_group,
-                })
-        return label_groups
+    def labels_to_field_data(cls, labels, exclude_types=None):
+        """Filters chosen labels by type into data for multiple fields"""
+        if exclude_types is None:
+            exclude_types = []
+        return {
+            field['name']: cls._filter_labels(labels, field['type_id'])
+            for field in cls.FIELDS
+            if not field['name'] in exclude_types}
 
 
 class UnitTools(object):
@@ -469,14 +510,24 @@ class UnitTools(object):
 
     def _apply_updates_common(self, unit, updated_unit_dict, errors):
         """Apply changes common to all unit types."""
-        unit.title = updated_unit_dict.get('title')
-        unit.description = updated_unit_dict.get('description')
-        unit.now_available = not updated_unit_dict.get('is_draft')
 
-        labels = LabelGroupsHelper.decode_labels_group(
-            updated_unit_dict['label_groups'])
+        #throw an error only for assessment
+        if unit.is_locked and unit.is_assessment():
+            raise ValueError(
+                "This unit has been locked down and cannot be edited.")
+
+        unit.availablity = updated_unit_dict.get('availablity')
+        unit.shown_when_unavailable = updated_unit_dict.get(
+            'shown_when_unavailable')
         unit.parent_unit = updated_unit_dict.get('parent_unit')
-        if self._course.get_parent_unit(unit.unit_id):
+
+        if 'title' in updated_unit_dict:
+            unit.title = updated_unit_dict['title']
+        if 'description' in updated_unit_dict:
+            unit.description = updated_unit_dict['description']
+        labels = LabelGroupsHelper.field_data_to_labels(updated_unit_dict)
+
+        if labels and self._course.get_parent_unit(unit.unit_id):
             track_label_ids = models.LabelDAO.get_set_of_ids_of_type(
                 models.LabelDTO.LABEL_TYPE_COURSE_TRACK)
             if track_label_ids.intersection(labels):
@@ -485,57 +536,85 @@ class UnitTools(object):
 
         unit.labels = common_utils.list_to_text(labels)
 
+        # Apply lockdown if required
+        if unit.availablity != courses.AVAILABILITY_UNAVAILABLE:
+            # has been made public. Lock down.
+            # Only for Assessment for now
+            if unit.is_assessment():
+                unit.is_locked = True
+
     def _apply_updates_to_assessment(self, unit, updated_unit_dict, errors):
         """Store the updated assessment."""
-
         entity_dict = {}
-        ResourceAssessment.get_schema(None, None).convert_json_to_entity(
-            updated_unit_dict, entity_dict)
+        ResourceAssessment.get_schema(
+            self._course, unit.unit_id).convert_json_to_entity(
+                updated_unit_dict, entity_dict)
 
         self._apply_updates_common(unit, entity_dict, errors)
-        try:
-            unit.weight = float(entity_dict.get('weight'))
-            if unit.weight < 0:
-                errors.append('The weight must be a non-negative integer.')
-        except ValueError:
-            errors.append('The weight must be an integer.')
-        content = entity_dict.get('content')
-        if content:
-            self._course.set_assessment_content(
-                unit, entity_dict.get('content'), errors=errors)
 
-        unit.html_content = entity_dict.get('html_content')
-        unit.html_check_answers = entity_dict.get('html_check_answers')
-        unit.enable_negative_marking = entity_dict.get('enable_negative_marking')
+        if 'weight' in entity_dict:
+            try:
+                unit.weight = float(entity_dict['weight'])
+                if unit.weight < 0:
+                    errors.append('The weight must be a non-negative integer.')
+            except ValueError:
+                errors.append('The weight must be an integer.')
+        if 'content' in entity_dict:
+            content = entity_dict['content']
+            if content:
+                self._course.set_assessment_content(
+                    unit, content, errors=errors)
 
-        workflow_dict = entity_dict.get('workflow')
-        if len(courses.ALLOWED_MATCHERS_NAMES) == 1:
-            workflow_dict[courses.MATCHER_KEY] = (
-                courses.ALLOWED_MATCHERS_NAMES.keys()[0])
-        unit.workflow_yaml = yaml.safe_dump(workflow_dict)
-        unit.workflow.validate(errors=errors)
+        if 'html_content' in entity_dict:
+            unit.html_content = entity_dict['html_content']
+        if 'html_check_answers' in entity_dict:
+            unit.html_check_answers = entity_dict['html_check_answers']
+
+        if 'enable_negative_marking' in entity_dict:
+            unit.enable_negative_marking = entity_dict['enable_negative_marking']
+
+        if 'workflow' in entity_dict:
+            workflow_dict = entity_dict['workflow']
+
+            def convert_date(key):
+                due_date = workflow_dict.get(key)
+                if due_date:
+                    workflow_dict[key] = due_date.strftime(
+                        courses.ISO_8601_DATE_FORMAT)
+
+            convert_date(courses.SUBMISSION_DUE_DATE_KEY)
+            convert_date(courses.REVIEW_DUE_DATE_KEY)
+
+            if len(courses.ALLOWED_MATCHERS_NAMES) == 1:
+                workflow_dict[courses.MATCHER_KEY] = (
+                    courses.ALLOWED_MATCHERS_NAMES.keys()[0])
+            unit.workflow_yaml = yaml.safe_dump(workflow_dict)
+            unit.workflow.validate(errors=errors)
 
         # Only save the review form if the assessment needs human grading.
         if not errors:
             if self._course.needs_human_grader(unit):
-                review_form = entity_dict.get('review_form')
-                if review_form:
-                    self._course.set_review_form(
-                        unit, review_form, errors=errors)
-                unit.html_review_form = entity_dict.get('html_review_form')
+                if 'review_form' in entity_dict:
+                    review_form = entity_dict['review_form']
+                    if review_form:
+                        self._course.set_review_form(
+                            unit, review_form, errors=errors)
+                if 'html_review_form' in entity_dict:
+                    unit.html_review_form = entity_dict['html_review_form']
             elif entity_dict.get('review_form'):
                 errors.append(
                     'Review forms for auto-graded assessments should be empty.')
 
     def _apply_updates_to_link(self, unit, updated_unit_dict, errors):
         self._apply_updates_common(unit, updated_unit_dict, errors)
-        unit.href = updated_unit_dict.get('url')
+        if 'url' in updated_unit_dict:
+            unit.href = updated_unit_dict['url']
 
     def _is_assessment_unused(self, unit, assessment, errors):
         parent_unit = self._course.get_parent_unit(assessment.unit_id)
         if parent_unit and parent_unit.unit_id != unit.unit_id:
             errors.append(
-                'Assessment "%s" is already asssociated to unit "%s"' % (
+                'Assessment "%s" is already associated to unit "%s"' % (
                     assessment.title, parent_unit.title))
             return False
         return True
@@ -568,33 +647,44 @@ class UnitTools(object):
 
     def _apply_updates_to_unit(self, unit, updated_unit_dict, errors):
         self._apply_updates_common(unit, updated_unit_dict, errors)
-        unit.unit_header = updated_unit_dict['unit_header']
-        unit.unit_footer = updated_unit_dict['unit_footer']
-        unit.pre_assessment = None
-        unit.post_assessment = None
-        unit.manual_progress = updated_unit_dict['manual_progress']
-        pre_assessment_id = updated_unit_dict['pre_assessment']
-        if pre_assessment_id >= 0:
-            assessment = self._course.find_unit_by_id(pre_assessment_id)
-            if (self._is_assessment_unused(unit, assessment, errors) and
-                self._is_assessment_version_ok(assessment, errors) and
-                not self._is_assessment_on_track(assessment, errors)):
-                unit.pre_assessment = pre_assessment_id
+        if 'unit_header' in updated_unit_dict:
+            unit.unit_header = updated_unit_dict['unit_header']
+        if 'unit_footer' in updated_unit_dict:
+            unit.unit_footer = updated_unit_dict['unit_footer']
+        if 'manual_progress' in updated_unit_dict:
+            unit.manual_progress = updated_unit_dict['manual_progress']
+        #[TODO]Thej not required?
+        # if 'pre_assessment' in updated_unit_dict:
+        #     unit.pre_assessment = None
+        #     pre_assessment_id = updated_unit_dict['pre_assessment']
+        #     if pre_assessment_id >= 0:
+        #         assessment = self._course.find_unit_by_id(pre_assessment_id)
+        #         if (self._is_assessment_unused(unit, assessment, errors) and
+        #             self._is_assessment_version_ok(assessment, errors) and
+        #             not self._is_assessment_on_track(assessment, errors)):
+        #             unit.pre_assessment = pre_assessment_id
+        # if 'post_assessment' in updated_unit_dict:
+        #     unit.post_assessment = None
+        #     post_assessment_id = updated_unit_dict['post_assessment']
+        #     if (post_assessment_id >= 0 and
+        #         pre_assessment_id == post_assessment_id):
+        #
+        #         errors.append(
+        #             'The same assessment cannot be used as both the pre '
+        #             'and post assessment of a unit.')
+        #     elif post_assessment_id >= 0:
+        #         assessment = self._course.find_unit_by_id(post_assessment_id)
+        #         if (assessment and
+        #             self._is_assessment_unused(unit, assessment, errors) and
+        #             self._is_assessment_version_ok(assessment, errors) and
+        #             not self._is_assessment_on_track(assessment, errors)):
+        #             unit.post_assessment = post_assessment_id
+        if 'show_contents_on_one_page' in updated_unit_dict:
+            unit.show_contents_on_one_page = (
+                updated_unit_dict['show_contents_on_one_page'])
 
-        post_assessment_id = updated_unit_dict['post_assessment']
-        if post_assessment_id >= 0 and pre_assessment_id == post_assessment_id:
-            errors.append(
-                'The same assessment cannot be used as both the pre '
-                'and post assessment of a unit.')
-        elif post_assessment_id >= 0:
-            assessment = self._course.find_unit_by_id(post_assessment_id)
-            if (assessment and
-                self._is_assessment_unused(unit, assessment, errors) and
-                self._is_assessment_version_ok(assessment, errors) and
-                not self._is_assessment_on_track(assessment, errors)):
-                unit.post_assessment = post_assessment_id
-        unit.show_contents_on_one_page = (
-            updated_unit_dict['show_contents_on_one_page'])
+        if 'html_check_answers' in updated_unit_dict:
+            unit.html_check_answers = updated_unit_dict['html_check_answers']
 
     def unit_to_dict(self, unit, keys=None):
         if unit.type == verify.UNIT_TYPE_ASSESSMENT:
@@ -607,15 +697,26 @@ class UnitTools(object):
             raise ValueError('Unknown unit type %s' % unit.type)
 
     def _unit_to_dict_common(self, unit):
-        return {
+        data = {
             'key': unit.unit_id,
             'type': verify.UNIT_TYPE_NAMES[unit.type],
             'title': unit.title,
             'description': unit.description or '',
-            'is_draft': not unit.now_available,
+            'availablity': unit.now_available,
             'parent_unit': unit.parent_unit,
-            'label_groups': LabelGroupsHelper.unit_labels_to_dict(
-                self._course, unit)}
+            'shown_when_unavailable': unit.shown_when_unavailable,
+            'is_locked': "Yes" if unit.is_locked else "No"
+        }
+
+        exclude_types = []
+        if self._course.get_parent_unit(unit.unit_id):
+            exclude_types.append(LabelGroupsHelper.TRACKS_FIELD_NAME)
+
+        data.update(LabelGroupsHelper.labels_to_field_data(
+            common_utils.text_to_list(unit.labels),
+            exclude_types=exclude_types))
+
+        return data
 
     def _get_assessment_path(self, unit):
         return self._course.app_context.fs.impl.physical_to_logical(
@@ -649,16 +750,14 @@ class UnitTools(object):
         workflow = unit.workflow
 
         if workflow.get_submission_due_date():
-            submission_due_date = workflow.get_submission_due_date().strftime(
-                courses.ISO_8601_DATE_FORMAT)
+            submission_due_date = workflow.get_submission_due_date()
         else:
-            submission_due_date = ''
+            submission_due_date = None
 
         if workflow.get_review_due_date():
-            review_due_date = workflow.get_review_due_date().strftime(
-                courses.ISO_8601_DATE_FORMAT)
+            review_due_date = workflow.get_review_due_date()
         else:
-            review_due_date = ''
+            review_due_date = None
 
         unit_common = self._unit_to_dict_common(unit)
         unit_common.update({
@@ -670,8 +769,12 @@ class UnitTools(object):
             'html_check_answers': (
                 False if unit.is_old_style_assessment(self._course)
                 else unit.html_check_answers),
+            workflow_key(courses.SINGLE_SUBMISSION_KEY): (
+                workflow.is_single_submission()),
             workflow_key(courses.SUBMISSION_DUE_DATE_KEY): (
                 submission_due_date),
+            workflow_key(courses.SHOW_FEEDBACK_KEY): (
+                workflow.show_feedback()),
             workflow_key(courses.GRADER_KEY): workflow.get_grader(),
             workflow_key(courses.SUBMIT_ONLY_ONCE): workflow.submit_only_once(),
             'enable_negative_marking': unit.enable_negative_marking
@@ -708,6 +811,7 @@ class UnitTools(object):
         ret['show_contents_on_one_page'] = (
             unit.show_contents_on_one_page or False)
         ret['manual_progress'] = unit.manual_progress or False
+        ret['html_check_answers'] = unit.html_check_answers or False
         return ret
 
 
@@ -716,6 +820,11 @@ class ResourceUnitBase(resource.AbstractResourceHandler):
     ASSESSMENT_TYPE = 'assessment'
     UNIT_TYPE = 'unit'
     LINK_TYPE = 'link'
+
+    # These default values can be overridden by class-scoped constants in
+    # specific derived classes.
+    TITLE_DESCRIPTION = messages.UNIT_TITLE_DESCRIPTION
+    DESCRIPTION_DESCRIPTION = messages.UNIT_DESCRIPTION_DESCRIPTION
 
     @classmethod
     def key_for_unit(cls, unit, course=None):
@@ -743,32 +852,37 @@ class ResourceUnitBase(resource.AbstractResourceHandler):
         return UnitTools(course).unit_to_dict(unit)
 
     @classmethod
-    def _generate_common_schema(cls, title):
+    def _generate_common_schema(
+            cls, title, hidden_header=False, exclude_fields=None):
+        group_class_name = 'inputEx-Group new-form-layout'
+        if hidden_header:
+            group_class_name += ' hidden-header'
+
         ret = schema_fields.FieldRegistry(title, extra_schema_dict_values={
-            'className': 'inputEx-Group new-form-layout'})
+            'className': group_class_name})
         ret.add_property(schema_fields.SchemaField(
             'key', 'ID', 'string', editable=False,
-            extra_schema_dict_values={'className': 'inputEx-Field keyHolder'}))
+            extra_schema_dict_values={'className': 'inputEx-Field keyHolder'},
+            hidden=True))
         ret.add_property(schema_fields.SchemaField(
-            'type', 'Type', 'string', editable=False))
+            'type', 'Type', 'string', editable=False, hidden=True))
         ret.add_property(schema_fields.SchemaField(
-            'title', 'Title', 'string', optional=True))
+            'title', 'Title', 'string',
+            description=cls.TITLE_DESCRIPTION, optional=False))
         ret.add_property(schema_fields.SchemaField(
-            'description', 'Description', 'string', optional=True))
-        ret.add_property(schema_fields.FieldArray(
-            'label_groups', 'Labels',
-            item_type=LabelGroupsHelper.make_labels_group_schema_field(),
-            extra_schema_dict_values={
-                'className': 'inputEx-Field label-group-list'}))
+            'description', 'Description', 'string',
+            description=cls.DESCRIPTION_DESCRIPTION, optional=True))
         ret.add_property(schema_fields.SchemaField(
-            'is_draft', 'Status', 'boolean',
-            select_data=[(True, DRAFT_TEXT),
-                         (False, PUBLISHED_TEXT)],
+            'is_locked', 'Is this unit Locked?', 'string',
+            description='Units get locked once you make them public. Please' +
+            ' contact your administrator if you still wish to make edits.',
+            optional=True, editable=False))
+
+        ret.add_property(schema_fields.SchemaField(
+            'availablity', 'Availablity', 'string',
+            select_data=courses.AVAILABILITY_SELECT_DATA,
             extra_schema_dict_values={
                 'className': 'split-from-main-group'}))
-        ret.add_property(schema_fields.SchemaField(
-			'parent_unit', 'Parent Unit', 'string'
-			,optional=True, select_data=[]))
 
         return ret
 
@@ -780,33 +894,38 @@ class ResourceUnit(ResourceUnitBase):
     @classmethod
     def get_schema(cls, course, key):
         schema = cls._generate_common_schema('Unit')
+        LabelGroupsHelper.add_labels_schema_fields(schema, 'unit')
         schema.add_property(schema_fields.SchemaField(
-            'unit_header', 'Unit Header', 'html', optional=True,
+            'show_contents_on_one_page', 'Show on One Page', 'boolean',
+            description=messages.UNIT_SHOW_ON_ONE_PAGE_DESCRIPTION,
+            optional=True))
+        schema.add_property(schema_fields.SchemaField(
+            'manual_progress', 'Allow Manual Completion', 'boolean',
+            description=services.help_urls.make_learn_more_message(
+                messages.UNIT_ALLOW_MANUAL_COMPLETION_DESCRIPTION,
+                'course:%s:manual_progress' % ResourceUnitBase.UNIT_TYPE),
+            optional=True))
+        schema.add_property(schema_fields.SchemaField(
+            'unit_header', 'Header', 'html', optional=True,
+            description=messages.UNIT_HEADER_DESCRIPTION,
             extra_schema_dict_values={
                 'supportCustomTags': tags.CAN_USE_DYNAMIC_TAGS.value,
-                'excludedCustomTags': tags.EditorDenylists.DESCRIPTIVE_SCOPE,
-                'className': 'inputEx-Field html-content'}))
+                'excludedCustomTags': tags.EditorBlacklists.DESCRIPTIVE_SCOPE,
+                'className': 'inputEx-Field html-content cb-editor-small'}))
         schema.add_property(schema_fields.SchemaField(
-            'pre_assessment', 'Pre Assessment', 'integer', optional=True))
-        schema.add_property(schema_fields.SchemaField(
-            'post_assessment', 'Post Assessment', 'integer', optional=True))
-        schema.add_property(schema_fields.SchemaField(
-            'show_contents_on_one_page', 'Show Contents on One Page', 'boolean',
-            optional=True,
-            description='Whether to show all assessments, lessons, '
-            'and activities in a Unit on one page, or to show each on '
-            'its own page.'))
-        schema.add_property(schema_fields.SchemaField(
-            'manual_progress', 'Manual Progress', 'boolean', optional=True,
-            description='When set, the manual progress REST API permits '
-            'users to manually mark a unit or lesson as complete, '
-            'overriding the automatic progress tracking.'))
-        schema.add_property(schema_fields.SchemaField(
-            'unit_footer', 'Unit Footer', 'html', optional=True,
+            'unit_footer', 'Footer', 'html', optional=True,
+            description=messages.UNIT_FOOTER_DESCRIPTION,
             extra_schema_dict_values={
                 'supportCustomTags': tags.CAN_USE_DYNAMIC_TAGS.value,
-                'excludedCustomTags': tags.EditorDenylists.DESCRIPTIVE_SCOPE,
-                'className': 'inputEx-Field html-content'}))
+                'excludedCustomTags': tags.EditorBlacklists.DESCRIPTIVE_SCOPE,
+                'className': 'inputEx-Field html-content cb-editor-small'}))
+        schema.add_property(schema_fields.SchemaField(
+            'html_check_answers', "Show Correct Answer inside Lessons", 'boolean',
+            description=messages.ASSESSMENT_SHOW_CORRECT_ANSWER_DESCRIPTION,
+            extra_schema_dict_values={
+                'className': ('inputEx-Field inputEx-CheckBox'
+                              ' assessment-editor-check-answers')},
+            optional=True))
         return schema
 
     @classmethod
@@ -821,54 +940,92 @@ class ResourceAssessment(ResourceUnitBase):
 
     TYPE = ResourceUnitBase.ASSESSMENT_TYPE
 
+    TITLE_DESCRIPTION = messages.ASSESSMENT_TITLE_DESCRIPTION
+    DESCRIPTION_DESCRIPTION = messages.ASSESSMENT_DESCRIPTION_DESCRIPTION
+    AVAILABILITY_DESCRIPTION = messages.ASSESSMENT_AVAILABILITY_DESCRIPTION
+    SYLLABUS_VISIBILITY_DESCRIPTION = (
+        messages.ASSESSMENT_SYLLABUS_VISIBILITY_DESCRIPTION)
+
     @classmethod
     def get_schema(cls, course, key):
-        reg = schema_fields.FieldRegistry(
-            'Assessment Entity', description='Assessment',
+        reg = schema_fields.FieldRegistry('Assessment',
             extra_schema_dict_values={
                 'className': 'inputEx-Group new-form-layout'})
 
         # Course level settings.
-        course_opts = cls._generate_common_schema('Assessment Config')
+        course_opts = cls._generate_common_schema(
+            'Assessment Config', hidden_header=True)
+
+        unit = cls.get_resource(course, key)
+        exclude_types = []
+        if course.get_parent_unit(unit.unit_id):
+            exclude_types.append(LabelGroupsHelper.TRACKS_FIELD_NAME)
+
+        LabelGroupsHelper.add_labels_schema_fields(
+            course_opts, 'assessment', exclude_types=exclude_types)
+
         course_opts.add_property(schema_fields.SchemaField(
-            'weight', 'Weight', 'string', optional=True, i18n=False))
+            'weight', 'Points', 'number',
+            description=messages.ASSESSMENT_POINTS_DESCRIPTION,
+            i18n=False, optional=False))
         course_opts.add_property(schema_fields.SchemaField(
-            'content', 'Assessment Content', 'text', optional=True,
-            description=str(messages.ASSESSMENT_CONTENT_DESCRIPTION),
+            'content', 'Assessment Content (JavaScript)', 'text', optional=True,
+            description=services.help_urls.make_learn_more_message(
+                messages.ASSESSMENT_CONTENT_JAVASCRIPT_DESCRIPTION,
+                'course:%s:content' % ResourceUnitBase.ASSESSMENT_TYPE),
             extra_schema_dict_values={'className': 'inputEx-Field content'}))
         course_opts.add_property(schema_fields.SchemaField(
-            'html_content', 'Assessment Content (HTML)', 'html', optional=True,
+            'html_content', 'Assessment Content', 'html', optional=True,
+            description=services.help_urls.make_learn_more_message(
+                messages.ASSESSMENT_CONTENT_DESCRIPTION,
+                'course:%s:html_content' % ResourceUnitBase.ASSESSMENT_TYPE),
             extra_schema_dict_values={
                 'supportCustomTags': tags.CAN_USE_DYNAMIC_TAGS.value,
-                'excludedCustomTags': tags.EditorDenylists.ASSESSMENT_SCOPE,
+                'excludedCustomTags': tags.EditorBlacklists.ASSESSMENT_SCOPE,
                 'className': 'inputEx-Field html-content'}))
         course_opts.add_property(schema_fields.SchemaField(
-            'html_check_answers', '"Check Answers" Buttons', 'boolean',
-            optional=True,
+            'html_check_answers', "Show Correct Answer", 'boolean',
+            description=messages.ASSESSMENT_SHOW_CORRECT_ANSWER_DESCRIPTION,
             extra_schema_dict_values={
-                'className': 'inputEx-Field assessment-editor-check-answers'}))
+                'className': ('inputEx-Field inputEx-CheckBox'
+                              ' assessment-editor-check-answers')},
+            optional=True))
+        course_opts.add_property(schema_fields.SchemaField(
+            workflow_key(courses.SINGLE_SUBMISSION_KEY), 'Single Submission',
+            'boolean', optional=True,
+            description=messages.ASSESSMENT_SINGLE_SUBMISSION_DESCRIPTION))
         course_opts.add_property(schema_fields.SchemaField(
             workflow_key(courses.SUBMISSION_DUE_DATE_KEY),
-            'Submission Due Date', 'string', optional=True,
-            description=str(messages.DUE_DATE_FORMAT_DESCRIPTION)))
+            'Due Date', 'datetime', optional=False,
+            description=str(messages.ASSESSMENT_DUE_DATE_FORMAT_DESCRIPTION),
+            extra_schema_dict_values={'_type': 'datetime'}))
         course_opts.add_property(schema_fields.SchemaField(
-            workflow_key(courses.SUBMIT_ONLY_ONCE),
-            'Number of Submissions', 'boolean',
-            select_data=[(False, 'Allow Multiple Submissions'), (True, 'Submit Only Once') ]))
+            workflow_key(courses.SHOW_FEEDBACK_KEY), 'Show Feedback',
+            'boolean', optional=True,
+            description=messages.ASSESSMENT_SHOW_FEEDBACK_DESCRIPTION))
         course_opts.add_property(schema_fields.SchemaField(
             workflow_key(courses.GRADER_KEY), 'Grading Method', 'string',
-            select_data=ALLOWED_GRADERS_NAMES.items()))
+            select_data=ALLOWED_GRADERS_NAMES.items(), optional=True,
+            description=services.help_urls.make_learn_more_message(
+                messages.ASSESSMENT_GRADING_METHOD_DESCRIPTION,
+                'course:%s:%s' % (
+                    ResourceUnitBase.ASSESSMENT_TYPE,
+                    workflow_key(courses.GRADER_KEY)))))
         course_opts.add_property(schema_fields.SchemaField(
             'enable_negative_marking', 'Enable Negative Marking', 'boolean',
             optional=True,
             extra_schema_dict_values={
                 'className': 'inputEx-Field assessment-editor-check-answers'}))
+        course_opts.add_property(schema_fields.SchemaField('parent_unit', 'Parent Unit', 'string', editable=False, select_data=[]))
         reg.add_sub_registry('assessment', 'Assessment Config',
                              registry=course_opts)
 
-        review_opts = reg.add_sub_registry(
-            'review_opts', 'Review Config',
-            description=str(messages.ASSESSMENT_DETAILS_DESCRIPTION))
+        review_opts = reg.add_sub_registry('review_opts', 'Peer review',
+            description=services.help_urls.make_learn_more_message(
+                messages.ASSESSMENT_DETAILS_DESCRIPTION,
+                'course:%s:review_opts' % ResourceUnitBase.ASSESSMENT_TYPE),
+            extra_schema_dict_values={'id': 'peer-review-group'})
+
         if len(courses.ALLOWED_MATCHERS_NAMES) > 1:
             review_opts.add_property(schema_fields.SchemaField(
                 workflow_key(courses.MATCHER_KEY), 'Review Matcher', 'string',
@@ -876,29 +1033,37 @@ class ResourceAssessment(ResourceUnitBase):
                 select_data=courses.ALLOWED_MATCHERS_NAMES.items()))
 
         review_opts.add_property(schema_fields.SchemaField(
-            'review_form', 'Reviewer Feedback Form', 'text', optional=True,
-            description=str(messages.REVIEWER_FEEDBACK_FORM_DESCRIPTION),
+            'review_form', 'Reviewer Feedback Form (JavaScript)', 'text',
+            optional=True,
+            description=services.help_urls.make_learn_more_message(
+                messages.ASSESSMENT_REVIEWER_FEEDBACK_FORM_DESCRIPTION,
+                'course:%s:review_form' % ResourceUnitBase.ASSESSMENT_TYPE),
             extra_schema_dict_values={
                 'className': 'inputEx-Field review-form'}))
         review_opts.add_property(schema_fields.SchemaField(
-            'html_review_form', 'Reviewer Feedback Form (HTML)', 'html',
+            'html_review_form', 'Reviewer Feedback Form', 'html',
             optional=True,
+            description=(
+                messages.ASSESSMENT_REVIEWER_FEEDBACK_FORM_HTML_DESCRIPTION),
             extra_schema_dict_values={
                 'supportCustomTags': tags.CAN_USE_DYNAMIC_TAGS.value,
-                'excludedCustomTags': tags.EditorDenylists.ASSESSMENT_SCOPE,
+                'excludedCustomTags': tags.EditorBlacklists.ASSESSMENT_SCOPE,
                 'className': 'inputEx-Field html-review-form'}))
         review_opts.add_property(schema_fields.SchemaField(
             workflow_key(courses.REVIEW_DUE_DATE_KEY),
-            'Review Due Date', 'string', optional=True,
-            description=str(messages.REVIEW_DUE_DATE_FORMAT_DESCRIPTION)))
+            'Review Due Date', 'datetime', optional=True,
+            description=messages.ASSESSMENT_REVIEW_DUE_DATE_FORMAT_DESCRIPTION,
+            extra_schema_dict_values={'_type': 'datetime'}))
         review_opts.add_property(schema_fields.SchemaField(
             workflow_key(courses.REVIEW_MIN_COUNT_KEY),
             'Review Min Count', 'integer', optional=True,
-            description=str(messages.REVIEW_MIN_COUNT_DESCRIPTION)))
+            description=messages.ASSESSMENT_REVIEW_MIN_COUNT_DESCRIPTION))
         review_opts.add_property(schema_fields.SchemaField(
             workflow_key(courses.REVIEW_WINDOW_MINS_KEY),
             'Review Window Timeout', 'integer', optional=True,
-            description=str(messages.REVIEW_TIMEOUT_IN_MINUTES)))
+            description=services.help_urls.make_learn_more_message(
+                messages.ASSESSMENT_REVIEW_TIMEOUT_IN_MINUTES,
+                workflow_key(courses.REVIEW_WINDOW_MINS_KEY))))
         return reg
 
 
@@ -915,12 +1080,21 @@ class ResourceLink(ResourceUnitBase):
 
     TYPE = ResourceUnitBase.LINK_TYPE
 
+    TITLE_DESCRIPTION = messages.LINK_TITLE_DESCRIPTION
+    DESCRIPTION_DESCRIPTION = messages.LINK_DESCRIPTION_DESCRIPTION
+    AVAILABILITY_DESCRIPTION = messages.LINK_AVAILABILITY_DESCRIPTION
+    SYLLABUS_VISIBILITY_DESCRIPTION = (
+        messages.LINK_SYLLABUS_VISIBILITY_DESCRIPTION)
+
     @classmethod
     def get_schema(cls, course, key):
         schema = cls._generate_common_schema('Link')
+        LabelGroupsHelper.add_labels_schema_fields(schema, 'link')
         schema.add_property(schema_fields.SchemaField(
-            'url', 'URL', 'string', optional=True,
-            description=messages.LINK_EDITOR_URL_DESCRIPTION))
+            'url', 'URL', 'string', description=messages.LINK_URL_DESCRIPTION,
+            extra_schema_dict_values={'_type': 'url', 'showMsg': True}))
+
+        schema.add_property(schema_fields.SchemaField('parent_unit', 'Parent Unit', 'string', editable=False, select_data=[]))
         return schema
 
     @classmethod
@@ -956,44 +1130,45 @@ class ResourceLesson(resource.AbstractResourceHandler):
 
         # Note GcbRte relies on the structure of this schema. Do not change
         # without checking the dependency.
-        unit_list = []
-        for unit in units:
-            if unit.type == 'U':
-                unit_list.append(
-                    (unit.unit_id,
-                     cgi.escape(display_unit_title(unit, course.app_context))))
+        lesson_element = course.find_lesson_by_id(None, key)
+        has_video_id = bool(lesson_element and lesson_element.video)
 
         lesson = schema_fields.FieldRegistry(
             'Lesson', description='Lesson', extra_schema_dict_values={
                 'className': 'inputEx-Group new-form-layout'})
         lesson.add_property(schema_fields.SchemaField(
             'key', 'ID', 'string', editable=False,
-             extra_schema_dict_values={'className': 'inputEx-Field keyHolder'}))
+            extra_schema_dict_values={'className': 'inputEx-Field keyHolder'},
+            hidden=True))
         lesson.add_property(schema_fields.SchemaField(
-            'title', 'Title', 'string'))
+            'title', 'Title', 'string', extra_schema_dict_values={
+                'className': 'inputEx-Field content-holder'},
+            description=messages.LESSON_TITLE_DESCRIPTION))
+        lesson.add_property(create_select_array_schema(
+            'unit_id', 'Contained in Unit',
+            messages.LESSON_PARENT_UNIT_DESCRIPTION))
+
         lesson.add_property(schema_fields.SchemaField(
-            'unit_id', 'Parent Unit', 'string', i18n=False,
-            select_data=unit_list))
+            'video', 'Video ID', 'string', # hidden=not has_video_id,
+            optional=True, description=messages.LESSON_VIDEO_ID_DESCRIPTION))
         lesson.add_property(schema_fields.SchemaField(
-            'video', 'Video ID', 'string', optional=True,
-            description=messages.LESSON_VIDEO_ID_DESCRIPTION))
-        lesson.add_property(schema_fields.SchemaField(
-            'scored', 'Scored', 'string', optional=True, i18n=False,
+            'scored', 'Question Scoring', 'string', optional=True, i18n=False,
             description=messages.LESSON_SCORED_DESCRIPTION,
             select_data=[
                 ('scored', 'Questions are scored'),
                 ('not_scored', 'Questions only give feedback')]))
         lesson.add_property(schema_fields.SchemaField(
             'objectives', 'Lesson Body', 'html', optional=True,
-            description=messages.LESSON_OBJECTIVES_DESCRIPTION,
             extra_schema_dict_values={
+                'className': 'content-holder',
                 'supportCustomTags': tags.CAN_USE_DYNAMIC_TAGS.value}))
         lesson.add_property(schema_fields.SchemaField(
-            'notes', 'Notes', 'string', optional=True,
-            description=messages.LESSON_NOTES_DESCRIPTION))
+            'notes', 'Text Version URL', 'string', optional=True,
+            description=messages.LESSON_TEXT_VERSION_URL_DESCRIPTION,
+            extra_schema_dict_values={'_type': 'url', 'showMsg': True}))
         lesson.add_property(schema_fields.SchemaField(
-            'auto_index', 'Auto Number', 'boolean',
-            description=messages.LESSON_AUTO_INDEX_DESCRIPTION))
+            'auto_index', 'Auto-Number', 'boolean',
+            description=messages.LESSON_AUTO_NUMBER_DESCRIPTION, optional=True))
         lesson.add_property(schema_fields.SchemaField(
             'activity_title', 'Activity Title', 'string', optional=True,
             description=messages.LESSON_ACTIVITY_TITLE_DESCRIPTION))
@@ -1002,17 +1177,17 @@ class ResourceLesson(resource.AbstractResourceHandler):
             description=messages.LESSON_ACTIVITY_LISTED_DESCRIPTION))
         lesson.add_property(schema_fields.SchemaField(
             'activity', 'Activity', 'text', optional=True,
-            description=str(messages.LESSON_ACTIVITY_DESCRIPTION),
+            description=services.help_urls.make_learn_more_message(
+                messages.LESSON_ACTIVITY_DESCRIPTION,
+                'course:lesson:activity'),
             extra_schema_dict_values={
                 'className': 'inputEx-Field activityHolder'}))
         lesson.add_property(schema_fields.SchemaField(
-            'manual_progress', 'Manual Progress', 'boolean', optional=True,
-            description=messages.LESSON_MANUAL_PROGRESS_DESCRIPTION))
-        lesson.add_property(schema_fields.SchemaField(
-            'is_draft', 'Status', 'boolean',
-            select_data=[(True, DRAFT_TEXT), (False, PUBLISHED_TEXT)],
-            extra_schema_dict_values={
-                'className': 'split-from-main-group'}))
+            'manual_progress', 'Require Manual Completion', 'boolean',
+            description=services.help_urls.make_learn_more_message(
+                messages.LESSON_REQUIRE_MANUAL_COMPLETION_DESCRIPTION,
+                'course:lesson:manual_progress'),
+            optional=True))
         return lesson
 
     @classmethod
@@ -1026,10 +1201,21 @@ class ResourceLesson(resource.AbstractResourceHandler):
         else:
             activity = ''
 
+        units = course.get_units()
+        unit_list = []
+        for unit in units:
+            if unit.type == 'U':
+                unit_list.append({
+                    'value': str(unit.unit_id),
+                    'label': cgi.escape(
+                        display_unit_title(unit, course.app_context)),
+                    'selected': str(lesson.unit_id) == str(unit.unit_id),
+                    })
+
         lesson_dict = {
             'key': lesson.lesson_id,
             'title': lesson.title,
-            'unit_id': lesson.unit_id,
+            'unit_id': unit_list,
             'scored': 'scored' if lesson.scored else 'not_scored',
             'objectives': lesson.objectives,
             'video': lesson.video,
@@ -1039,7 +1225,6 @@ class ResourceLesson(resource.AbstractResourceHandler):
             'activity_listed': lesson.activity_listed,
             'activity': activity,
             'manual_progress': lesson.manual_progress or False,
-            'is_draft': not lesson.now_available
             }
         return lesson_dict
 
@@ -1063,7 +1248,8 @@ def get_unit_title_template(app_context):
         # will be replaced with a number indicating the unit's
         # sequence I18N: number within the course, and the %(title)
         # with the unit's title.
-        return app_context.gettext('Unit %(index)s - %(title)s')
+        return app_context.gettext('Unit %(index)s - %(title)s',
+                                   log_exception=False)
 
 
 def display_unit_title(unit, app_context):
@@ -1083,7 +1269,7 @@ def display_short_unit_title(unit, app_context):
     # I18N: Message displayed as title for unit within a course.  The
     # "%s" will be replaced with the index number of the unit within
     # the course.  E.g., "Unit 1", "Unit 2" and so on.
-    unit_title = app_context.gettext('Unit %s')
+    unit_title = app_context.gettext('Unit %s', log_exception=False)
     return unit_title % unit.index
 
 
@@ -1109,3 +1295,20 @@ def display_lesson_title(unit, lesson, app_context):
     span.add_text(lesson.title)
     span.set_attribute('className', _class)
     return content
+
+
+def create_select_array_schema(field_name, field_title, description):
+    select_element = schema_fields.FieldRegistry(title=None)
+    select_element.add_property(schema_fields.SchemaField(
+        'value', 'Value', 'string',
+        editable=False, hidden=True, i18n=False))
+    select_element.add_property(schema_fields.SchemaField(
+        'label', 'Label', 'string',
+        i18n=False, editable=False))
+    select_element.add_property(schema_fields.SchemaField(
+        'selected', 'Selected', 'boolean', default_value=False,
+        i18n=False, editable=False))
+    return schema_fields.FieldArray(
+        field_name, field_title, description=description,
+        item_type=select_element, optional=True,
+        extra_schema_dict_values={'_type': 'array-select'})

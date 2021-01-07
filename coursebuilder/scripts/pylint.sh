@@ -1,19 +1,5 @@
 #! /bin/bash
 
-# Copyright 2020 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 # Copyright 2014 Google Inc. All Rights Reserved.
 #
 # Wrapper script to launch PyLint ( http://www.pylint.org/ ) against
@@ -58,6 +44,13 @@ fi
 #
 . "$(dirname "$0")/config.sh"
 export PYTHONPATH=$PYTHONPATH:\
+$FANCY_URLLIB_PATH:\
+$JINJA_PATH:\
+$WEBAPP_PATH:\
+$WEBOB_PATH:\
+$YAML_PATH:\
+$SIX_PATH:\
+$SOURCE_DIR:\
 $SOURCE_DIR:\
 $GOOGLE_APP_ENGINE_HOME:\
 $RUNTIME_HOME/logilab:\
@@ -74,7 +67,29 @@ if [[ ${#files[@]} -eq 0 ]] ; then
 fi
 total=${#files[@]}
 failures=0
-echo "Linting: Checking ${#files[@]} files with parallelism of $parallelism..."
+cached=0
+updated_on=$(date +%s)
+
+function log_time {
+    echo $(date +"%Y/%m/%d %H:%M:%S")
+}
+
+echo $(log_time)"     Linting started:" \
+  "${#files[@]} files with parallelism of $parallelism."
+
+# ------------------------------------------------------------------------------
+# Make a directory for caching of lint results; prepare pylint.rc file metadata
+#
+LINT_CACHE_DIR=$RUNTIME_HOME/coursebuilder/pylint_cache/
+if [ ! -d "$LINT_CACHE_DIR" ]; then
+  echo $(log_time)"     Creating new cache" \
+    "directory $LINT_CACHE_DIR"
+  mkdir -p $LINT_CACHE_DIR
+fi
+
+pylint_rc="$COURSEBUILDER_HOME/scripts/pylint.rc"
+meta_content_rc="pylint_rc_size: "$(stat -c %s "$pylint_rc")
+meta_content_rc=$meta_content_rc", pylint_rc_age: "$(stat -c %Y "$pylint_rc")
 
 # ------------------------------------------------------------------------------
 # Main loop: As long as we have any pending files or active lint jobs
@@ -85,22 +100,45 @@ while [[ ${#files[@]} -gt 0 ]] || [[ ${#jobs[@]} -gt 0 ]] ; do
   while [[ ${#jobs[@]} -lt $parallelism ]] && [[ ${#files[@]} -gt 0 ]] ; do
     filename=${files[0]}
     files=(${files[@]:1})  # shift array to drop item at index 0
-    if [[ $filename =~ (^|/)tests/ ]] ; then
+    if [[ $filename =~ (^|/)tests/ || $filename =~ modules/.*_tests.py ]] ; then
       IGNORE_FOR_TESTS[0]=--disable=protected-access
       IGNORE_FOR_TESTS[1]=--disable=unbalanced-tuple-unpacking
       IGNORE_FOR_TESTS[2]=--disable=unpacking-non-sequence
+      IGNORE_FOR_TESTS[3]=--disable=too-many-statements
     else
       IGNORE_FOR_TESTS=''
     fi
+
+    # if file has not changed in size and timestamp, we can skip linting; we
+    # keep the file's size and timestamp in a new file with a name derived
+    # from the filename; we also add the size and the age of pylint.rc file,
+    # to catch changes in linting rules
+    meta_filename="$LINT_CACHE_DIR"$(echo "$filename.meta" | tr / _)
+    meta_content="file_size: "$(stat -c %s "$filename")
+    meta_content=$meta_content", file_age: "$(stat -c %Y "$filename")
+    meta_content=$meta_content"; "$meta_content_rc
+    if [ -f "$meta_filename" ]; then
+        old_meta_content="$(< $meta_filename)"
+        if [ "$meta_content" = "$old_meta_content" ]; then
+          cached=$(( cached + 1 ))
+          echo "NOOP" > /dev/null &
+          jobs[$!]=$filename  # Map PID to filename
+          continue
+        else:
+          rm $meta_filename
+        fi
+    fi
+
+    # do the linting
     python $RUNTIME_HOME/logilab/pylint/lint.py \
       --rcfile=$COURSEBUILDER_HOME/scripts/pylint.rc \
       ${IGNORE_FOR_TESTS[@]} \
-      $filename &
+      $filename && echo $meta_content > $meta_filename &
     jobs[$!]=$filename  # Map PID to filename
   done
 
   # Don't just spin; pause to allow jobs to make some progress.
-  sleep 1
+  sleep 0.1
 
   # Check which jobs have completed, and check their exit status.
   for pid in ${!jobs[@]}; do
@@ -119,10 +157,12 @@ while [[ ${#files[@]} -gt 0 ]] || [[ ${#jobs[@]} -gt 0 ]] ; do
   done
 
   # Report on progress every so often.
-  if [[ $(( $(date +%s) % 20 )) -eq 0 ]] ; then
+  if [[ $(( $(date +%s) - $updated_on )) -gt 10 ]] ; then
+    updated_on=$(date +%s)
     done=$(( $total - ${#files[@]} - ${#jobs[@]} ))
-    echo "Linting: $done files done with $failures failures." \
-      "${#files[@]} pending; ${#jobs[@]} active."
+    echo $(log_time)"     Linting progress: $done done;" \
+      "$failures failed; $cached cached/skipped; ${#files[@]} pending;" \
+      "${#jobs[@]} active."
   fi
 done
 
@@ -130,6 +170,7 @@ done
 # Status report
 #
 end_time=$( date +%s )
-echo "Linting: $total files done in $((end_time-start_time)) seconds" \
-  "with $failures failures"
+echo $(log_time)"     Linting done in $((end_time-start_time)) seconds:" \
+  "$total done; $failures failed; $cached cached/skipped."
+
 exit $( [[ $failures -eq 0 ]] )

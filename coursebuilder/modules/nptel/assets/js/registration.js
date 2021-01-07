@@ -1,19 +1,3 @@
-/**
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 CountryCodesMap = {
 'AF': 'Afghanistan',
 'AX': 'Åland Islands',
@@ -261,13 +245,40 @@ CountryCodesMap = {
 
 IndianStatesList = ['Andaman_and_Nicobar_Islands', 'Andhra_Pradesh',
 'Arunachal_Pradesh', 'Assam', 'Bihar', 'Chandigarh', 'Chhattisgarh',
-'Dadra_and_Nagar_Haveli', 'Delhi', 'Goa', 'Gujarat', 'Haryana',
+'Dadra_and_Nagar_Haveli', 'Delhi', 'Diu_and_Daman', 'Goa', 'Gujarat', 'Haryana',
 'Himachal_Pradesh', 'Jammu_and_Kashmir', 'Jharkhand', 'Karnataka', 'Kerala',
 'Lakshadweep', 'Madhya_Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya',
 'Mizoram', 'Nagaland', 'Odisha', 'Pondicherry', 'Punjab', 'Rajasthan', 'Sikkim',
 'Tamil_Nadu', 'Telangana', 'Tripura', 'Uttarakhand', 'Uttar_Pradesh', 'West_Bengal'];
 
-// LocalChapterList should be defined in register.html
+// LocalChapterDict should be defined in register.html
+
+engineering_departments = ["Aeronautical Engineering","Agriculture Engineering","Architecture","Automobile Engineering",
+"Biotechnology","Ceramic Engineering","Chemical Engineering","Civil Engineering","Computer Science and Engineering",
+"Electronics and Communication Engineering","Electrical Engineering","Electronics Engineering","Environment Engineering",
+"Food Engineering","Industrial Engineering","Information Technology","Instrumentation Engineering","Marine Engineering",
+"Mechanical Engineering","Mechatronics Engineering","Metallurgy Engineering","Mining Engineering",
+"Petrochemical Engineering","Pharmaceutical Engineering","Planning","Printing Engineering","Production Engineering",
+"Textile Engineering"];
+
+arts_humanities_departments =  ["Defense and Strategic studies","Economics","Education ","English","Geography","Hindi",
+"History","History and Tourism","Home Science","Journalism","Mathematics","Modern Indian Language","Music","Philosophy",
+"Political Science","Psychology","Public Administration","Punjabi","Sanskrit","Sociology"];
+
+commerce_management_departments = ["Accounting and Finance","Banking and Insurance","Business Administration",
+"Business Economics","Commerce","Company and Compensation law","Financial Markets","Labor Management",
+"Tourism and Travel management"];
+
+science_departments = ["Anthropology ","B.Sc. Medical/Life Sciences","Biochemistry","Biomedical Science","Biotechnology",
+"Botany","Chemistry","Computer Science","Electronic Science","Environmental Science","Food Technology",
+"Forensic Science","Information Technology","Microbiology","Operational Research","Physical Science","Physics",
+"Statistics","Zoology"];
+
+other_departments = ["B. Lib","B.Ed","B.El.Ed","BCA","Fine Arts","Foreign Languages","LLB","Multimedia and Communication",
+"Performing Arts","Physical Education and Health", "Others"];
+
+student_engineering_degrees = ["diploma","be","btech","me","mtech","ms","phd"];
+
 
 function toTitleCase(str)
 {
@@ -308,20 +319,30 @@ function fillCountriesOptions() {
 }
 
 function fillLocalChapterCollegeOptions() {
-  localChapterIDs = Object.keys(LocalChapterList);
-  localChapterIDs.sort();
+  var localChapterList = Object.keys(LocalChapterDict).map(function(key) {
+    return LocalChapterDict[key];
+  });
+  localChapterList.sort(function(a, b) {
+    if (a.name == b.name) {
+      // Sort via city if names are equal
+      if (a.city == b.city) {
+        return 0;
+      }
+      return a.city < b.city ? -1 : 1;
+    }
+    return a.name < b.name ? -1 : 1;
+  });
   select_el = element('local_chapter_college');
-  for (var i in localChapterIDs) {
-    var localChapterId = localChapterIDs[i];
-    var localChapter = LocalChapterList[localChapterId];
-    var localChapterElementId = 'local_chapter_college_' + localChapterId;
+  for (var i in localChapterList) {
+    var localChapter = localChapterList[i];
+    var localChapterElementId = 'local_chapter_college_' + localChapter.college_id;
     var localChapterVisibleText = [
       localChapter.name,
       localChapter.city,
       localChapter.state
     ].join(', ');
     select_el.appendChild(addOptionElement(
-      localChapterElementId, localChapterId, localChapterVisibleText
+      localChapterElementId, localChapter.college_id, localChapterVisibleText
     ));
   }
 
@@ -333,7 +354,52 @@ function fillLocalChapterCollegeOptions() {
   if (oldCollegeId) {
     select_el.value = oldCollegeId;
   }
+  $("#local_chapter_college").trigger("chosen:updated");
 }
+
+
+
+
+function fillIndustryLocalChapterEmployerOptions() {
+
+  var industryLocalChapterList = Object.keys(IndustryLocalChapterDict).map(function(key) {
+    return IndustryLocalChapterDict[key];
+  });
+  industryLocalChapterList.sort(function(a, b) {
+    if (a.name == b.name) {
+    }
+    return a.name < b.name ? -1 : 1;
+  });
+
+  var select_el = element('industry_local_chapter_employer');
+  for (var i in industryLocalChapterList) {
+    var localChapter = industryLocalChapterList[i];
+    var localChapterElementId = 'industry_local_chapter_employer_' + localChapter.employer_id;
+    var localChapterVisibleText = [
+      localChapter.name
+    ].join(', ');
+    select_el.appendChild(addOptionElement(
+      localChapterElementId, localChapter.employer_id, localChapterVisibleText
+    ));
+  }
+
+  select_el.appendChild(
+    addOptionElement('industry_local_chapter_employer_other', 'other', 'Other'));
+
+  if(old_employer_id != ""){
+    // var oldlocalChapterElementId = 'industry_local_chapter_employer_' + old_employer_id;
+    // if(element(oldlocalChapterElementId)){
+    //   element(oldlocalChapterElementId).selected = "selected";
+    // }
+    select_el.value = old_employer_id;
+  }
+
+
+
+}
+
+
+
 
 function hideShowLocalChapter(country, profession) {
   var local_chapter_block = element('localChapterLi');
@@ -357,10 +423,45 @@ function hideShowLocalChapter(country, profession) {
     local_chapter_college_el.required = false;
   }
   localChapterOnChanged();
+  $("#local_chapter_college").trigger("chosen:updated");
 }
 
+
+function hideShowIndustryLocalChapter(country, profession) {
+
+  var local_chapter_block = element('industryLocalChapterLi');
+  var local_chapter_employer_el = element('industry_local_chapter_employer');
+  var local_chapter_el = element('industry_local_chapter');
+  if (!country) {
+    country = getSelectValue(element("country_of_residence"));
+  }
+  if (!profession) {
+    profession = getSelectValue(element("profession"));
+  }
+  if ("IN" == country && profession == "employed" ) {
+    local_chapter_block.style.display = '';
+    local_chapter_el.required = true;
+    local_chapter_employer_el.required = true;
+  }
+  else {
+    local_chapter_block.style.display = 'none';
+    local_chapter_el.selectedIndex = 0;
+    local_chapter_el.required = false;
+    local_chapter_employer_el.required = false;
+  }
+
+  industryLocalChapterOnChanged();
+
+}
+
+
+
 function getSelectValue(selectEl) {
-  return selectEl.options[selectEl.selectedIndex].value;
+  if(selectEl){
+    return selectEl.options[selectEl.selectedIndex].value;
+  }else{
+    return "";
+  }
 }
 
 function countryChanged() {
@@ -374,7 +475,7 @@ function countryChanged() {
   if ("IN" === country) {
     non_indian_state_block.style.display = 'none';
     indian_state_block.style.display = '';
-    local_chapter_college_el.style.display = '';
+    //local_chapter_college_el.style.display = '';
     indian_state_select_el.required = true;
 
   } else {
@@ -383,29 +484,263 @@ function countryChanged() {
     if (country) {
       local_chapter_college_el.value = 'other';
       localChapterCollegeChanged();
-      local_chapter_college_el.style.display = 'none';
+      //local_chapter_college_el.style.display = 'none';
       indian_state_select_el.required = false;
     }
   }
   hideShowLocalChapter(country, null);
+  //hideShowIndustryLocalChapter(country, null);
+  $("#local_chapter_college").trigger("chosen:updated");
 }
+
+
+function create_option(id, text, selected) {
+  var option = document.createElement("option");
+  option.id = id;
+  option.value = id;
+  option.text = text;
+  option.selected=selected;
+  return option;
+}
+
+
+function update_faculty_departments(){
+  faculty_area = getSelectValue(element('faculty_area'));
+
+  //Clear everything
+  faculty_department_select = element('faculty_department');
+  faculty_department_select_length = faculty_department_select.options.length;
+  for (var i = 0; i < faculty_department_select_length; i++) {
+    console.log("remove"+i);
+    faculty_department_select.remove(0);
+  }
+
+  if(faculty_department == ""){
+     faculty_department_select.add(create_option("","","selected"));
+  }
+
+
+  if("engineering" == faculty_area){
+    for(var i =0; i < engineering_departments.length; i++){
+      faculty_department_select.add(create_option(engineering_departments[i],engineering_departments[i],""));
+    }
+  }else if("arts_humanities" == faculty_area){
+    for(var i =0; i < arts_humanities_departments.length; i++){
+      faculty_department_select.add(create_option(arts_humanities_departments[i],arts_humanities_departments[i],""));
+    }
+  }else if("commerce_management" == faculty_area){
+    for(var i =0; i < commerce_management_departments.length; i++){
+      faculty_department_select.add(create_option(commerce_management_departments[i],commerce_management_departments[i],""));
+    }
+  }else if("science" == faculty_area){
+    for(var i =0; i < science_departments.length; i++){
+      faculty_department_select.add(create_option(science_departments[i],science_departments[i],""));
+    }
+  }else if("others" == faculty_area){
+    for(var i =0; i < other_departments.length; i++){
+      faculty_department_select.add(create_option(other_departments[i],other_departments[i],""));
+    }
+  }
+
+
+  if(faculty_department != "" && element(faculty_department)){
+     element(faculty_department).selected = "selected";
+  }
+
+
+}
+
+
+function update_student_departments(){
+  student_degree = getSelectValue(element('student_degree'));
+
+  //Clear everything
+  student_department_select = element('student_department');
+  student_department_select_length = student_department_select.options.length;
+  for (var i = 0; i < student_department_select_length; i++) {
+    student_department_select.remove(0);
+  }
+
+  if(student_department == ""){
+     student_department_select.add(create_option("","","selected"));
+  }
+
+
+  if(student_engineering_degrees.includes(student_degree)){
+    for(var i =0; i < engineering_departments.length; i++){
+      student_department_select.add(create_option(engineering_departments[i],engineering_departments[i],""));
+    }
+    if ("diploma"==student_degree) {
+      student_department_select.add(create_option("others","Others",""));
+    }
+  }else if("arts_humanities" == student_degree){
+    for(var i =0; i < arts_humanities_departments.length; i++){
+      student_department_select.add(create_option(arts_humanities_departments[i],arts_humanities_departments[i],""));
+    }
+  }else if("commerce_management" == student_degree){
+    for(var i =0; i < commerce_management_departments.length; i++){
+      student_department_select.add(create_option(commerce_management_departments[i],commerce_management_departments[i],""));
+    }
+  }else if("science" == student_degree){
+    for(var i =0; i < science_departments.length; i++){
+      student_department_select.add(create_option(science_departments[i],science_departments[i],""));
+    }
+  }else if("others" == student_degree){
+    for(var i =0; i < other_departments.length; i++){
+      student_department_select.add(create_option(other_departments[i],other_departments[i],""));
+    }
+  }
+
+
+  if(student_department != "" && element(student_department)){
+     element(student_department).selected = "selected";
+  }
+
+
+}
+
+
+
 
 function professionChanged() {
   profession = getSelectValue(element("profession"));
-  employer_block = element("employerLi");
+
+
+  for_employed_only = element("for_employed_only");
+  for_student_and_faculty_only = element("for_student_and_faculty_only");
+  for_student_only = element("for_student_only");
+  for_faculty_only = element("for_faculty_only");
+
+
+  var indian_state_select_el = element('state_of_residence');
+  var cityEl = element('city_of_residence');
+
+
+  //hide everything first and then show required as per profession
+  for_student_and_faculty_only.style.display = 'none';
+  for_student_only.style.display = 'none';
+  for_faculty_only.style.display = 'none';
+  for_employed_only.style.display = 'none';
+  //remove required settings on fields and we can add layter
+  //*
+  element('faculty_area_required').style.display = 'none';
+  element('faculty_department_required').style.display = 'none';
+  element('college_roll_no_required').style.display = 'none';
+  element('student_degree_required').style.display = 'none';
+  element('student_department_required').style.display = 'none';
+  element('student_study_year_required').style.display = 'none';
+
+  element('faculty_area').required = false;
+  element('faculty_department').required = false;
+  element('college_roll_no').required = false;
+  element('college').required = false;
+  element('student_degree').required = false;
+  element('student_department').required = false;
+  element('study_year').required = false;
+
+
+
+
+
+
   if ("employed" == profession) {
-    employer_block.style.display = '';
-  } else {
-    employer_block.style.display = 'none';
+    for_employed_only.style.display = '';
+    if(indian_state_select_el) {
+        indian_state_select_el.required = false;
+    }
+    if(cityEl){
+      cityEl.required = false;
+    }
+  }else if ("faculty"  == profession){
+    for_student_and_faculty_only.style.display = '';
+    for_faculty_only.style.display = '';
+
+    element('faculty_area_required').style.display = '';
+    element('faculty_department_required').style.display = '';
+    element('faculty_area').required = true;
+    element('faculty_department').required = true;
+
+    faculty_department_select = element("faculty_department");
+
+
+  }else if ("student" == profession){
+    for_student_and_faculty_only.style.display = '';
+    for_student_only.style.display ='';
+
+    element('college_roll_no_required').style.display = '';
+    element('student_degree_required').style.display = '';
+    element('student_department_required').style.display = '';
+    element('student_study_year_required').style.display = '';
+    element('college_roll_no').required = true;
+    element('student_degree').required = true;
+    element('student_department').required = true;
+    element('study_year').required = true;
   }
+  else if ("other" == profession){
+    if(indian_state_select_el) {
+        indian_state_select_el.required = false;
+    }
+  }
+
+
+  //setup the motivation
+  motivation_select = element("motivation");
+  var option_length = motivation_select.options.length;
+  console.log("length="+option_length);
+  for (var i = 0; i < option_length; i++) {
+    motivation_select.remove(0);
+  }
+
+  if(motivation == ""){
+     motivation_select.add(create_option("","","selected"));
+  }
+
+  if (profession == "faculty"){
+     motivation_select.add(create_option("faculty_mandated_college","Mandated by college",""));
+     motivation_select.add(create_option("faculty_gate_prep","For GATE exam",""));
+     motivation_select.add(create_option("faculty_research","For research purposes",""));
+     motivation_select.add(create_option("faculty_mentor","To mentor students in the course",""));
+     motivation_select.add(create_option("faculty_prof_advance_college","Professional advancement in college",""));
+     motivation_select.add(create_option("faculty_intro_new_course","To learn a new course and introduce in college",""));
+     motivation_select.add(create_option("faculty_expertise","Already teach it, but to get more expertise and an idea of the course structuring",""));
+     motivation_select.add(create_option("faculty_stay_updated","To update myself with current advances in science",""));
+
+  }else if (profession == "employed"){
+      motivation_select.add(create_option("professional_update_tech","Want to update myself about this technology",""));
+      motivation_select.add(create_option("professional_useful_currentjob","Useful in current job",""));
+      motivation_select.add(create_option("professional_change_job","Want to update and change projects/jobs",""));
+      motivation_select.add(create_option("professional_recomended_company","Recommended by company",""));
+      motivation_select.add(create_option("professional_stay_updated","To update myself with current advances in science",""));
+  }else if (profession == "student"){
+    //student or others
+    motivation_select.add(create_option("student_mandated_college","Mandated by college",""));
+    motivation_select.add(create_option("student_credit_transfer","Credit transfer",""));
+    motivation_select.add(create_option("student_internship_job","For getting better internship/job",""));
+    motivation_select.add(create_option("student_gate_prep","For GATE exam",""));
+    motivation_select.add(create_option("student_research","For research purposes",""));
+    motivation_select.add(create_option("student_stay_updated","To update myself with current advances in science",""));
+  }else{
+    motivation_select.add(create_option("others_explore_mooc","Explore online learning",""));
+    motivation_select.add(create_option("others_research","For research purposes",""));
+    motivation_select.add(create_option("others_update_tech","Want to update myself about this technology",""));
+    motivation_select.add(create_option("others_internship_job","For getting better internship/job",""));
+  }
+
+  if(motivation != "" && element(motivation)){
+     element(motivation).selected = "selected";
+  }
+
   hideShowLocalChapter(null, profession);
+  hideShowIndustryLocalChapter(null, profession);
 }
 
 function prefillSelect(old_id, select_id, id_prefix) {
   old_value =  element(old_id).value;
   if ('' != old_value) {
-    select_opt = element(id_prefix + old_value.replace(RegExp(' ', 'g'), '_')).index;
-    element(select_id).selectedIndex = select_opt;
+    if(element(id_prefix + old_value.replace(RegExp(' ', 'g'), '_'))){
+      select_opt = element(id_prefix + old_value.replace(RegExp(' ', 'g'), '_')).index;
+      element(select_id).selectedIndex = select_opt;
+    }
   }
 }
 
@@ -419,7 +754,7 @@ function IndianStateOnChanged() {
         return;
       }
       var lc_college_id = el.value;
-      var lc_college_state = LocalChapterList[lc_college_id].state;
+      var lc_college_state = LocalChapterDict[lc_college_id].state;
       lc_college_state = lc_college_state.toUpperCase().trim().replace(RegExp(' ', 'g'), '_');
       if (lc_college_state === state || state === 'ALL') {
         el.style.display = '';
@@ -431,14 +766,54 @@ function IndianStateOnChanged() {
   });
   var current_local_chapter_college_id = getSelectValue(element('local_chapter_college'));
   if (current_local_chapter_college_id && current_local_chapter_college_id !== "other") {
-    var current_lc_state = LocalChapterList[current_local_chapter_college_id].state;
+    var current_lc_state = LocalChapterDict[current_local_chapter_college_id].state;
     current_lc_state = current_lc_state.toUpperCase().trim().replace(RegExp(' ', 'g'), '_');
     if (current_lc_state != state) {
       element('local_chapter_college').selectedIndex = 0;
     }
   }
-
+  $("#local_chapter_college").trigger("chosen:updated");
 }
+
+
+function industryLocalChapterOnChanged() {
+
+  var industryLocalChapter = getSelectValue(element('industry_local_chapter'));
+  var lcEmployer = element('industry_local_chapter_employer');
+  var lcEmployerOtherOption = element('industry_local_chapter_employer_other');
+  var country = getSelectValue(element('country_of_residence'));
+  var profession = getSelectValue(element('profession'));
+  var txtEmployer = element('employer_name');
+  var txtCollege = element('college');
+
+  txtCollege.required = false;
+
+  if (country !== 'IN' || profession !== 'employed') {
+    industryLocalChapter = false;
+  }
+  if (industryLocalChapter === 'true' || industryLocalChapter === true) {
+    lcEmployerOtherOption.disabled = true;
+    //txtEmployer.value = '';
+    txtEmployer.style.display = 'none';
+    txtEmployer.required = false;
+
+
+    if (getSelectValue(lcEmployer) == 'other') {
+      lcEmployer.value = '';
+      localChapterEmployerChanged();
+    }
+  }else{
+    if(lcEmployerOtherOption){
+      lcEmployerOtherOption.disabled = false;
+    }
+  }
+}
+
+
+
+
+
+
 
 function localChapterOnChanged() {
   var localChapter = getSelectValue(element('local_chapter'));
@@ -448,6 +823,8 @@ function localChapterOnChanged() {
   var profession = getSelectValue(element('profession'));
   var txtCollege = element('college');
   var cityBlockEl = element('cityLi');
+  var rollNoInput = element('college_roll_no');
+  var rollNoRequiredEl = element('college_roll_no_required');
   if (country !== 'IN' || (profession !== 'student' && profession != 'faculty')) {
     localChapter = false;
   }
@@ -457,14 +834,19 @@ function localChapterOnChanged() {
     txtCollege.style.display = 'none';
     cityBlockEl.value = "";
     cityBlockEl.style.display = 'none';
+    if(profession !== 'faculty') rollNoInput.required = true;
+    rollNoRequiredEl.style.display = '';
     if (getSelectValue(lcCollege) == 'other') {
       lcCollege.value = '';
       localChapterCollegeChanged();
     }
   }
   else {
+    rollNoInput.required = false;
     lcCollegeOtherOption.disabled = false;
+    rollNoRequiredEl.style.display = 'none';
   }
+  $("#local_chapter_college").trigger("chosen:updated");
 }
 
 function localChapterCollegeChanged() {
@@ -473,6 +855,7 @@ function localChapterCollegeChanged() {
   var cityBlockEl = element('cityLi');
   var collegeEl = element('college');
   var collegeIdEl = element('college_id');
+  var profession = getSelectValue(element('profession'));
   if (!localChapterValue) {
     cityEl.value = "";
     collegeEl.value = "";
@@ -485,13 +868,17 @@ function localChapterCollegeChanged() {
     collegeIdEl.value = '';
 
     // Make fields required once again
-    cityEl.required = true;
-    collegeEl.required = true;
+    if (profession === 'student' || profession == 'faculty')
+      {
+        cityEl.required = true;
+        collegeEl.required = true;
+      }
 
     return;
   } else {
     cityBlockEl.style.display = 'none';
     collegeEl.style.display = 'none';
+    collegeEl.required = false;
   }
   var collegeId = localChapterValue;
 
@@ -504,7 +891,48 @@ function localChapterCollegeChanged() {
   // Disable the null entry
   localChapterNullEntry = element('local_chapter_college_');
   localChapterNullEntry.disabled = true;
+  $("#local_chapter_college").trigger("chosen:updated");
 }
+
+
+function localChapterEmployerChanged() {
+
+  var employerEl = element('employer_name');
+  var employerIdEl = element('employer_id');
+
+
+  var localChapterValue = element('industry_local_chapter_employer').value;
+
+  if (!localChapterValue) {
+    employerEl.value = "";
+    employerIdEl.value = "";
+    return;
+  }
+  if (localChapterValue === 'other') {
+
+    employerEl.style.display = '';
+    employerIdEl.value = '';
+
+    // Make fields required once again
+    employerEl.required = true;
+
+    return;
+  } else {
+    employerEl.style.display = 'none';
+  }
+  var emplyerId = localChapterValue;
+
+  // Remove required of redundant fields
+  employerEl.required = false;
+
+  employerIdEl.value = emplyerId;
+
+  // Disable the null entry
+  industryLocalChapterNullEntry = element('industry_local_chapter_employer_');
+  industryLocalChapterNullEntry.disabled = true;
+}
+
+
 
 function MakeReadOnlyIfRequired() {
   //function to make the entire form read only and disable inputs
@@ -549,6 +977,40 @@ function initRegisterForm() {
   localChapterCollegeChanged();
   IndianStateOnChanged();
   MakeReadOnlyIfRequired();
+
+
+
+  fillIndustryLocalChapterEmployerOptions();
+  prefillSelect('old_industry_local_chapter', 'industry_local_chapter', 'industry_local_chapter_');
+
+  var employerEl = element('employer_name');
+  //if employer name present and employer_id is null then its other
+  if(employerEl && employerEl.value != "" && old_employer_id == ""){
+      element('industry_local_chapter_employer').value = "other";
+  }
+
+  update_student_departments();
+  if(faculty_department != ""){
+    if(engineering_departments.includes(faculty_department)){
+      faculty_area = "engineering";
+    }else if(arts_humanities_departments.includes(faculty_department)){
+      faculty_area = "arts_humanities";
+    }else if(commerce_management_departments.includes(faculty_department)){
+      faculty_area = "commerce_management";
+    }else if(science_departments.includes(faculty_department)){
+      faculty_area = "science";
+    }else if(other_departments.includes(faculty_department)){
+      faculty_area = "others";
+    }
+
+    if(element('faculty_area_'+faculty_area)){
+      element('faculty_area_'+faculty_area).selected = "selected";
+    }
+  }
+
+  update_faculty_departments();
+  hideShowIndustryLocalChapter(null,null);
+  localChapterEmployerChanged();
 }
 
 function validateForm() {
@@ -559,11 +1021,6 @@ function validateForm() {
      alert('Please fill your name');
      return false;
   }
-  var mobile_number = element('mobile_number').value;
-  if (mobile_number == null || !isValidMobileNumber()) {
-     alert('Please fill a valid mobile number');
-     return false;
-  }
 
   var country_of_residence = getSelectValue(
       element('country_of_residence'));
@@ -572,32 +1029,44 @@ function validateForm() {
      return false;
   }
 
-  if ('IN' == country_of_residence) {
+  var mobile_number = element('mobile_number').value;
+  var parsedNumber = libphonenumber.parse(mobile_number, country_of_residence)
+  if (!libphonenumber.isValidNumber(parsedNumber)) {
+    if (!confirm('Your phone number does not seem to be valid. Do you still wish to proceed?')) {
+      return false;
+    }
+  }
+  element('mobile_number').value = parsedNumber.phone;
+
+  profession = getSelectValue(element('profession'));
+
+  if ('IN' == country_of_residence && ( profession == 'student' || profession == 'faculty')) {
     var state_of_residence = getSelectValue(
       element('state_of_residence'));
     if (state_of_residence == null || state_of_residence == '') {
       alert('Please select your state of residence.');
       return false;
     }
-  }
 
-  var city_of_residence_el = element('city_of_residence');
-  var city_of_residence = city_of_residence_el.value;
-  if (city_of_residence_el.required) {
-    if (city_of_residence == null || city_of_residence.trim() == '') {
-       alert('Please fill your city of residence.');
-       return false;
+    var city_of_residence_el = element('city_of_residence');
+    var city_of_residence = city_of_residence_el.value;
+    if (city_of_residence_el.required) {
+      if (city_of_residence == null || city_of_residence.trim() == '') {
+         alert('Please fill your city of residence.');
+         return false;
+      }
+    }
+
+    var college_el = element('college');
+    var college = element('college').value;
+    if (college_el.required) {
+      if (college == null || college.trim() == '') {
+         alert('Please fill name of your college.');
+         return false;
+      }
     }
   }
 
-  var college_el = element('college');
-  var college = element('college').value;
-  if (college_el.required) {
-    if (college == null || college.trim() == '') {
-       alert('Please fill name of your college.');
-       return false;
-    }
-  }
 
   var graduationyear = getSelectValue(
       element('graduationyear'));
@@ -613,14 +1082,6 @@ function validateForm() {
      return false;
   }
 
-  var employer_block = element('employerLi');
-  if (employer_block.style.display == '') {
-      var employer = element('employer').value;
-      if (employer == null || employer.trim() == '') {
-          alert('Please fill your employer.');
-          return false;
-      }
-  }
 
   var termsInput = element('terms');
   if (null == termsInput || !termsInput.checked) {

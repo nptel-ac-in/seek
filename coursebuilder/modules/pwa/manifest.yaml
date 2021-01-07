@@ -1,0 +1,6 @@
+registration:
+  main_module: modules.pwa.register
+
+files:
+  - modules/pwa/handlers.py
+  - modules/pwa/manifest.yaml

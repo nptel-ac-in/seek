@@ -18,14 +18,16 @@ __author__ = 'Pavel Simakov (psimakov@google.com)'
 
 import base64
 import cgi
+import collections
+import random
 import os
 import urllib
 
-import messages
 import yaml
 
 import appengine_config
 from common import schema_fields
+from common import users
 from controllers.utils import ApplicationHandler
 from controllers.utils import BaseRESTHandler
 from controllers.utils import XsrfTokenManager
@@ -33,39 +35,13 @@ from models import courses
 from models import roles
 from models import transforms
 from models import vfs
+from modules.dashboard import asset_paths
+from modules.dashboard import messages
 from modules.dashboard import utils as dashboard_utils
 from modules.oeditor import oeditor
 
-from google.appengine.api import users
-
-# Set of string. The relative, normalized path bases we allow uploading of
-# binary data into.
-ALLOWED_ASSET_BINARY_BASES = frozenset([
-    'assets/img',
-])
-# Set of string. The relative, normalized path bases we allow uploading of text
-# data into.
-ALLOWED_ASSET_TEXT_BASES = frozenset([
-    'assets/css',
-    'assets/html',
-    'assets/lib',
-    'views'
-])
-
-DISPLAYABLE_ASSET_BASES = frozenset([
-    'assets/img',
-])
 
 MAX_ASSET_UPLOAD_SIZE_K = 500
-
-
-def allowed_asset_upload_bases():
-    """The relative, normalized path bases we allow uploading into.
-
-    Returns:
-        Set of string.
-    """
-    return ALLOWED_ASSET_BINARY_BASES.union(ALLOWED_ASSET_TEXT_BASES)
 
 
 def is_text_payload(payload):
@@ -103,6 +79,13 @@ class FilesRights(object):
 class FileManagerAndEditor(ApplicationHandler):
     """An editor for editing and managing files."""
 
+    _ASSET_TYPE_TO_CODEMIRROR_MODE = {
+        'js':'javascript',
+        'css':'css',
+        'templates':'htmlmixed',
+        'html':'htmlmixed',
+    }
+
     local_fs = vfs.LocalReadOnlyFileSystem(logical_home_folder='/')
 
     def _get_delete_url(self, base_url, key, xsrf_token_name):
@@ -118,10 +101,9 @@ class FileManagerAndEditor(ApplicationHandler):
         """Handles creation or/and editing of course.yaml."""
         create_course_file_if_not_exists(self)
         extra_args = {}
-        for name in ('tab', 'tab_title'):
-            value = self.request.get(name)
-            if value:
-                extra_args[name] = value
+        from_action = self.request.get('from_action')
+        if from_action:
+            extra_args['from_action'] = from_action
         self.redirect(self.get_action_url('edit_settings', key='/course.yaml',
                                           extra_args=extra_args))
 
@@ -129,9 +111,9 @@ class FileManagerAndEditor(ApplicationHandler):
         """Shows editor for course.yaml."""
 
         key = self.request.get('key')
-        tab = self.request.get('tab')
-        exit_url = self.canonicalize_url('/dashboard?action=settings&tab=%s' %
-                                         tab)
+        from_action = self.request.get('from_action')
+        exit_url = self.canonicalize_url(
+            '/dashboard?action={}'.format(from_action))
         rest_url = self.canonicalize_url('/rest/files/item')
         form_html = oeditor.ObjectEditor.get_html_for(
             self,
@@ -142,18 +124,15 @@ class FileManagerAndEditor(ApplicationHandler):
 
         template_values = {}
         template_values['page_title'] = self.format_title('Edit Settings')
-        template_values['page_description'] = messages.EDIT_SETTINGS_DESCRIPTION
         template_values['main_content'] = form_html
-        self.render_page(template_values, in_action='settings')
-
-    def _is_displayable_asset(self, path):
-        return any([path.startswith(name) for name in DISPLAYABLE_ASSET_BASES])
+        self.render_page(template_values, in_action=from_action)
 
     def get_manage_asset(self):
         """Show an upload/delete dialog for assets."""
 
-        key = self.request.get('key').lstrip('/').rstrip('/')
-        if not _is_asset_in_allowed_bases(key):
+        path = self.request.get('key')
+        key = asset_paths.as_key(path)
+        if not asset_paths.AllowedBases.is_path_allowed(path):
             raise ValueError('Cannot add/edit asset with key "%s" ' % key +
                              'which is not under a valid asset path')
         fs = self.app_context.fs.impl
@@ -173,16 +152,11 @@ class FileManagerAndEditor(ApplicationHandler):
             # show a blank form, bring the user back to the assets list.
             auto_return = True
 
-        if self._is_displayable_asset(key):
-            json = AssetItemRESTHandler.DISPLAYABLE_SCHEMA_JSON
-            ann = AssetItemRESTHandler.DISPLAYABLE_SCHEMA_ANNOTATIONS_DICT
-        else:
-            json = AssetItemRESTHandler.UNDISPLAYABLE_SCHEMA_JSON
-            ann = AssetItemRESTHandler.UNDISPLAYABLE_SCHEMA_ANNOTATIONS_DICT
-
-        tab_name = self.request.get('tab')
+        details = AssetItemRESTHandler.get_schema_details(path)
+        json, ann = details.json, details.annotations
+        from_action = self.request.get('from_action')
         exit_url = self.canonicalize_url(
-            dashboard_utils.build_assets_url(tab_name))
+            dashboard_utils.build_assets_url(from_action))
         rest_url = self.canonicalize_url(AssetItemRESTHandler.URI)
 
         form_html = oeditor.ObjectEditor.get_html_for(
@@ -196,16 +170,19 @@ class FileManagerAndEditor(ApplicationHandler):
 
         template_values = {}
         template_values['page_title'] = self.format_title('Manage Asset')
-        template_values['page_description'] = messages.UPLOAD_ASSET_DESCRIPTION
         template_values['main_content'] = form_html
-        self.render_page(template_values, 'assets', tab_name)
+
+        self.render_page(template_values, in_action=from_action)
 
     def get_manage_text_asset(self):
         """Show an edit/save/delete/revert form for a text asset."""
         assert self.app_context.is_editable_fs()
         uri = self.request.get('uri')
         assert uri
-        tab_name = self.request.get('tab')
+        asset_type = self.request.get('type')
+        from_action = self.request.get('from_action')
+
+        mode = self._ASSET_TYPE_TO_CODEMIRROR_MODE.get(asset_type, '')
 
         asset = self.app_context.fs.impl.get(
             os.path.join(appengine_config.BUNDLE_ROOT, uri))
@@ -217,8 +194,7 @@ class FileManagerAndEditor(ApplicationHandler):
         except IOError:
             asset_in_local_fs = False
 
-        exit_url = self.canonicalize_url(
-            dashboard_utils.build_assets_url(tab_name))
+        exit_url = self.get_action_url(from_action)
         rest_url = self.canonicalize_url(TextAssetRESTHandler.URI)
 
         delete_button_caption = 'Delete'
@@ -240,11 +216,11 @@ class FileManagerAndEditor(ApplicationHandler):
         # Disable the save button if the payload is not text by setting method
         # to ''.
         save_method = 'put' if is_text_payload(asset.read()) else ''
-
+        schema = TextAssetRESTHandler.get_asset_schema(mode)
         form_html = oeditor.ObjectEditor.get_html_for(
             self,
-            TextAssetRESTHandler.SCHEMA.get_json_schema(),
-            TextAssetRESTHandler.SCHEMA.get_schema_dict(),
+            schema.get_json_schema(),
+            schema.get_schema_dict(),
             uri,
             rest_url,
             exit_url,
@@ -258,7 +234,7 @@ class FileManagerAndEditor(ApplicationHandler):
         self.render_page({
             'page_title': self.format_title('Edit ' + uri),
             'main_content': form_html,
-        }, 'assets', tab_name)
+        }, in_action=from_action)
 
 
 def create_course_file_if_not_exists(handler):
@@ -269,24 +245,8 @@ def create_course_file_if_not_exists(handler):
     course_yaml = fs.physical_to_logical('/course.yaml')
     if not fs.isfile(course_yaml):
         fs.put(course_yaml, vfs.string_to_stream(
-            courses.EMPTY_COURSE_YAML % users.get_current_user().email()))
-
-
-def _match_allowed_bases(filename,
-                         allowed_bases=allowed_asset_upload_bases()):
-    for allowed_base in allowed_bases:
-        if (filename == allowed_base or
-            (filename.startswith(allowed_base) and
-             len(filename) > len(allowed_base) and
-             filename[len(allowed_base)] == '/')):
-            return allowed_base
-    return None
-
-
-def _is_asset_in_allowed_bases(filename,
-                               allowed_bases=allowed_asset_upload_bases()):
-    matched_base = _match_allowed_bases(filename, allowed_bases)
-    return True if matched_base else False
+            courses.Course.EMPTY_COURSE_YAML %
+            users.get_current_user().email()))
 
 
 class TextAssetRESTHandler(BaseRESTHandler):
@@ -297,19 +257,33 @@ class TextAssetRESTHandler(BaseRESTHandler):
     REQUIRED_MODULES = [
         'inputex-hidden',
         'inputex-textarea',
+        'gcb-code',
     ]
-    SCHEMA = schema_fields.FieldRegistry('Edit asset', description='Text Asset')
-    SCHEMA.add_property(schema_fields.SchemaField(
-        'contents', 'Contents', 'text',
-    ))
-    SCHEMA.add_property(schema_fields.SchemaField(
-        'is_text', 'Is Text', 'boolean', hidden=True,
-    ))
-    SCHEMA.add_property(schema_fields.SchemaField(
-        'readonly', 'ReadOnly', 'boolean', hidden=True,
-    ))
     URI = '/rest/assets/text'
     XSRF_TOKEN_NAME = 'manage-text-asset'
+
+    @classmethod
+    def get_asset_schema(cls, mode):
+        schema = schema_fields.FieldRegistry('Edit asset',
+            description='Text Asset',
+            extra_schema_dict_values={
+                'className':'inputEx-Group new-form-layout hidden-header'
+            })
+        schema.add_property(schema_fields.SchemaField(
+            'contents', 'Contents', 'text',
+            extra_schema_dict_values={
+                'mode': mode,
+                '_type': 'code',
+                'large': True,
+            },
+        ))
+        schema.add_property(schema_fields.SchemaField(
+            'is_text', 'Is Text', 'boolean', hidden=True,
+        ))
+        schema.add_property(schema_fields.SchemaField(
+            'readonly', 'ReadOnly', 'boolean', hidden=True,
+        ))
+        return schema
 
     def delete(self):
         """Handles the delete verb."""
@@ -325,7 +299,7 @@ class TextAssetRESTHandler(BaseRESTHandler):
                 self, 401, 'Access denied.', {'key': filename})
             return
 
-        if not _is_asset_in_allowed_bases(filename):
+        if not asset_paths.AllowedBases.is_path_allowed(filename):
             transforms.send_json_response(
                 self, 400, 'Malformed request.', {'key': filename})
             return
@@ -376,7 +350,7 @@ class TextAssetRESTHandler(BaseRESTHandler):
                 self, 401, 'Access denied.', {'key': filename})
             return
 
-        if not _is_asset_in_allowed_bases(filename):
+        if not asset_paths.AllowedBases.is_path_allowed(filename):
             transforms.send_json_response(
                 self, 400, 'Malformed request.', {'key': filename})
             return
@@ -416,17 +390,16 @@ class FilesItemRESTHandler(BaseRESTHandler):
 
     REQUIRED_MODULES = [
         'inputex-string', 'inputex-textarea', 'inputex-select',
-        'inputex-uneditable']
+        'gcb-uneditable']
 
     URI = '/rest/files/item'
     FILE_ENCODING_TEXT = 'text/utf-8'
     FILE_ENCODING_BINARY = 'binary/base64'
-    FILE_EXTENTION_TEXT = ['.js', '.css', '.yaml', '.html', '.csv']
+    FILE_EXTENSION_TEXT = frozenset(['.js', '.css', '.yaml', '.html', '.csv'])
 
     @classmethod
     def is_text_file(cls, filename):
-        # TODO(psimakov): this needs to be better and not use linear search
-        for extention in cls.FILE_EXTENTION_TEXT:
+        for extention in cls.FILE_EXTENSION_TEXT:
             if filename.endswith(extention):
                 return True
         return False
@@ -470,9 +443,7 @@ class FilesItemRESTHandler(BaseRESTHandler):
             entity['content'] = base64.b64encode(stream.read())
 
         # Render JSON response.
-        json_payload = transforms.dict_to_json(
-            entity,
-            FilesItemRESTHandler.SCHEMA_DICT)
+        json_payload = transforms.dict_to_json(entity)
         transforms.send_json_response(
             self, 200, 'Success.',
             payload_dict=json_payload,
@@ -551,84 +522,103 @@ class FilesItemRESTHandler(BaseRESTHandler):
         transforms.send_json_response(self, 200, 'Deleted.')
 
 
-def add_asset_handler_base_fields(schema):
+def generate_asset_rest_handler_schema(name, description, displayable=False):
     """Helper function for building schemas of asset-handling OEditor UIs."""
 
-    schema.add_property(schema_fields.SchemaField(
-        'file', 'Upload New File', 'file',
-        optional=True,
-        description='You may upload a file to set or replace the content '
-        'of the asset.'))
-    schema.add_property(schema_fields.SchemaField(
-        'key', 'Key', 'string',
-        editable=False,
-        hidden=True))
-    schema.add_property(schema_fields.SchemaField(
-        'base', 'Base', 'string',
-        editable=False,
-        hidden=True))
-
-
-def add_asset_handler_display_field(schema):
-    """Helper function for building schemas of asset-handling OEditor UIs."""
-
-    schema.add_property(schema_fields.SchemaField(
-        'asset_url', 'Asset', 'string',
-        editable=False,
-        optional=True,
-        description='This is the asset for the native language for the course.',
-        extra_schema_dict_values={
-            'visu': {
-                'visuType': 'funcName',
-                'funcName': 'renderAsset'
-                }
-            }))
-
-
-def generate_asset_rest_handler_schema():
     schema = schema_fields.FieldRegistry('Asset', description='Asset')
-    add_asset_handler_base_fields(schema)
+    schema.add_property(schema_fields.SchemaField(
+        'file', name, 'file', description=description))
+    schema.add_property(schema_fields.SchemaField(
+        'key', 'Key', 'string', editable=False, hidden=True))
+    schema.add_property(schema_fields.SchemaField(
+        'base', 'Base', 'string', editable=False, hidden=True))
+
+    location_dict = {}
+    if displayable:
+        location_dict['visu'] = {
+            'visuType': 'funcName',
+            'funcName': 'renderAsset'}
+
+    schema.add_property(schema_fields.SchemaField(
+        'asset_url', 'Location', 'string', editable=False, optional=True,
+        extra_schema_dict_values=location_dict))
     return schema
 
 
-def generate_displayable_asset_rest_handler_schema():
-    schema = schema_fields.FieldRegistry('Asset', description='Asset')
-    add_asset_handler_display_field(schema)
-    add_asset_handler_base_fields(schema)
-    return schema
+_SchemaDetails = collections.namedtuple('_SchemaDetails',
+                                        ['json', 'annotations'])
 
+def _asset_schema_details(schema):
+    return _SchemaDetails(json=schema.get_json_schema(),
+                          annotations=schema.get_schema_dict())
 
 class AssetItemRESTHandler(BaseRESTHandler):
     """Provides REST API for managing assets."""
 
     URI = '/rest/assets/item'
-    UNDISPLAYABLE_SCHEMA = generate_asset_rest_handler_schema()
-    UNDISPLAYABLE_SCHEMA_JSON = UNDISPLAYABLE_SCHEMA.get_json_schema()
-    UNDISPLAYABLE_SCHEMA_ANNOTATIONS_DICT = (
-        UNDISPLAYABLE_SCHEMA.get_schema_dict())
-    DISPLAYABLE_SCHEMA = generate_displayable_asset_rest_handler_schema()
-    DISPLAYABLE_SCHEMA_JSON = DISPLAYABLE_SCHEMA.get_json_schema()
-    DISPLAYABLE_SCHEMA_ANNOTATIONS_DICT = DISPLAYABLE_SCHEMA.get_schema_dict()
     REQUIRED_MODULES = [
-        'inputex-string', 'inputex-uneditable', 'inputex-file',
+        'inputex-string', 'gcb-uneditable', 'inputex-file',
         'inputex-hidden', 'io-upload-iframe']
 
     XSRF_TOKEN_NAME = 'asset-upload'
 
+    # Two-tuples of JSON schema (from get_json_schema()) and annotations
+    # dict (from get_schema_dict()) from customized schemas corresponding
+    # to specific "base" asset path prefixes (see asset_paths.as_base).
+    _SCHEMAS = {
+        '/assets/css/': _asset_schema_details(
+            generate_asset_rest_handler_schema(
+                'Upload New CSS',
+                messages.IMAGES_DOCS_UPLOAD_NEW_CSS_DESCRIPTION)),
+        '/assets/html/': _asset_schema_details(
+            generate_asset_rest_handler_schema(
+                'Upload New HTML',
+                messages.IMAGES_DOCS_UPLOAD_NEW_HTML_DESCRIPTION)),
+        '/assets/lib/': _asset_schema_details(
+            generate_asset_rest_handler_schema(
+                'Upload New JavaScript',
+                messages.IMAGES_DOCS_UPLOAD_NEW_JS_DESCRIPTION)),
+        '/views/': _asset_schema_details(
+            generate_asset_rest_handler_schema(
+                'Upload New Template',
+                messages.IMAGES_DOCS_UPLOAD_NEW_TEMPLATE_DESCRIPTION)),
+        '/assets/img/': _asset_schema_details(
+            generate_asset_rest_handler_schema(
+                'Upload New Image or File',
+                messages.IMAGES_DOCS_UPLOAD_NEW_IMAGE_DESCRIPTION,
+                displayable=True)),
+    }
+
+    # Two-tuple like those in _SCHEMAS above, but generic, for use when the
+    # asset path prefix is not found in the _SCHEMAS keys.
+    _UNKNOWN_SCHEMA = _asset_schema_details(
+        generate_asset_rest_handler_schema(
+            'Upload New File',
+            messages.IMAGES_DOCS_UPLOAD_NEW_FILE_DESCRIPTION))
+
+    @classmethod
+    def get_schema_details(cls, path):
+        for base in cls._SCHEMAS.keys():
+            if asset_paths.does_path_match_base(path, base):
+                return cls._SCHEMAS[base]
+        return cls._UNKNOWN_SCHEMA
+
     def _can_write_payload_to_base(self, payload, base):
         """Determine if a given payload type can be put in a base directory."""
         # Binary data can go in images; text data can go anywhere else.
-        if _is_asset_in_allowed_bases(base, ALLOWED_ASSET_BINARY_BASES):
+        if asset_paths.AllowedBases.is_path_allowed(
+            base, bases=asset_paths.AllowedBases.binary_bases()):
             return True
         else:
-            return is_text_payload(payload) and _is_asset_in_allowed_bases(
-                base, ALLOWED_ASSET_TEXT_BASES)
+            return (is_text_payload(payload) and
+                    asset_paths.AllowedBases.is_path_allowed(
+                        base, bases=asset_paths.AllowedBases.text_bases()))
 
     def get(self):
         """Provides empty initial content for asset upload editor."""
         # TODO(jorr): Pass base URI through as request param when generalized.
         key = self.request.get('key')
-        base = _match_allowed_bases(key)
+        base = asset_paths.AllowedBases.match_allowed_bases(key)
         if not base:
             transforms.send_json_response(
                 self, 400, 'Malformed request.', {'key': key})
@@ -641,6 +631,14 @@ class AssetItemRESTHandler(BaseRESTHandler):
         fs = self.app_context.fs.impl
         if fs.isfile(fs.physical_to_logical(key)):
             json_payload['asset_url'] = key
+            # TODO(davyrisso): Remove when cached assets issues are solved.
+            # We add a random seed to the URL to force a reload, we also append
+            # the URL because oeditor expects it to end with the filename.
+            suffix = ('?seed=%s&url=%s' % (
+                str(random.randint(0, 100000)), json_payload['asset_url']))
+            json_payload['asset_url'] += suffix
+        else:
+            json_payload['asset_url'] = asset_paths.relative_base(base)
         transforms.send_json_response(
             self, 200, 'Success.', payload_dict=json_payload,
             xsrf_token=XsrfTokenManager.create_xsrf_token(self.XSRF_TOKEN_NAME))
@@ -649,26 +647,19 @@ class AssetItemRESTHandler(BaseRESTHandler):
         is_valid, payload, uploads = self._validate_post()
         if is_valid:
             key = payload['key']
-            base = payload['base']
-            errors = []
+            base = asset_paths.as_key(payload['base'])
             for upload in uploads:
                 if key == base:
                     # File name not given on setup; we are uploading a new file.
                     filename = os.path.split(upload.filename)[1]
                     physical_path = os.path.join(base, filename)
                     is_overwrite_allowed = False
-                    self._handle_post(physical_path, False, upload, errors)
                 else:
                     # File name already established on setup; use existing
                     # file's name and uploaded file's data.
                     physical_path = key
                     is_overwrite_allowed = True
-                    self._handle_post(physical_path, True, upload, errors)
-            if errors:
-                transforms.send_file_upload_response(
-                    self, 403, ','.join(errors))
-                return
-            transforms.send_file_upload_response(self, 200, 'Saved.')
+                self._handle_post(physical_path, is_overwrite_allowed, upload)
 
     def _validate_post(self):
         """Handles asset uploads."""
@@ -693,7 +684,7 @@ class AssetItemRESTHandler(BaseRESTHandler):
 
         payload = transforms.loads(request['payload'])
         base = payload['base']
-        if not _is_asset_in_allowed_bases(base):
+        if not asset_paths.AllowedBases.is_path_allowed(base):
             transforms.send_file_upload_response(
                 self, 400, 'Malformed request.', {'key': base})
             return False, None, None
@@ -713,15 +704,17 @@ class AssetItemRESTHandler(BaseRESTHandler):
 
         return True, payload, uploads
 
-    def _handle_post(self, physical_path, is_overwrite_allowed, upload, errors):
+    def _handle_post(self, physical_path, is_overwrite_allowed, upload):
         fs = self.app_context.fs.impl
         path = fs.physical_to_logical(physical_path)
         if fs.isfile(path):
             if not is_overwrite_allowed:
-                errors.append('Cannot overwrite existing file %s.' % path)
+                transforms.send_file_upload_response(
+                    self, 403, 'Cannot overwrite existing file.')
                 return
             else:
                 fs.delete(path)
 
         upload.file.seek(0)
         fs.put(path, upload.file)
+        transforms.send_file_upload_response(self, 200, 'Saved.')

@@ -1,0 +1,8 @@
+registration:
+  main_module: modules.course_theme.register
+
+files:
+  - modules/course_theme/__init__.py
+  - modules/course_theme/settings.py
+  - modules/course_theme/register.py
+  - modules/course_theme/manifest.yaml

@@ -1,0 +1,36 @@
+
+<dom-module id="header-page">
+  <template>
+    <style include="nptel-pwa-css"></style>
+    <app-header-layout class="headerOnTop">
+      <app-header class="nptelHeader" condenses reveals shadow effects="material" slot="header">
+        <app-toolbar>
+          <paper-icon-button aria-label="menu" icon="menu" on-tap="openDrawer"></paper-icon-button>
+          <div main-title="">[[title]]</div>
+          <a href="#/search"><paper-icon-button icon="search" aria-label="search"></paper-icon-button></a>
+        </app-toolbar>
+      </app-header>
+    </app-header-layout>
+    </template>
+    <script>
+    /**
+     * @customElement
+     * @polymer
+     */
+     class HeaderPage extends Polymer.Element {
+      static get is() { return 'header-page'; }
+      static get properties() {
+        return {
+          title : {
+            type : String,
+            value : "Title"
+          }
+        };
+      }
+      openDrawer() {
+        Polymer.dom(this.parentElement).querySelector("#drawer").toggle();
+      }
+    }
+    window.customElements.define(HeaderPage.is, HeaderPage);
+  </script>
+</dom-module>

@@ -23,6 +23,8 @@ import os
 
 import jinja2
 
+from google.appengine.runtime.apiproxy_errors import RequestTooLargeError
+
 from common import jinja_utils
 from common import schema_fields
 from common import tags
@@ -30,8 +32,7 @@ from controllers import utils
 from models import custom_modules
 from models import models
 from models import student_work
-
-from google.appengine.ext import db
+from modules.upload import messages
 
 # String. Url fragment after the namespace we POST user payloads to.
 _POST_ACTION_SUFFIX = '/upload'
@@ -41,6 +42,9 @@ _RESOURCES_PATH = os.path.join(os.path.sep, 'modules', 'upload', 'resources')
 _XSRF_TOKEN_NAME = 'user-upload-form-xsrf'
 
 
+# TODO(tujohnson): This belongs on line 107 instead of here, but I'm trying to
+# satisfy the linter.
+# pylint: disable=broad-except
 class TextFileUploadHandler(utils.BaseHandler):
 
     def get_template(self, template_file, additional_dirs=None, prefs=None):
@@ -48,6 +52,17 @@ class TextFileUploadHandler(utils.BaseHandler):
         dirs.append(os.path.join(os.path.dirname(__file__), 'templates'))
         return super(TextFileUploadHandler, self).get_template(
             template_file, additional_dirs=dirs, prefs=prefs)
+
+    def validate_contents(self, contents):
+        """Checks that contents is unicode or raises UnicodeError."""
+        try:
+            # TODO(davyrisso): Non-unicode characters are still allowed,
+            # this is due to the fact that we want to support non-latin scripts.
+            # However it prevents binary files from being submitted.
+            assert isinstance(contents, str) or isinstance(contents, unicode)
+        except AssertionError:
+            raise UnicodeError
+        return contents
 
     def post(self):
         """Creates or updates a student submission."""
@@ -63,25 +78,50 @@ class TextFileUploadHandler(utils.BaseHandler):
             return
 
         success = False
+        error_detail = None
         unit_id = self.request.get('unit_id')
+        instance_id = self.request.get('instance_id')
 
         contents = self.request.get('contents')
+
         if not contents:
+            # I18N: Error message for failed student file upload.
+            # The selected file was empty.
+            error_detail = self.gettext('File is empty.')
+            logging.warn(error_detail)
             self.error(400)
         else:
-
             try:
+                contents = self.validate_contents(contents)
                 success = bool(student_work.Submission.write(
-                    unit_id, student.get_key(), contents))
-            # All write errors are treated equivalently.
-            # pylint: disable=broad-except
-            except Exception as e:
+                    unit_id, student.get_key(), contents,
+                    instance_id=instance_id))
+            except UnicodeError:
+                # I18N: Error message for failed student file upload.
+                # The selected file was not a text file.
+                error_detail = self.gettext(
+                    'Wrong file format, only text files (.txt) ' +
+                    'with unicode contents are allowed.')
+                logging.warn(error_detail)
                 self.error(400)
-                logging.warn(
-                    'Unable to save student submission; error was: "%s"', e)
-
+            except RequestTooLargeError:
+                # I18N: Error message for failed student file upload.
+                # The selected file was too large.
+                error_detail = self.gettext(
+                    'File too large, only files smaller than 1MB are allowed.')
+                logging.warn(error_detail)
+                self.error(400)
+            except Exception as e:
+                # I18N: Error message for failed student file upload.
+                # Generic upload error.
+                error_detail = self.gettext(
+                    'Unable to save student submission.') + (
+                    'Error was: "{}"'.format(e)) if str(e) else ''
+                logging.warn(error_detail)
+                self.error(400)
         self.template_value['navbar'] = {'course': True}
         self.template_value['success'] = success
+        self.template_value['error_detail'] = error_detail
         self.template_value['unit_id'] = unit_id
         self.render('result.html')
 
@@ -111,9 +151,7 @@ class TextFileUploadTag(tags.BaseTag):
         registry = schema_fields.FieldRegistry(TextFileUploadTag.name())
         registry.add_property(schema_fields.SchemaField(
             'display_length', 'Display Length', 'integer',
-            description=(
-                'Number of characters in the filename display (supported '
-                'browsers only).'),
+            description=messages.RTE_UPLOAD_DISPLAY_LENGTH,
             extra_schema_dict_values={'value': 100},
         ))
 
@@ -123,28 +161,36 @@ class TextFileUploadTag(tags.BaseTag):
         """Renders the custom tag."""
         student = handler.personalize_page_and_get_enrolled(
             supports_transient_student=True)
+        enabled = (
+            not isinstance(student, models.TransientStudent)
+            and hasattr(handler, 'unit_id'))
+
+        template_value = {}
+        template_value['enabled'] = enabled
 
         template = jinja_utils.get_template(
             'templates/form.html', os.path.dirname(__file__))
 
         already_submitted = False
-        if not isinstance(student, models.TransientStudent):
+        if enabled:
+            instance_id = node.attrib.get('instanceid')
             already_submitted = bool(
-                db.get(student_work.Submission.get_key(
-                    handler.unit_id, student.get_key())))
+                student_work.Submission.get(
+                    handler.unit_id, student.get_key(),
+                    instance_id=instance_id))
+            template_value['unit_id'] = handler.unit_id
+            template_value['instance_id'] = instance_id
 
-        handler.template_value['action'] = self._get_action(
+        template_value['action'] = self._get_action(
             handler.app_context.get_slug())
-        handler.template_value['already_submitted'] = already_submitted
-        handler.template_value['display_length'] = node.attrib.get(
+        template_value['already_submitted'] = already_submitted
+        template_value['display_length'] = node.attrib.get(
             'display_length')
-        handler.template_value['form_xsrf_token'] = (
-            utils.XsrfTokenManager.create_xsrf_token(
-                _XSRF_TOKEN_NAME))
-        handler.template_value['unit_id'] = handler.unit_id
+        template_value['form_xsrf_token'] = (
+            utils.XsrfTokenManager.create_xsrf_token(_XSRF_TOKEN_NAME))
 
         return tags.html_string_to_element_tree(
-            jinja2.utils.Markup(template.render(handler.template_value))
+            jinja2.utils.Markup(template.render(template_value))
         )
 
 
@@ -156,22 +202,22 @@ def register_module():
 
     def on_module_disable():
         tags.Registry.remove_tag_binding(TextFileUploadTag.binding_name)
-        tags.EditorDenylists.unregister(
+        tags.EditorBlacklists.unregister(
             TextFileUploadTag.binding_name,
-            tags.EditorDenylists.COURSE_SCOPE)
-        tags.EditorDenylists.unregister(
+            tags.EditorBlacklists.COURSE_SCOPE)
+        tags.EditorBlacklists.unregister(
             TextFileUploadTag.binding_name,
-            tags.EditorDenylists.DESCRIPTIVE_SCOPE)
+            tags.EditorBlacklists.DESCRIPTIVE_SCOPE)
 
     def on_module_enable():
         tags.Registry.add_tag_binding(
             TextFileUploadTag.binding_name, TextFileUploadTag)
-        tags.EditorDenylists.register(
+        tags.EditorBlacklists.register(
             TextFileUploadTag.binding_name,
-            tags.EditorDenylists.COURSE_SCOPE)
-        tags.EditorDenylists.register(
+            tags.EditorBlacklists.COURSE_SCOPE)
+        tags.EditorBlacklists.register(
             TextFileUploadTag.binding_name,
-            tags.EditorDenylists.DESCRIPTIVE_SCOPE)
+            tags.EditorBlacklists.DESCRIPTIVE_SCOPE)
 
     global_routes = [
         (os.path.join(_RESOURCES_PATH, '.*'), tags.ResourcesHandler),

@@ -1,21 +1,5 @@
-<!--
- Copyright 2020 Google LLC
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 <label style="font-size:15px;">
-  Tests :
+  <strong>Public Tests:</strong>
 </label>
 {% if assignment.ierr %}
 <label style="font-size:15px;color:red;">
@@ -27,6 +11,31 @@
   {{ assignment.response.num_test_evaluated }} {{ gettext('Passed') }}
 </label>
 {% endif %}
+
+<div id="info-div">
+  <label>
+    <i>Note: These tests may not be considered while scoring.
+      <a href="#" onclick="showExplanationDiv(); return false;">Know more</a>.
+    </i>
+  </label>
+
+  <div id="explanation-div" style="display: none;">
+    <p>We have two sets of testcases, public and private. The public test
+      cases are visible to you when you click on <strong>Compile and Run</strong>
+      and may or may not be considered while calculating your score.
+    </p>
+    <p>The private testcases are hidden and are considered for scoring when you
+      click on <strong>Submit</strong>. These are <strong>not</strong> visible
+      to you, and usually have a greater impact on your score.
+    </p>
+    <p>
+      So if you pass all the public testcases but still don't get a full score,
+      that means you're missing out on some edge case scenario which is covered
+      in some of the private testcases.
+      <a href="#" onclick="closeExplanationDiv(); return false;">Close</a>
+    </p>
+  </div>
+</div>
 
 {% macro show_pre(t) -%}
   {% if t  %}
@@ -82,3 +91,12 @@
   {% endfor %}
 </div>
 {% endif %}
+
+<script>
+function showExplanationDiv() {
+  document.getElementById("explanation-div").style.display = "block";
+}
+function closeExplanationDiv() {
+  document.getElementById("explanation-div").style.display = "none";
+}
+</script>

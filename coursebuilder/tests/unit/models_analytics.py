@@ -232,6 +232,18 @@ data_sources.Registry.register(TwoGenSource)
 data_sources.Registry.register(ThreeGenSource)
 
 
+class MockIdentityModule(object):
+
+    def __init__(self):
+        self._default_bucket_name = 'default_bucket'
+
+    def get_default_gcs_bucket_name(self):
+        return self._default_bucket_name
+
+    def set_default_gcs_bucket_name(self, value):
+        self._default_bucket_name = value
+
+
 #-------------------------------------------------------------------------------
 # Actual tests.
 
@@ -239,11 +251,20 @@ data_sources.Registry.register(ThreeGenSource)
 class AnalyticsTests(unittest.TestCase):
 
     def setUp(self):
-        analytics.by_name.clear()
+        super(AnalyticsTests, self).setUp()
+        analytics.Visualization.registry.clear()
         MockJobBase.clear_jobs()
         self._mock_app_context = MockAppContext('testing')
         self._mock_handler = MockHandler(self._mock_app_context)
         self._mock_xsrf = MockXsrfCreator()
+        self._mock_identity_module = MockIdentityModule()
+
+        self._save_app_identity = analytics.display.app_identity
+        analytics.display.app_identity = self._mock_identity_module
+
+    def tearDown(self):
+        analytics.display.app_identity = self._save_app_identity
+        super(AnalyticsTests, self).tearDown()
 
     def _generate_analytics_page(self, visualizations):
         return analytics.generate_display_html(
@@ -294,14 +315,14 @@ class AnalyticsTests(unittest.TestCase):
 
         result = self._generate_analytics_page([analytic])
         self.assertIn('Statistics for gen one have not been', result)
-        self.assertIn('Update Statistic', result)
+        self.assertIn('Update', result)
         self.assertIn('action=run_visualizations', result)
 
         self._run_generators_for_visualizations(self._mock_app_context,
                                                 [analytic])
         result = self._generate_analytics_page([analytic])
         self.assertIn('Job for gen one statistics started at', result)
-        self.assertIn('Cancel Statistic Calculation', result)
+        self.assertIn('Cancel', result)
         self.assertIn('action=cancel_visualizations', result)
 
         self._cancel_generators_for_visualizations(self._mock_app_context,
@@ -309,25 +330,25 @@ class AnalyticsTests(unittest.TestCase):
         result = self._generate_analytics_page([analytic])
         self.assertIn('There was an error updating gen one statistics', result)
         self.assertIn('<pre>Canceled</pre>', result)
-        self.assertIn('Update Statistic', result)
+        self.assertIn('Update', result)
         self.assertIn('action=run_visualizations', result)
 
         self._run_generators_for_visualizations(self._mock_app_context,
                                                 [analytic])
         result = self._generate_analytics_page([analytic])
         self.assertIn('Job for gen one statistics started at', result)
-        self.assertIn('Cancel Statistic Calculation', result)
+        self.assertIn('Cancel', result)
         self.assertIn('action=cancel_visualizations', result)
 
         GenOne(self._mock_app_context).load().complete('run_state_display')
         result = self._generate_analytics_page([analytic])
         self.assertIn('Statistics for gen one were last updated at', result)
         self.assertIn('in about 0 sec', result)
-        self.assertIn('Update Statistic', result)
+        self.assertIn('Update', result)
         self.assertIn('action=run_visualizations', result)
         self.assertIn('foo_one_gen_source_gen_one: "run_state_display"', result)
 
-    def test_multiple_visualizationsmultiple_generators_multiple_sources(self):
+    def test_multiple_visualizations_multiple_generators_multiple_sources(self):
         visualizations = []
         visualizations.append(analytics.Visualization(
             'trivial', 'Trivial Statistics', 'models_analytics_section.html',
@@ -375,9 +396,9 @@ class AnalyticsTests(unittest.TestCase):
         self.assertIn('simple_no_gen_source: ""', result)
 
         # We should have all headers
-        self.assertIn('<h3>Trivial Statistics</h3>', result)
-        self.assertIn('<h3>Simple Statistics</h3>', result)
-        self.assertIn('<h3>Complex Statistics</h3>', result)
+        self.assertIn('Trivial Statistics', result)
+        self.assertIn('Simple Statistics', result)
+        self.assertIn('Complex Statistics', result)
 
         # And submission forms for analytics w/ generators
         self.assertNotIn(
@@ -389,3 +410,15 @@ class AnalyticsTests(unittest.TestCase):
         self.assertIn(
             '<input type="hidden" name="visualization" value="complex"',
             result)
+
+    def test_analytics_warns_when_no_gcs_bucket(self):
+        name = 'foo'
+        analytic = analytics.Visualization(
+            name, name, 'models_analytics_section.html', [OneGenSource])
+
+        result = self._generate_analytics_page([analytic])
+        self.assertNotIn('enable Google Cloud Storage', result)
+
+        self._mock_identity_module.set_default_gcs_bucket_name(None)
+        result = self._generate_analytics_page([analytic])
+        self.assertIn('enable Google Cloud Storage', result)

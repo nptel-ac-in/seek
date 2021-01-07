@@ -1,0 +1,14 @@
+#!/bin/bash
+# Deploys the script to app engine
+PROJECT=iitmpod-staging
+# VERSION=$(date +%Y-%m-%d-%H-%M-%S)
+VERSION=2020-12-21-19-30-09
+git tag $PROJECT-deployment-$VERSION
+# VERSION=cache-test
+# VERSION=2020-10-20-21-36-55-test
+uuid_=""
+command="gcloud app deploy --project $PROJECT --version $VERSION"
+echo $command
+echo "Press enter to continue"
+read x
+$command

@@ -31,14 +31,14 @@ class FirstChild(entities.BaseEntity):
     first_kept = db.Property()
     first_removed = db.Property()
 
-    _PROPERTY_EXPORT_DENYLIST = [first_removed]
+    _PROPERTY_EXPORT_BLACKLIST = [first_removed]
 
 
 class SecondChild(FirstChild):
     second_kept = db.Property()
     second_removed = db.Property()
 
-    _PROPERTY_EXPORT_DENYLIST = [second_removed]
+    _PROPERTY_EXPORT_BLACKLIST = [second_removed]
 
 
 class MockStudent(entities.BaseEntity):
@@ -46,7 +46,7 @@ class MockStudent(entities.BaseEntity):
     class_rank = db.IntegerProperty(indexed=False)
     additional_fields = db.TextProperty(indexed=False)
 
-    _PROPERTY_EXPORT_DENYLIST = [
+    _PROPERTY_EXPORT_BLACKLIST = [
         'name',
         'additional_fields.age',
         'additional_fields.gender',
@@ -83,7 +83,7 @@ class BaseEntityTestCase(actions.TestBase):
         self.assertFalse(
             hasattr(second_export, SecondChild.second_removed.name))
 
-    def test_denylist_by_name(self):
+    def test_blacklist_by_name(self):
         additional = transforms.dict_to_nested_lists_as_string({
             'age': 37,
             'class_goal': 'Completion',
@@ -95,7 +95,7 @@ class BaseEntityTestCase(actions.TestBase):
             })
         })
 
-        denylisted = transforms.dict_to_nested_lists_as_string({
+        blacklisted = transforms.dict_to_nested_lists_as_string({
             'class_goal': 'Completion',
             'hobby': transforms.dict_to_nested_lists_as_string({
                 'name': 'woodworking',
@@ -109,7 +109,7 @@ class BaseEntityTestCase(actions.TestBase):
         data = mock_student.for_export(lambda x: x)
         self.assertFalse(hasattr(data, 'name'))
         self.assertEquals(23, data.class_rank)
-        self.assertEquals(denylisted, data.additional_fields)
+        self.assertEquals(blacklisted, data.additional_fields)
 
 
 class ExportEntityTestCase(actions.TestBase):

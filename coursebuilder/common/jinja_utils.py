@@ -25,9 +25,12 @@ import tags
 from webapp2_extras import i18n
 
 import appengine_config
+
 from common import caching
+from common import messages
 from models import config
 from models import models
+from models import transforms
 from models.counters import PerfCounter
 
 
@@ -36,14 +39,14 @@ MAX_GLOBAL_CACHE_SIZE_BYTES = 8 * 1024 * 1024
 
 # this cache used to be memcache based; now it's in-process
 CAN_USE_JINJA2_TEMPLATE_CACHE = config.ConfigProperty(
-    'gcb_can_use_jinja2_template_cache', bool, safe_dom.Text(
-        'Whether jinja2 can cache bytecode of compiled templates in-process.'),
-    default_value=True)
+    'gcb_can_use_jinja2_template_cache', bool,
+    messages.SITE_SETTINGS_CACHE_TEMPLATES, default_value=True,
+    label='Cache Templates')
 
 
 def finalize(x):
     """A finalize method which will correctly handle safe_dom elements."""
-    if isinstance(x, safe_dom.Node) or isinstance(x, safe_dom.NodeList):
+    if isinstance(x, safe_dom.SafeDom):
         return jinja2.utils.Markup(x.sanitized)
     return x
 
@@ -68,14 +71,33 @@ def js_string(data):
     return jinja2.utils.Markup(js_string_raw(data))
 
 
-def get_gcb_tags_filter(handler):
+def _escape_js(data):
+    """Escapes JSON/JavaScript for use in inline <script> tags.
+
+    It prevents the browser from parsing HTML end tags or HTML entities inside
+    the JavaScript.
+    """
+
+    data = data.replace("'", "\\u0027")
+    data = data.replace('<', '\\u003c')
+    data = data.replace('>', '\\u003e')
+    data = data.replace('&', '\\u0026')
+    return data
+
+
+def _to_json_jinja(data):
+    return jinja2.utils.Markup(_escape_js(transforms.dumps(data)))
+
+
+def get_gcb_tags_filter(handler, tags_filter=None):
 
     @appengine_config.timeandlog('get_gcb_tags_filter')
     def gcb_tags(data):
         """Apply GCB custom tags, if enabled. Otherwise pass as if by 'safe'."""
         data = unicode(data)
         if tags.CAN_USE_DYNAMIC_TAGS.value:
-            return jinja2.utils.Markup(tags.html_to_safe_dom(data, handler))
+            return jinja2.utils.Markup(tags.html_to_safe_dom(
+                data, handler, tags_filter=tags_filter))
         else:
             return jinja2.utils.Markup(data)
     return gcb_tags
@@ -143,6 +165,7 @@ def create_jinja_environment(loader, locale=None, autoescape=True):
         extensions=['jinja2.ext.i18n'], bytecode_cache=cache, loader=loader)
 
     jinja_environment.filters['js_string'] = js_string
+    jinja_environment.filters['to_json'] = _to_json_jinja
 
     if locale:
         i18n.get_i18n().set_locale(locale)
@@ -161,25 +184,40 @@ def create_jinja_environment(loader, locale=None, autoescape=True):
     return jinja_environment
 
 
-def get_template(
-    template_name, dirs, handler=None, autoescape=True):
+def create_and_configure_jinja_environment(
+    dirs, autoescape=True, handler=None, default_locale='en_US'):
     """Sets up an environment and gets jinja template."""
 
     # Defer to avoid circular import.
     from controllers import sites
 
     locale = None
-    app_context = sites.get_course_for_current_request()
+    app_context = None
+    if handler and hasattr(handler, 'app_context'):
+        app_context = handler.app_context
+    if not app_context:
+        app_context = sites.get_course_for_current_request()
     if app_context:
         locale = app_context.get_current_locale()
         if not locale:
             locale = app_context.default_locale
     if not locale:
-        locale = 'en_US'
+        locale = default_locale
 
     jinja_environment = create_jinja_environment(
         jinja2.FileSystemLoader(dirs), locale=locale, autoescape=autoescape)
 
     jinja_environment.filters['gcb_tags'] = get_gcb_tags_filter(handler)
 
-    return jinja_environment.get_template(template_name)
+    return jinja_environment
+
+
+def get_template(
+    template_name, dirs, autoescape=True, handler=None, default_locale='en_US'):
+    return create_and_configure_jinja_environment(
+        dirs, autoescape, handler, default_locale).get_template(template_name)
+
+
+def render_partial_template(name, dirs, values, **kwargs):
+    return jinja2.utils.Markup(
+        get_template(name, dirs, **kwargs).render(values))

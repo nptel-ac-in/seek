@@ -40,11 +40,11 @@ EntityDef = collections.namedtuple('EntityDef',
 
 ASSESSMENTS = [
     AssessmentDef(
-        1, 'One Question',
+        2, 'One Question',
         '<question quid="4785074604081152" weight="1" '
         'instanceid="8TvGgbrrbZ49"></question><br>'),
     AssessmentDef(
-        2, 'Groups And Questions',
+        3, 'Groups And Questions',
         '<question quid="5066549580791808" weight="1" '
         'instanceid="zsgZ8dUMvJjz"></question><br>'
         '<question quid="5629499534213120" weight="1" '
@@ -54,7 +54,7 @@ ASSESSMENTS = [
         '<question-group qgid="5910974510923776" '
         'instanceid="FcIh3jyWOTbP"></question-group><br>'),
     AssessmentDef(
-        3, 'All Questions',
+        4, 'All Questions',
         '<question quid="6192449487634432" weight="1" '
         'instanceid="E5P0a0bFB0EH"></question><br>'
         '<question quid="5629499534213120" weight="1" '
@@ -180,20 +180,26 @@ ENTITIES = [
 
 EXPECTED_COURSE_UNITS = [
     {
-        'title': 'One Question',
+        'title': 'New Unit',
         'unit_id': '1',
-        'now_available': True,
-        'type': 'A',
+        'now_available': False,
+        'type': 'U',
     },
     {
-        'title': 'Groups And Questions',
+        'title': 'One Question',
         'unit_id': '2',
         'now_available': True,
         'type': 'A',
     },
     {
-        'title': 'All Questions',
+        'title': 'Groups And Questions',
         'unit_id': '3',
+        'now_available': True,
+        'type': 'A',
+    },
+    {
+        'title': 'All Questions',
+        'unit_id': '4',
         'now_available': True,
         'type': 'A',
     }
@@ -282,18 +288,18 @@ class StudentAnswersAnalyticsTest(actions.TestBase):
         self.context = actions.simple_add_course(COURSE_NAME, ADMIN_EMAIL,
                                                  COURSE_TITLE)
         self.course = courses.Course(None, self.context)
-
+        first_unit = self.course.add_unit()
         for assessment in ASSESSMENTS:
-            self._add_assessment(self.course, assessment)
+            self._add_assessment(self.course, assessment,first_unit)
         self.course.save()
         for entity in ENTITIES:
             self._add_entity(self.context, entity)
 
-    def _add_assessment(self, course, assessment_def):
-        assessment = course.add_assessment()
+    def _add_assessment(self, course, assessment_def, parent):
+        assessment = course.add_assessment(parent)
         assessment.unit_id = assessment_def.unit_id
         assessment.title = assessment_def.title
-        assessment.now_available = True
+        assessment.availability = courses.AVAILABILITY_AVAILABLE
         assessment.html_content = assessment_def.html_content
 
     def _add_entity(self, context, entity):
@@ -324,7 +330,7 @@ class StudentAnswersAnalyticsTest(actions.TestBase):
 
         # Start map/reduce analysis job.
         response = self.get(
-            '/test_course/dashboard?action=analytics&tab=questions')
+            '/test_course/dashboard?action=analytics_questions')
         form = response.forms['gcb-run-visualization-question_answers']
         self.submit(form, response)
 

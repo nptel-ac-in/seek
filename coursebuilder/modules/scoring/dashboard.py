@@ -63,8 +63,7 @@ class ScoringDashboardHandler(base.ScoringBase):
         template_values = {}
         if not unit:
             handler.redirect(handler.get_action_url(
-                cls.DASHBOARD_NAV, extra_args={
-                    'tab': cls.DASHBOARD_RESCORING_TAB}))
+                cls.DASHBOARD_NAV))
             return
         else:
             template_values['unit'] = unit
@@ -83,8 +82,7 @@ class ScoringDashboardHandler(base.ScoringBase):
             {
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': content},
-            in_action=cls.DASHBOARD_NAV,
-            in_tab=cls.DASHBOARD_RESCORING_TAB)
+            in_action=cls.DASHBOARD_RESCORING_TAB)
 
     @classmethod
     def rescore_assignment(cls, handler):
@@ -96,8 +94,7 @@ class ScoringDashboardHandler(base.ScoringBase):
         if not unit or 'Cancel' == handler.request.get('submit'):
             handler.redirect(
                 handler.get_action_url(
-                    cls.DASHBOARD_NAV,
-                    extra_args={'tab': cls.DASHBOARD_RESCORING_TAB}))
+                    cls.DASHBOARD_RESCORING_TAB))
             return
 
         job = rescorer.RescorerSubmission(course.app_context, unit.unit_id,
@@ -114,5 +111,4 @@ class ScoringDashboardHandler(base.ScoringBase):
             {
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': content},
-            in_action=cls.DASHBOARD_NAV,
-            in_tab=cls.DASHBOARD_RESCORING_TAB)
+            in_action=cls.DASHBOARD_RESCORING_TAB)

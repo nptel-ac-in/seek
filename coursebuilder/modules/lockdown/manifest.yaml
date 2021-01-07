@@ -1,0 +1,7 @@
+registration:
+  main_module: modules.lockdown.register
+
+files:
+  - modules/lockdown/__init__.py
+  - modules/lockdown/lockdown.py
+  - modules/lockdown/manifest.yaml

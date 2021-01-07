@@ -16,21 +16,19 @@
 
 __author__ = 'Mike Gainer (mgainer@google.com)'
 
-import os
 import re
 import jinja2
 
-import appengine_config
-from controllers import sites
+from common import crypto
 from controllers import utils as controllers_utils
 from models.analytics import display
 from models.analytics import utils as analytics_utils
 from models import data_sources
-
-by_name = {}
+from models import transforms
 
 
 class Visualization(object):
+    registry = {}
 
     def __init__(self, name, title, html_template_name,
                  data_source_classes=None):
@@ -69,7 +67,7 @@ class Visualization(object):
             raise ValueError(
                 'name "%s" must contain only lowercase letters, ' % name +
                 'numbers or underscore characters')
-        if name in by_name:
+        if name in self.registry:
             raise ValueError(
                 'Visualization %s is already registered' % name)
         data_source_classes = data_source_classes or []
@@ -84,7 +82,7 @@ class Visualization(object):
         self._title = title
         self._template_name = html_template_name
         self._data_source_classes = data_source_classes
-        by_name[name] = self
+        self.registry[name] = self
 
     @property
     def name(self):
@@ -114,6 +112,9 @@ class Visualization(object):
         return set([c for c in self._data_source_classes
                     if issubclass(c, data_sources.AbstractRestDataSource)])
 
+    @classmethod
+    def for_name(cls, name):
+        return cls.registry.get(name)
 
 class _TemplateRenderer(object):
     """Insulate display code from knowing about handlers and Jinja.
@@ -127,12 +128,13 @@ class _TemplateRenderer(object):
         self._handler = handler
 
     def render(self, visualization, template_name, template_values):
+        # pylint: disable=protected-access
+        template_dirs = analytics_utils._get_template_dir_names(visualization)
+        if hasattr(self._handler, 'ADDITIONAL_DIRS'):
+            template_dirs.extend(self._handler.ADDITIONAL_DIRS)
         return jinja2.utils.Markup(
-            self._handler.get_template(
-                template_name,
-                # pylint: disable=protected-access
-                analytics_utils._get_template_dir_names(visualization)
-            ).render(template_values, autoescape=True))
+            self._handler.get_template(template_name, template_dirs).render(
+                template_values, autoescape=True))
 
     def get_base_href(self):
         return controllers_utils.ApplicationHandler.get_base_href(self._handler)
@@ -169,6 +171,17 @@ def generate_display_html(handler, xsrf_creator, visualizations):
         visualizations)
 
 
+class TabRenderer(object):
+    """Convenience class for creating tabs for rendering in dashboard."""
+
+    def __init__(self, contents):
+        self._contents = contents
+
+    def __call__(self, handler):
+        return generate_display_html(
+                handler, crypto.XsrfTokenManager, self._contents)
+
+
 class AnalyticsHandler(controllers_utils.ReflectiveRequestHandler,
                        controllers_utils.ApplicationHandler):
 
@@ -179,7 +192,8 @@ class AnalyticsHandler(controllers_utils.ReflectiveRequestHandler,
     def _get_generator_classes(self):
         # pylint: disable=protected-access
         return analytics_utils._generators_for_visualizations(
-            [by_name[name] for name in self.request.get_all('visualization')])
+            [Visualization.for_name(name)
+             for name in self.request.get_all('visualization')])
 
     def post_run_visualizations(self):
         for generator_class in self._get_generator_classes():
@@ -192,47 +206,59 @@ class AnalyticsHandler(controllers_utils.ReflectiveRequestHandler,
         self.redirect(str(self.request.get('r')))
 
 
+class AnalyticsStatusRESTHandler(controllers_utils.BaseRESTHandler):
+    URL = '/analytics/rest/status'
+
+    def get(self):
+        generator_classes = set()
+        for visualization_name in self.request.get_all('visualization'):
+            visualization = Visualization.for_name(visualization_name)
+            generator_classes.update(visualization.generator_classes)
+
+        generator_status = {}
+        for generator_class in generator_classes:
+            job = generator_class(self.app_context).load()
+            generator_status[generator_class] = job and job.has_finished
+
+
+        finished_visualizations = set()
+        finished_sources = set()
+        finished_generators = set()
+        all_visualizations_finished = True
+        for visualization_name in self.request.get_all('visualization'):
+            all_sources_finished = True
+            visualization = Visualization.for_name(visualization_name)
+            for data_source_class in visualization.data_source_classes:
+                all_generators_finished = True
+                for generator_class in data_source_class.required_generators():
+                    all_generators_finished &= generator_status[generator_class]
+                all_sources_finished &= all_generators_finished
+                if all_generators_finished:
+                    if issubclass(data_source_class,
+                                  data_sources.AbstractRestDataSource):
+                        finished_sources.add(data_source_class.get_name())
+                    else:
+                        finished_sources.add(data_source_class.__name__)
+            all_visualizations_finished &= all_sources_finished
+            if all_sources_finished:
+                finished_visualizations.add(visualization_name)
+        result = {
+            'finished_visualizations': finished_visualizations,
+            'finished_sources': finished_sources,
+            'finished_generators': finished_generators,
+            'finished_all': all_visualizations_finished,
+        }
+
+        transforms.send_json_response(self, 200, "Success.", result)
+
+
 def get_namespaced_handlers():
-    return [('/analytics', AnalyticsHandler)]
+    return [
+        ('/analytics', AnalyticsHandler),
+        (AnalyticsStatusRESTHandler.URL, AnalyticsStatusRESTHandler),
+    ]
 
 
 def get_global_handlers():
-    # https://github.com/dc-js
-    #
-    # "Multi-Dimensional charting built to work natively with
-    # crossfilter rendered with d3.js"
-    dc_handler = sites.make_zip_handler(os.path.join(
-        appengine_config.BUNDLE_ROOT, 'lib', 'dc.js-1.6.0.zip'))
-
-    # https://github.com/square/crossfilter
-    #
-    # "Crossfilter is a JavaScript library for exploring large
-    # multivariate datasets in the browser. Crossfilter supports
-    # extremely fast (<30ms) interaction with coordinated views, even
-    # with datasets containing a million or more records; we built it
-    # to power analytics for Square Register, allowing merchants to
-    # slice and dice their payment history fluidly."
-    crossfilter_handler = sites.make_zip_handler(os.path.join(
-        appengine_config.BUNDLE_ROOT, 'lib', 'crossfilter-1.3.7.zip'))
-
-    # http://d3js.org/
-    #
-    # "D3.js is a JavaScript library for manipulating documents based
-    # on data. D3 helps you bring data to life using HTML, SVG and
-    # CSS. D3's emphasis on web standards gives you the full
-    # capabilities of modern browsers without tying yourself to a
-    # proprietary framework, combining powerful visualization
-    # components and a data-driven approach to DOM manipulation."
-    d3_handler = sites.make_zip_handler(os.path.join(
-        appengine_config.BUNDLE_ROOT, 'lib', 'd3-3.4.3.zip'))
-
     # Restrict files served from full zip package to minimum needed
-    return [
-        ('/static/crossfilter-1.3.7/(crossfilter-1.3.7/crossfilter.min.js)',
-         crossfilter_handler),
-        ('/static/d3-3.4.3/(d3.min.js)', d3_handler),
-        ('/static/dc.js-1.6.0/(dc.js-1.6.0/dc.js)', dc_handler),
-        ('/static/dc.js-1.6.0/(dc.js-1.6.0/dc.min.js)', dc_handler),
-        ('/static/dc.js-1.6.0/(dc.js-1.6.0/dc.min.js.map)', dc_handler),
-        ('/static/dc.js-1.6.0/(dc.js-1.6.0/dc.css)', dc_handler),
-    ]
+    return []

@@ -18,43 +18,65 @@ __author__ = 'Pavel Simakov (psimakov@google.com)'
 
 import collections
 import config
+import messages
+import json
+
+from google.appengine.api import namespace_manager
+
 from common import utils
+from common import caching
+from common import users
 from models import MemcacheManager
 from models import RoleDAO
-
-from google.appengine.api import users
+from course_list import CourseListDAO
 
 GCB_ADMIN_LIST = config.ConfigProperty(
-    'gcb_admin_user_emails', str, (
-        'A list of email addresses for super-admin users. '
-        'WARNING! Super-admin users have the highest level of access to your '
-        'Google App Engine instance and to all data about all courses and '
-        'students within that instance. Be very careful when modifying this '
-        'property.  '
-        'Syntax: Entries may be separated with any combination of '
-        'tabs, spaces, commas, or newlines.  Existing values using "[" and '
-        '"]" around email addresses continues to be supported.  '
-        'Regular expressions are not supported.'),
-    '', multiline=True)
+    'gcb_admin_user_emails', str, messages.SITE_SETTINGS_SITE_ADMIN_EMAILS, '',
+    label='Site Admin Emails', multiline=True)
 
 KEY_COURSE = 'course'
 KEY_ADMIN_USER_EMAILS = 'admin_user_emails'
 
-GCB_ALLOWLISTED_USERS = config.ConfigProperty(
-    'gcb_user_allowlist', str, (
-        'A list of email addresses of users allowed access to courses.  '
-        'If this is blank, site-wide user allowlisting is disabled.  '
-        'Access to courses is also implicitly granted to super admins and '
-        'course admins, so you need not repeat those names here.  '
-        'Course-specific allowlists trump this list - if a course has a '
-        'non-blank allowlist, this one is ignored.  '
-        'Syntax: Entries may be separated with any combination of '
-        'tabs, spaces, commas, or newlines.  Existing values using "[" and '
-        '"]" around email addresses continues to be supported.  '
-        'Regular expressions are not supported.'),
-    '', multiline=True)
+GCB_WHITELISTED_USERS = config.ConfigProperty(
+    'gcb_user_whitelist', str, messages.SITE_SETTINGS_WHITELIST, '',
+    label='Whitelist', multiline=True)
 
 Permission = collections.namedtuple('Permission', ['name', 'description'])
+
+class CourseAdminCache(caching.RequestScopedSingleton):
+    """Class that manages optimized checking for course admin status."""
+
+    def __init__(self):
+        self._course_admin_dict = {}
+
+    @classmethod
+    def _key(cls, app_context):
+        """Make key specific to current namespace and user."""
+        user = users.get_current_user()
+        if not user:
+            return
+        if not app_context:
+            return
+        return '%s:%s' % (
+            users.get_current_user().email(), app_context.namespace)
+
+    def _is_course_admin(self, app_context):
+        key = self._key(app_context)
+        if key in self._course_admin_dict:
+            return self._course_admin_dict[key]
+
+    def _set_course_admin_status(self, app_context, value):
+        key = self._key(app_context)
+        self._course_admin_dict[key] = value
+
+    @classmethod
+    def is_course_admin(cls, app_context):
+        # pylint: disable=protected-access
+        return cls.instance()._is_course_admin(app_context)
+
+    @classmethod
+    def set_course_admin_status(cls, app_context, value):
+        cls.instance()._set_course_admin_status(app_context, value)
 
 
 class Roles(object):
@@ -80,43 +102,79 @@ class Roles(object):
                                   GCB_ADMIN_LIST.value)
 
     @classmethod
-    def is_course_admin(cls, app_context):
+    def is_course_admin(cls, app_context=None, course_list_obj=None):
         """Checks if a user is a course admin, possibly via delegation."""
+
         if cls.is_super_admin():
             return True
 
-        course_admin_email = app_context.course_admin_email.strip()
-        if course_admin_email:
-            user = users.get_current_user()
-            return cls._user_email_in(user, course_admin_email)
+        cached_is_course_admin = CourseAdminCache.is_course_admin(app_context)
+        if cached_is_course_admin is not None:
+            return cached_is_course_admin
 
-        return False
+        course_admin_email = None
+        if app_context and app_context.course_admin_email is not None:
+            user = users.get_current_user()
+            is_course_admin = cls._user_email_in(
+                user, app_context.course_admin_email)
+            CourseAdminCache.set_course_admin_status(
+                app_context, is_course_admin)
+            return is_course_admin
+        elif course_list_obj:
+            user = users.get_current_user()
+            if cls._user_email_in(user, course_list_obj.course_admin_email):
+                return True
+            return False
+        else:
+            raise ValueError("Must provide either app_context or course_list")
 
     @classmethod
-    def is_user_allowlisted(cls, app_context):
+    def is_user_whitelisted(cls, app_context=None, course_list_obj=None):
         user = users.get_current_user()
-        global_allowlist = GCB_ALLOWLISTED_USERS.value.strip()
-        course_allowlist = app_context.allowlist.strip()
+        global_whitelist = GCB_WHITELISTED_USERS.value.strip()
 
-        # Most-specific allowlist used if present.
-        if course_allowlist:
-            return cls._user_email_in(user, course_allowlist)
+        if app_context:
+            course_whitelist = app_context.whitelist.strip()
+        elif course_list_obj:
+            course_whitelist = course_list_obj.whitelist.strip()
+        else:
+            raise ValueError("Must provide either app_context or course_list")
 
-        # Global allowlist if no course allowlist
-        elif global_allowlist:
-            return cls._user_email_in(user, global_allowlist)
+        # Most-specific whitelist used if present.
+        if course_whitelist:
+            return cls._user_email_in(user, course_whitelist)
 
-        # Lastly, no allowlist = no restrictions
+        # Global whitelist if no course whitelist
+        elif global_whitelist:
+            return cls._user_email_in(user, global_whitelist)
+
+        # Lastly, no whitelist = no restrictions
         else:
             return True
 
     @classmethod
     def _user_email_in(cls, user, text):
-        return user and user.email().lower() in utils.text_to_list(
-            text, utils.BACKWARD_COMPATIBLE_SPLITTER, to_lower=True)
+
+        if not user:
+            return False
+        email = user.email().lower()
+        if not email:
+            return False
+        match_to = set([email])
+        if '@' in email:
+            domain = email.split('@')[-1]
+            if domain:
+                match_to.add(domain)
+                match_to.add('@' + domain)
+        if isinstance(text, basestring):
+            allowed = set([email.lower() for email in utils.text_to_list(
+                text, utils.BACKWARD_COMPATIBLE_SPLITTER)])
+        else:
+            allowed = set(text)
+        return bool(match_to & allowed)
 
     @classmethod
-    def update_permissions_map(cls):
+    def update_permissions_map(cls,app_context):
         """Puts a dictionary mapping users to permissions in memcache.
 
         A dictionary is constructed, using roles information from the datastore,
@@ -136,15 +194,29 @@ class Roles(object):
                     module_permissions.update(permissions)
 
         MemcacheManager.set(cls.memcache_key, permissions_map)
+
+        #Create a simple dict which can be serialized and save it to course list
+        role_permissions_map = {}
+        for role in RoleDAO.get_all():
+            for user in role.users:
+                user_permissions = role_permissions_map.setdefault(user, {})
+                for (module_name, permissions) in role.permissions.iteritems():
+                    module_permissions = user_permissions.setdefault(
+                        module_name, [])
+                    module_permissions.extend(permissions)
+        namespace = app_context.namespace
+        CourseListDAO.update_course_details(namespace,  permissions =  json.dumps(role_permissions_map))
+
         return permissions_map
 
     @classmethod
-    def _load_permissions_map(cls):
+    def load_permissions_map(cls,app_context):
         """Loads the permissions map from Memcache or creates it if needed."""
         permissions_map = MemcacheManager.get(cls.memcache_key)
-        if not permissions_map:
-            permissions_map = cls.update_permissions_map()
+        if permissions_map is None:  # As opposed to {}, which is valid.
+            permissions_map = cls.update_permissions_map(app_context)
         return permissions_map
+
 
     @classmethod
     def is_user_allowed(cls, app_context, module, permission):
@@ -163,10 +235,34 @@ class Roles(object):
             return True
         if not module or not permission or not users.get_current_user():
             return False
-        permissions_map = cls._load_permissions_map()
-        user_permissions = permissions_map.get(
-            users.get_current_user().email(), {})
-        return permission in user_permissions.get(module.name, set())
+        permissions_map =  app_context.permissions()
+        user_permissions = permissions_map.get(users.get_current_user().email(), {})
+        return permission in user_permissions.get(module.name, [])
+
+    @classmethod
+    def in_any_role(cls, app_context=None, course_list_obj=None,
+                    force_course_namespace=False):
+        old_namespace = namespace_manager.get_namespace()
+        if app_context:
+            new_namespace = app_context.namespace
+        elif course_list_obj:
+            new_namespace = course_list_obj.namespace
+        elif force_course_namespace:
+            raise ValueError("Must provide either app_context or course_list")
+
+        with utils.Namespace(
+                new_namespace if force_course_namespace else old_namespace):
+            user = users.get_current_user()
+            if not user:
+                return False
+            if course_list_obj:
+                permissions_map = json.loads(
+                    course_list_obj.permissions if course_list_obj.permissions
+                    else '{}')
+            else:
+                permissions_map = app_context.permissions()
+            user_permissions = permissions_map.get(user.email(), {})
+            return bool(user_permissions)
 
     @classmethod
     def register_permissions(cls, module, callback_function):

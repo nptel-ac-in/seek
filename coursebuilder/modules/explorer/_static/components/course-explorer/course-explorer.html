@@ -1,0 +1,301 @@
+<link rel="import" href="/static/polymer-1.2.0/polymer/polymer.html">
+<link rel="import" href="/static/polymer-1.2.0/iron-ajax/iron-ajax.html" />
+<link rel="import" href="/static/polymer-1.2.0/paper-spinner/paper-spinner.html" />
+<link rel="import" href="/modules/explorer/_static/components/utility/unsafe-html.html">
+<link rel="import" href="/modules/explorer/_static/components/utility/floating-sidebar.html">
+<link rel="import" href="/modules/explorer/_static/components/course-cards/course-card-grouper.html">
+<link rel="import" href="/modules/explorer/_static/components/filter-sidebar/filter-sidebar.html">
+<link rel="import" href="/modules/explorer/_static/components/top-bar/top-bar.html">
+<link rel="import" href="/modules/explorer/_static/components/custom-nav-bar/custom-nav-bar.html">
+<link rel="import" href="/static/polymer-1.2.0/paper-button/paper-button.html">
+
+<dom-module id="course-explorer">
+  <template>
+    <style>
+
+      #content {
+        flex: 1;
+        padding-left: 48px;
+        padding-top: 32px;
+        position: relative;
+      }
+
+      #main {
+        display: flex;
+      }
+
+      #load-more-button {
+        position: relative;
+        /*left: 50%;*/
+        margin-bottom: 50px;
+      }
+
+      paper-spinner {
+        position: relative;
+        /*left: 32px;*/
+        top: 11px;
+        left: auto;
+      }
+    </style>
+    <!-- params="[[_getCoursesQuery(filter_options)]]" -->
+
+    <iron-ajax
+      id="loadCoursesAJAX"
+      url="/modules/gql/query"
+      handle-as="json"
+      json-prefix=")]}'"
+      on-response="_onCoursesResponse"
+    ></iron-ajax>
+
+    <div id="main-heading">
+      <h2>Explore Courses</h2>
+    </div>
+    <div id="main">
+      <floating-sidebar>
+        <filter-sidebar
+          filter_options="{{filter_options}}"
+          categories="[[categories]]"
+        ></filter-sidebar>
+      </floating-sidebar>
+
+      <div id="content">
+        <course-card-grouper
+          id="grouper"
+          courses="[[_filter(courses.edges, filter_options.*)]]"
+        ></course-card-grouper>
+        <!-- <template is="dom-if" if="{{courseCursor}}"> -->
+          <!-- <paper-button disabled="{{!coursesLoaded}}" raised id="load-more-button" on-tap="_loadMoreCourses" href="#">Load More</paper-button> -->
+        <!-- </template> -->
+        <paper-spinner active="{{!coursesLoaded}}"></paper-spinner>
+      </div>
+    </div>
+
+  </template>
+  <script>
+    var _textMatch = function(needle, haystack) {
+      return haystack.toUpperCase().indexOf(needle.toUpperCase()) != -1;
+    }
+
+    Polymer({
+      is: 'course-explorer',
+      properties: {
+        filter_options: {
+          type: Object,
+          notify: true,
+        },
+        courses: {
+          type: Object,
+        },
+        site: {
+          type: Object,
+        },
+        categories: {
+          type: Array,
+          value: [],
+        },
+        coursesLoaded: {
+          type: Boolean,
+        },
+        navbar_links: {
+          type: Object,
+        },
+        courseCursor: {
+          type: String,
+        },
+        pagelength: {
+          type: Number,
+        },
+      },
+
+      _getCoursesQuery: function(filter_options, freshQuery) {
+        var afterCursorArgument = '';
+        if (this.courseCursor && !freshQuery) {
+          afterCursorArgument = ', after:"' + this.courseCursor + '"';
+        }
+        return {
+          q: '{courseList(args: {' +
+                  'includeClosed: ' + filter_options.includeClosed + ', ' +
+                  'filterText: "' + filter_options.filter + '", ' +
+                  'category: "' + filter_options.category + '", ' +
+                  'status: "' + filter_options.status + '", ' +
+                  'tags: "' + filter_options.tags + '", ' +
+             '  }, first:' + this.pagelength*5 + afterCursorArgument + ') {edges {node {' +
+             '  id, title, url, explorerSummary,' +
+             '  explorerInstructorName, enrollment {enrolled}, ' +
+             '  openForRegistration, showInExplorer,' +
+             '  startDate, endDate, estimatedWorkload, category {name, category},' +
+             '  tags {name}, featured }}, pageInfo {endCursor, hasNextPage}}, ' +
+            //  '  categories {name, category}}',
+             '  }',
+          expanded_gcb_tags: 'gcb-markdown'
+        };
+      },
+
+      _onCoursesResponse: function(event) {
+        var timeout;
+        var courses = this.get('courses');
+        if (event !== null && event !== undefined) {
+          if (courses && Object.keys(courses).length !== 0 && Object.keys(courses.edges).length !== 0) {
+            // Set display to none so that it loads in the background and stays hidden
+            // These course cards will be shown once the user scrolls down.
+            event.detail.response.data.courseList.edges.forEach(function(obj) {
+              obj.node.inlineStyle = "display: none";
+            });
+            event.detail.response.data.courseList.edges = courses.edges.concat(event.detail.response.data.courseList.edges);
+            event.detail.response.data.courseList.pageInfo = event.detail.response.data.courseList.pageInfo;
+            this.set('courses', courses);
+            // this.set('categories', this._getCategories(event));
+          }
+          courses = event.detail.response.data.courseList
+          this.set('courses', courses);
+          // Not the first load, hence load more courses after 3 seconds
+          timeout = 3000;
+        }
+        else {
+          // First load, load more courses almost immediately
+          timeout = 500;
+        }
+        this.set('coursesLoaded', true);
+
+        if (courses !== null && courses !== undefined) {
+          if (courses.pageInfo.hasNextPage) {
+            this.set('courseCursor', courses.pageInfo.endCursor)
+          }
+          else {
+            this.set('courseCursor', null);
+          }
+        }
+        // this._loadMoreCoursesIfRequired(timeout);
+      },
+
+      _loadMoreCourses: function(_this) {
+        if (!_this) {
+          _this = this;
+        }
+        _this.$.loadCoursesAJAX.params = _this._getCoursesQuery(_this.filter_options);
+        _this.set('coursesLoaded', false);
+        _this.$.loadCoursesAJAX.generateRequest();
+      },
+
+      _loadMoreCoursesIfRequired: function(timeout) {
+        if (this.get('courseCursor')) {
+          this.async(function(obj) {return obj._loadMoreCourses}(this), timeout);
+        }
+      },
+
+      runQuery: function() {
+        this.set('courses', []);
+        this.$$('course-card-grouper').courses = [];
+        this.set('coursesLoaded', false);
+        this.set('coursesCursor', null);
+        this.courseCursor = null;
+        if (this.$.loadCoursesAJAX.lastRequest && this.$.loadCoursesAJAX.lastRequest.xhr) {
+          this.$.loadCoursesAJAX.lastRequest.xhr.abort();
+        }
+        this.$.loadCoursesAJAX.params = this._getCoursesQuery(this.filter_options, true);
+        this.$.loadCoursesAJAX.generateRequest();
+      },
+
+      _anyFeaturedCourses: function() {
+        return this.courses.edges.some(function(course) {
+          return course.node.featured;
+        })
+      },
+
+      _enrolledInAny: function() {
+        return this.courses.edges.some(function(course) {
+          return course.node.enrollment.enrolled;
+        })
+      },
+
+      _getCategories: function(event) {
+        return event.detail.response.data.categories.map(function(obj) {
+          return {
+            name: obj.name,
+            category: obj.category
+          }
+        });
+      },
+      _filter: function(courses, filter_options_path) {
+        var filter_options = filter_options_path.base;
+        var that = this;
+        return courses.filter(function(course) {
+          if (!course.node.showInExplorer) {
+            return false;
+          }
+
+          // Filter by status
+
+          // A course is "completed" from the point of view of the offering
+          // institution if it is visible but registration is no longer allowed
+          // (it it's now "over").
+          // if (
+          //     filter_options.status == 'enrolled' &&
+          //     !course.node.enrollment.enrolled) {
+          //   return false;
+          // } else if (
+          //     filter_options.status == 'featured' &&
+          //     !course.node.featured) {
+          //   return false;
+          // } else if (
+          //     filter_options.status == 'ended' &&
+          //     course.node.openForRegistration) {
+          //   return false;
+          // }
+
+          // Filter by category
+          // if (
+          //     filter_options.category != 'all' && (
+          //     !course.node.category ||
+          //     !course.node.category.name ||
+          //     course.node.category.name != filter_options.category)) {
+          //   return false;
+          // }
+
+          // // Filter by text
+          // if (filter_options.filter) {
+          //   var text_fields = [
+          //     course.node.title,
+          //     course.node.abstract,
+          //     course.node.instructorDetails,
+          //     course.node.explorerInstructorName,
+          //     course.node.explorerSummary,
+          //   ]
+          //   function match(field) {
+          //     return field && _textMatch(filter_options.filter, field);
+          //   }
+          //   if (!text_fields.some(match)) {
+          //     return false;
+          //   }
+          // }
+
+          // Filter by tags
+          // if (filter_options.tags != '') {
+          //   var tags = [];
+          //   filter_options.tags.split(",").forEach(
+          //       function(item, index) {
+          //         tags.push(item.trim().toLowerCase());
+          //       }
+          //   )
+
+          //   var courseTags = [];
+          //   course.node.tags.forEach(function(item, index) {
+          //     courseTags.push(item.name);
+          //   })
+          //
+          //   var filteredTags = tags.filter(function(el) {
+          //     return courseTags.indexOf(el) !== -1;
+          //   })
+          //
+          //   return filteredTags.length > 0;
+          // }
+
+          return true;
+        })
+      },
+      ready: function() {
+        this._onCoursesResponse();
+      }
+    });
+  </script>
+</dom-module>

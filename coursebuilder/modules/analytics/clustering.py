@@ -36,8 +36,8 @@ from models import progress
 from models import transforms
 from models import data_sources
 from models.entities import BaseEntity
+from modules.analytics import gradebook
 from modules.analytics import student_aggregate
-from modules.dashboard import student_answers_analytics
 from modules.dashboard import dto_editor
 
 from google.appengine.ext import db
@@ -162,6 +162,13 @@ class ClusterDataSource(data_sources.SynchronousQuery):
     """
 
     @staticmethod
+    def any_clusterable_objects_exist(app_context):
+        course = courses.Course(None, app_context=app_context)
+        if course.get_units() or models.QuestionDAO.get_all():
+            return True
+        return False
+
+    @staticmethod
     def fill_values(app_context, template_values):
         """Sets values into the dict used to fill out the Jinja template."""
         template_values['clusters'] = ClusterDAO.get_all()
@@ -172,7 +179,11 @@ class ClusterDataSource(data_sources.SynchronousQuery):
                 'key': cluster.id})
             edit_urls.append('dashboard?{}'.format(params))
         template_values['edit_urls'] = edit_urls
-
+        if not ClusterDataSource.any_clusterable_objects_exist(app_context):
+            template_values['no_clusterables'] = (
+                'No course items exist on which to make clusters.  '
+                'At least one unit, lesson, or question must exist '
+                'for clustering functionality is relevant.')
 
 def _has_right_side(dim):
     """Returns True if the value of dim[DIM_HIGH] is not None or ''."""
@@ -272,7 +283,7 @@ def get_possible_dimensions(app_context):
     For more details in the structure of dimensions see ClusterEntity
     documentation.
     """
-    datasource = student_answers_analytics.OrderedQuestionsDataSource()
+    datasource = gradebook.OrderedQuestionsDataSource()
     template_values = {}
     # This has extra information but it was already implemented.
     # Also, the OrderedQuestionsDataSource takes care of the case
@@ -303,8 +314,6 @@ class ClusterRESTHandler(dto_editor.BaseDatastoreRestHandler):
     DAO = ClusterDAO
 
     SCHEMA_VERSIONS = ['1.0']
-
-    REQUIRED_MODULES = []
 
     EXTRA_JS_FILES = ['cluster_rest.js']
     EXTRA_CSS_FILES = []
@@ -435,8 +444,8 @@ class ClusterRESTHandler(dto_editor.BaseDatastoreRestHandler):
                 dim[DIM_LOW] = None
             if (_has_left_side(dim) and _has_right_side(dim)
                 and dim[DIM_HIGH] < dim[DIM_LOW]):
-                errors.append('Wrong range interval in dimension'
-                              'number {}'.format(index))
+                errors.append(
+                    'Wrong range interval in dimension number {}'.format(index))
             # Unpack the select id.
             dim[DIM_ID], dim[DIM_TYPE] = ClusterRESTHandler.unpack_id(
                 dim[DIM_ID])
@@ -582,7 +591,7 @@ class StudentVectorGenerator(jobs.MapReduceJob):
 
         progress_data = None
         user_id = item.key().name()
-        student = models.Student.get_student_by_user_id(user_id)
+        student = models.Student.get_by_user_id(user_id)
         if student:
             raw_data = models.StudentPropertyEntity.get(
                 student, progress.UnitLessonCompletionTracker.PROPERTY_KEY)

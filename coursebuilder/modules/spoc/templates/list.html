@@ -1,0 +1,131 @@
+<script type="text/javascript" src="//www.google.com/jsapi"></script>
+<h3>Enrolled Members for course {{ course.slug }} and Local Chapter {{ local_chapter.name }} ({{ local_chapter.org_type }})</h3>
+<br/>
+<div id='navigation-div'>
+    <span>
+        <label>Search by email: </label>
+        <input id='search-email' placeholder="Email" value='{{ search_str }}'></input>
+        <button class='gcb-button' onclick='searchByEmail()'>Search</button>
+        <button class='gcb-button' onclick='clearSearch()'>Clear</button>
+    </span>
+    <span class='gcb-pull-right'>
+      <a class="gcb-button" href="dashboard?action=download_student_list">Download CSV dump</a>
+      <form method='post' action='{{ save_url }}' onsubmit="return parseToggles();">
+      <input style='display: none' id='xsrf_token' name='xsrf_token' value='{{ save_xsrf_token }}'></input>
+      <input style='display: none' id='mentor-data' name='mentor-data' type='text'></input>
+      <input style='display: none' id='org_type' name='org_type-data' type='text' value="{{ org_type }}"></input>
+      <button class='gcb-button' type='submit'>Save</button>
+      </form>
+    </span>
+</div>
+<br/>
+<div id='students-table'></div>
+<br/>
+<br/>
+
+<script type='text/javascript'>
+
+function searchByEmail() {
+    var email = document.getElementById('search-email').value;
+    if (email) {
+        window.location.href = '{{ list_action|safe }}&email=' + email;
+    }
+    else {
+        alert('Please enter an email ID to search');
+    }
+    return true;
+}
+
+function parseToggles() {
+  var mentor_data = {};
+  $('.mentor-toggle').each(function(idx, el) {
+    if (el.checked !== el.dataset.old_value) {
+      mentor_data[el.dataset.user_id] = el.checked;
+    }
+  })
+  $('#mentor-data')[0].value = JSON.stringify(mentor_data);
+}
+
+function clearSearch() {
+    {% if search_str %}
+        window.location.href = '{{ list_action|safe }}';
+    {% endif %}
+}
+
+function drawTables() {
+
+    {% if objects %}
+        var table = new google.visualization.DataTable();
+
+        table.addColumn('string', 'Email');
+        table.addColumn('string', 'Name');
+        table.addColumn('string', 'College Roll No.');
+        table.addColumn('string', 'Year of Graduation');
+        table.addColumn('string', 'Profession');
+        table.addColumn('boolean', 'Currently Enrolled');
+        table.addColumn('string', 'Mentor');
+        {% for unit in units %}
+            table.addColumn('number', '{{ unit.title }} ({{ unit.unit_id }})');
+        {% endfor %}
+
+
+        {% for profile in objects %}
+            {% set student=students[loop.index0] %}
+            table.addRows(1);
+            var rowIndex = {{ loop.index0 }};
+            table.setCell(rowIndex, 0, '{{ profile.email }}');
+            table.setCell(rowIndex, 1, '{{ profile.nick_name }}');
+            table.setCell(rowIndex, 2, '{{ profile.college_roll_no }}');
+            table.setCell(rowIndex, 3, '{{ profile.graduation_year }}');
+            table.setCell(rowIndex, 4, '{{ profile.profession }}');
+
+            table.setCell(rowIndex, 5, {% if student.is_enrolled %}true{% else %}false{% endif %});
+
+            table.setCell(
+              rowIndex, 6,
+              '<input id="mentor_{{ profile.user_id }}" \
+              class="disable-before-submit mentor-toggle" \
+              data-user_id="{{ student.user_id }}" \
+              type="checkbox" \
+              {% if student.user_id in mentor_dict %} \
+                checked \
+                data-old_value=true \
+              {% else %} \
+                data-old_value=false \
+              {% endif %} \
+              {% if allow_update_mentor and (org_type == "industry" or profile.profession =="faculty")  %} \
+                ""\
+              {% else %} \
+              disabled \
+              {% endif %}></input>');
+
+
+            {% set student_scores=student_scores_list[loop.index0] %}
+            {% for unit in units %}
+                {% set score=student_scores[unit.unit_id|string] %}
+                {% if not score %}
+                    {% set score=0 %}
+                {% endif %}
+                table.setCell(rowIndex, (7+{{ loop.index0 }}), {{ score }});
+            {% endfor %}
+
+
+        {% endfor %}
+
+        new google.visualization.Table(
+            document.getElementById('students-table')
+        ).draw(
+            table, {
+                allowHtml: true,
+                showRowNumber: true,
+                title: 'Enrolled Students'
+            }
+        )
+    {% else %}
+        document.getElementById('students-table').innerHTML = 'No records found';
+    {% endif %}
+}
+
+google.load('visualization', '1', {packages: ['table']});
+google.setOnLoadCallback(drawTables);
+</script>

@@ -44,6 +44,7 @@ from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas
 
 import appengine_config
+from common import resource
 from common import safe_dom
 from common import schema_fields
 from common import tags
@@ -55,14 +56,29 @@ from models import custom_modules
 from models import data_sources
 from models import jobs
 from models import models
+from models import progress
+from models import services
 from modules.analytics import student_aggregate
 from modules.certificate import custom_criteria
-from modules.dashboard import course_settings
-from modules.dashboard import tabs
+from modules.certificate import messages
+from modules.courses import settings
+from modules.dashboard import dashboard
+from modules.news import news
 
+MODULE_NAME = 'certificates'
+MODULE_TITLE = 'Certificates'
 CERTIFICATE_HANDLER_PATH = 'certificate'
 CERTIFICATE_PDF_HANDLER_PATH = 'certificate.pdf'
 RESOURCES_PATH = '/modules/certificate/resources'
+
+# Not a fully-fledged resource key, but since the News module only needs
+# something that walks like a resource key and quacks like a resource key,
+# this is close enough: It parses like one, and the type does not collide
+# with other resource type names.  It is also "unique enough", in that
+# since it's per-student, we don't really care what the ID component of
+# the key is.
+RESOURCE_TYPE = 'certificate'
+RESOURCE_KEY = RESOURCE_TYPE + resource.Key.SEPARATOR + '1'
 
 
 class ShowCertificateHandler(utils.BaseHandler):
@@ -112,15 +128,24 @@ class ShowCertificatePdfHandler(utils.BaseHandler):
         text.setTextOrigin(0.5 * inch, 4.5 * inch)
         text.setFont('Helvetica', 40)
         text.setFillColorRGB(75.0 / 255, 162.0 / 255, 65.0 / 255)
+        # I18N: Message fragment on a certificate of course completion.
+        # Title line indicating what this page is.
         text.textLine(self.gettext('Certificate of Completion'))
 
         text.setTextOrigin(0.5 * inch, 4.0 * inch)
         text.setFillColorRGB(0.4, 0.4, 0.4)
         text.setFont('Helvetica', 20)
+        # I18N: Message fragment on a certificate of course completion.
+        # On a separate line, preceding the name of the student.  Indicates
+        # that the certificate is being presented to someone.
         text.textLine(self.gettext('Presented to'))
 
         text.setTextOrigin(0.5 * inch, 2.3 * inch)
+        # I18N: Message fragment on a certificate of course completion.
+        # Indicates that the student has successfully completed something.
         text.textLine(self.gettext('for successfully completing the'))
+        # I18N: Message fragment on a certificate of course completion.
+        # Gives the name of the course, followed by the word "course".
         text.textLine(self.gettext('%(course)s course') % {'course': course})
 
         c.drawText(text)
@@ -161,16 +186,17 @@ def _get_score_by_id(score_list, assessment_id):
     return None
 
 
-def _prepare_custom_criterion(custom, student, course):
+def _prepare_custom_criterion(custom, student, course, explanations):
     assert hasattr(custom_criteria, custom), ((
         'custom criterion %s is not implemented '
         'as a function in custom_criteria.py.') % custom)
     assert (custom in custom_criteria.registration_table), ((
-        'Custom criterion %s is not allowlisted '
+        'Custom criterion %s is not whitelisted '
         'in the registration_table in custom_criteria.py.') % custom)
 
     def _check_custom_criterion():
-        if not getattr(custom_criteria, custom)(student, course):
+        criterion = getattr(custom_criteria, custom)
+        if not criterion(student, course, explanations=explanations):
             return False
         return True
 
@@ -206,13 +232,15 @@ def _prepare_assessment_criterion(score_list, criterion):
     return _check_assessment_criterion
 
 
-def student_is_qualified(student, course):
+def student_is_qualified(student, course, explanations=None):
     """Determines whether the student has met criteria for a certificate.
 
     Args:
         student: models.models.Student. The student entity to test.
         course: modesl.courses.Course. The course which the student is
             enrolled in.
+        explanations: list. Holder for a list of explanatory strings. Typically
+            this will hold explanation of which criteria remain to be be met.
 
     Returns:
         True if the student is qualified, False otherwise.
@@ -232,7 +260,8 @@ def student_is_qualified(student, course):
             'assessment_id and custom_criteria cannot be both empty.')
         if custom is not '':
             criteria_functions.append(
-                _prepare_custom_criterion(custom, student, course))
+                _prepare_custom_criterion(
+                    custom, student, course, explanations))
         elif assessment_id is not '':
             criteria_functions.append(
                 _prepare_assessment_criterion(score_list, criterion))
@@ -251,7 +280,8 @@ def get_certificate_table_entry(handler, student, course):
     # I18N: Title of section on page showing certificates for course completion.
     title = handler.gettext('Certificate')
 
-    if student_is_qualified(student, course):
+    explanations = []
+    if student_is_qualified(student, course, explanations=explanations):
         nl = safe_dom.NodeList()
         nl.append(
             safe_dom.A(
@@ -270,12 +300,19 @@ def get_certificate_table_entry(handler, student, course):
         )
         return (title, nl)
     else:
-        return (
-            title,
-            # I18N: Text indicating student has not yet completed a course.
-            handler.gettext(
-                'You have not yet met the course requirements for a '
-                'certificate of completion.'))
+        nl = safe_dom.NodeList()
+        # nl.append(
+        #     safe_dom.Text(
+        #         # I18N: Text indicating student has not yet completed a course.
+        #         handler.gettext(
+        #             'You have not yet met the course requirements for a '
+        #             'certificate of completion.')))
+        if explanations:
+            ul = safe_dom.Element('ul', className='certificate-explanations')
+            for expl in explanations:
+                ul.append(safe_dom.Element('li').add_text(expl))
+            nl.append(ul)
+        return (title, nl)
 
 
 def get_criteria_editor_schema(course):
@@ -290,28 +327,29 @@ def get_criteria_editor_schema(course):
             ' [Peer Graded]' if course.needs_human_grader(unit) else '')))
 
     criterion_type.add_property(schema_fields.SchemaField(
-        'assessment_id', 'Requirement', 'string', optional=True,
+        'assessment_id', 'Requirement', 'string',
         # The JS will only reveal the following description
         # for peer-graded assessments
         description='When specifying a peer graded assessment as criterion, '
             'the student should complete both the assessment '
             'and the minimum of peer reviews.',
-        select_data=select_data,
         extra_schema_dict_values={
-            'className': 'inputEx-Field assessment-dropdown'}))
+            'className': 'inputEx-Field assessment-dropdown'
+        }, i18n=False, optional=True, select_data=select_data))
 
     criterion_type.add_property(schema_fields.SchemaField(
-        'pass_percent', 'Passing Percentage', 'string', optional=True,
+        'pass_percent', 'Passing Percentage', 'string',
         extra_schema_dict_values={
-            'className': 'pass-percent'}))
+            'className': 'pass-percent'
+        }, i18n=False, optional=True))
 
     select_data = [('', '-- Select criterion method--')] + [(
         x, x) for x in custom_criteria.registration_table]
     criterion_type.add_property(schema_fields.SchemaField(
-        'custom_criteria', 'Custom Criterion', 'string', optional=True,
-        select_data=select_data,
+        'custom_criteria', 'Custom Criterion', 'string',
         extra_schema_dict_values={
-            'className': 'custom-criteria'}))
+            'className': 'custom-criteria'
+        }, i18n=False, optional=True, select_data=select_data))
 
     is_peer_assessment_table = {}
     for unit in course.get_assessment_list():
@@ -319,17 +357,17 @@ def get_criteria_editor_schema(course):
             True if course.needs_human_grader(unit) else False)
 
     return schema_fields.FieldArray(
-        'certificate_criteria', 'Certificate criteria',
+        'certificate_criteria', 'Certificate Criteria',
         item_type=criterion_type,
-        description='Certificate award criteria. Add the criteria which '
-            'students must meet to be awarded a certificate of completion. '
-            'In order to receive a certificate, '
-            'the student must meet all the criteria.',
+        description=services.help_urls.make_learn_more_message(
+            messages.CERTIFICATE_CRITERIA_DESCRIPTION,
+            'certificate:certificate_criteria'),
         extra_schema_dict_values={
             'is_peer_assessment_table': is_peer_assessment_table,
             'className': 'settings-list',
             'listAddLabel': 'Add a criterion',
-            'listRemoveLabel': 'Delete criterion'})
+            'listRemoveLabel': 'Delete criterion'},
+        optional=True)
 
 
 TOTAL_CERTIFICATES = 'total_certificates'
@@ -415,11 +453,13 @@ class CertificatesEarnedDataSource(data_sources.SynchronousQuery):
 def register_analytic():
     data_sources.Registry.register(CertificatesEarnedDataSource)
     name = 'certificates_earned'
-    title = 'Certificates Earned'
+    title = 'Certificates'
     certificates_earned = analytics.Visualization(
         name, title, 'certificates_earned.html',
         data_source_classes=[CertificatesEarnedDataSource])
-    tabs.Registry.register('analytics', name, title, [certificates_earned])
+    dashboard.DashboardHandler.add_sub_nav_mapping(
+        'analytics', name, title, action='analytics_certificates_earned',
+        contents=analytics.TabRenderer([certificates_earned]))
 
 
 class CertificateAggregator(
@@ -455,6 +495,21 @@ class CertificateAggregator(
           'generated.')
 
 
+def _post_update_progress(course, student, progress_, event_entity, event_key):
+    """Called back when student has progress event recorded."""
+
+    if student_is_qualified(student, course):
+        item = news.NewsItem(RESOURCE_KEY, CERTIFICATE_HANDLER_PATH)
+        news.StudentNewsDao.add_news_item(item, overwrite_existing=False)
+
+
+def _get_i18n_news_title(_unused_key):
+    app_context = sites.get_app_context_for_current_request()
+    # I18N: Shown in list of news item titles (short descriptions)
+    # when student has earned a course completion certificate.
+    return app_context.gettext('Course completion certificate earned!')
+
+
 custom_module = None
 
 
@@ -463,36 +518,24 @@ def register_module():
 
     def on_module_enabled():
         register_analytic()
-        course_settings.CourseSettingsRESTHandler.REQUIRED_MODULES.append(
-            'inputex-list')
-        courses.Course.OPTIONS_SCHEMA_PROVIDERS[
-            courses.Course.SCHEMA_SECTION_COURSE].append(
-                get_criteria_editor_schema)
-        course_settings.CourseSettingsHandler.ADDITIONAL_DIRS.append(
+        courses.Course.OPTIONS_SCHEMA_PROVIDERS[MODULE_NAME].append(
+            get_criteria_editor_schema)
+        courses.Course.OPTIONS_SCHEMA_PROVIDER_TITLES[
+            MODULE_NAME] = MODULE_TITLE
+        settings.CourseSettingsHandler.register_settings_section(MODULE_NAME)
+        settings.CourseSettingsHandler.ADDITIONAL_DIRS.append(
             os.path.dirname(__file__))
-        course_settings.CourseSettingsHandler.EXTRA_CSS_FILES.append(
+        settings.CourseSettingsHandler.EXTRA_CSS_FILES.append(
             'course_settings.css')
-        course_settings.CourseSettingsHandler.EXTRA_JS_FILES.append(
+        settings.CourseSettingsHandler.EXTRA_JS_FILES.append(
             'course_settings.js')
         utils.StudentProfileHandler.EXTRA_STUDENT_DATA_PROVIDERS.append(
             get_certificate_table_entry)
         student_aggregate.StudentAggregateComponentRegistry.register_component(
             CertificateAggregator)
-
-    def on_module_disabled():
-        course_settings.CourseSettingsRESTHandler.REQUIRED_MODULES.remove(
-            'inputex-list')
-        courses.Course.OPTIONS_SCHEMA_PROVIDERS[
-            courses.Course.SCHEMA_SECTION_COURSE].remove(
-                get_criteria_editor_schema)
-        course_settings.CourseSettingsHandler.ADDITIONAL_DIRS.remove(
-            os.path.dirname(__file__))
-        course_settings.CourseSettingsHandler.EXTRA_CSS_FILES.remove(
-            'course_settings.css')
-        course_settings.CourseSettingsHandler.EXTRA_JS_FILES.remove(
-            'course_settings.js')
-        utils.StudentProfileHandler.EXTRA_STUDENT_DATA_PROVIDERS.remove(
-            get_certificate_table_entry)
+        progress.UnitLessonCompletionTracker.POST_UPDATE_PROGRESS_HOOK.append(
+            _post_update_progress)
+        news.I18nTitleRegistry.register(RESOURCE_TYPE, _get_i18n_news_title)
 
     global_routes = [
         (os.path.join(RESOURCES_PATH, '.*'), tags.ResourcesHandler)]
@@ -503,9 +546,8 @@ def register_module():
 
     global custom_module  # pylint: disable=global-statement
     custom_module = custom_modules.Module(
-        'Show Certificate',
+        MODULE_TITLE,
         'A page to show student certificate.',
         global_routes, namespaced_routes,
-        notify_module_disabled=on_module_disabled,
         notify_module_enabled=on_module_enabled)
     return custom_module

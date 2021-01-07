@@ -1,0 +1,10 @@
+registration:
+  main_module: modules.local_chapter.register
+
+files:
+  - modules/local_chapter/__init__.py
+  - modules/local_chapter/base.py
+  - modules/local_chapter/local_chapter.py
+  - modules/local_chapter/local_chapter_model.py
+  - modules/local_chapter/manifest.yaml
+  - modules/local_chapter/register.py

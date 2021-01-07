@@ -16,7 +16,6 @@
 
 __author__ = 'Rishav Thakker (rthakker@google.com)'
 
-import urllib
 import cgi
 import logging
 
@@ -27,30 +26,38 @@ from controllers.utils import BaseRESTHandler
 from controllers.utils import XsrfTokenManager
 from models import roles
 from models import transforms
+from modules.admin import admin_handler
 from modules.oeditor import oeditor
 from modules.google_service_account import base
 from modules.google_service_account import google_service_account
 from modules.google_service_account import service_account_models
 
 
-class GoogleServiceAccountBaseAdminHandler(base.GoogleServiceAccountBase):
+class GoogleServiceAccountBaseAdminHandler(
+        admin_handler.AbstractGlobalAdminCustomAction):
 
+    ACTION = base.GoogleServiceAccountBase.DASHBOARD_SHOW_LIST_ACTION
+    URL = None
     TABLE_HEADING_LIST = [
         'credential_type',
         'client_email',
         'sub_user_email',
         'scope'
     ]
+    REGISTER_GET_ACTION = True
 
     @classmethod
-    def get_google_service_account(cls, handler):
+    def get(cls, handler):
         """Displays list of service account settings."""
+
+        if not super(GoogleServiceAccountBaseAdminHandler, cls).get(handler):
+            return
 
         if roles.Roles.is_super_admin():
             # ?tab= for v1.9, ?action= for v1.8
-            exit_url = '%s?tab=google_service_account' % handler.LINK_URL
+            exit_url = '%s?action=google_service_account' % handler.LINK_URL
         else:
-            exit_url = cls.request.referer
+            exit_url = handler.request.referer
         rest_url = GoogleServiceAccountRESTHandler.URI
 
         template_values = {}
@@ -92,9 +99,6 @@ class GoogleServiceAccountBaseAdminHandler(base.GoogleServiceAccountBase):
             table_heading.add_child(
                 safe_dom.Element('th').add_text(attr))
 
-        # table_heading.add_child(
-        #     safe_dom.Element('th').add_text('Edit Link'))
-
         table.add_child(table_heading)
 
         all_settings = (
@@ -116,14 +120,6 @@ class GoogleServiceAccountBaseAdminHandler(base.GoogleServiceAccountBase):
                     getattr(entity, attr)
                 ))
 
-            # href = '%s?%s' % (handler.LINK_URL, urllib.urlencode(args))
-            # link = safe_dom.Element(
-            #     'a', href=href, type='button', className='gcb-button'
-            # ).add_text('Edit')
-            # edit_td = safe_dom.Element('td')
-            # edit_td.add_child(link)
-            # tr.add_child(edit_td)
-
 
         content.append(
             safe_dom.Element('p').add_text('Total: %d' % len(all_settings))
@@ -131,16 +127,25 @@ class GoogleServiceAccountBaseAdminHandler(base.GoogleServiceAccountBase):
         template_values['main_content'] = content
         handler.render_page(template_values)
 
+class EditGoogleServiceAccountAdminHandler(
+        admin_handler.AbstractGlobalAdminCustomAction):
+
+    ACTION = base.GoogleServiceAccountBase.DASHBOARD_EDIT_SERVICE_ACCOUNT_ACTION
+    REGISTER_GET_ACTION = True
+
     @classmethod
-    def get_edit_google_service_account(cls, handler):
+    def get(cls, handler):
         """
         Handles 'get_add_google_service_account_settings' action and renders
         new course entry editor.
         """
 
+        if not super(EditGoogleServiceAccountAdminHandler, cls).get(handler):
+            return
+
         if roles.Roles.is_super_admin():
             # ?tab= for v1.9, ?action= for v1.8
-            exit_url = '%s?tab=google_service_account' % handler.LINK_URL
+            exit_url = '%s?action=google_service_account' % handler.LINK_URL
         else:
             exit_url = cls.request.referer
         key = handler.request.get('key')
@@ -159,7 +164,7 @@ class GoogleServiceAccountBaseAdminHandler(base.GoogleServiceAccountBase):
         template_values['page_title'] = handler.format_title(
             'Add Google Service Account')
         template_values['main_content'] = oeditor.ObjectEditor.get_html_for(
-            cls, GoogleServiceAccountRESTHandler.SCHEMA_JSON,
+            handler, GoogleServiceAccountRESTHandler.SCHEMA_JSON,
             GoogleServiceAccountRESTHandler.ANNOTATIONS_DICT,
             key, rest_url, exit_url,
             extra_args=extra_args,
@@ -169,75 +174,76 @@ class GoogleServiceAccountBaseAdminHandler(base.GoogleServiceAccountBase):
             logging.error('Main content could not be loaded')
         handler.render_page(template_values)
 
-    @classmethod
-    def create_service_account_registry(cls):
-        """Create the registry for course properties."""
 
-        reg = FieldRegistry(
-            'Google Service Account',
-            description='Google Service Accounts',
-            extra_schema_dict_values={
-                'className': 'inputEx-Group new-form-layout'})
-        reg.add_property(SchemaField(
-            'id', 'ID', 'string', editable=False))
+def create_service_account_registry():
+    """Create the registry for course properties."""
 
-        credential_type_tuple_list = (
-            service_account_models.
-            GoogleServiceAccountTypes.
-            to_dict().
-            iteritems())
+    reg = FieldRegistry(
+        'Google Service Account',
+        description='Google Service Accounts',
+        extra_schema_dict_values={
+            'className': 'inputEx-Group new-form-layout'})
+    reg.add_property(SchemaField(
+        'id', 'ID', 'string', editable=False))
 
-        select_data = []
-        for a, b in credential_type_tuple_list:
-            select_data.append((b, a))
+    credential_type_tuple_list = (
+        service_account_models.
+        GoogleServiceAccountTypes.
+        to_dict().
+        iteritems())
 
-        # Making select_data read only for now since it will get auto populated
-        # depending on which one of the three links to add/edit the user
-        # clicks on. This will avoid overriding wrong data by mistake.
-        reg.add_property(
-            SchemaField(
-                'credential_type', 'Credential Type', 'string',
-                select_data=select_data, editable=False))
-        reg.add_property(SchemaField(
-            'client_email', 'Client Email', 'string', description='Email ID '
-            'of the account with which to use this credential'))
-        reg.add_property(SchemaField(
-            'sub_user_email', 'Sub User Email', 'string', optional=True,
-            description='Optional for service account'))
-        reg.add_property(SchemaField(
-            'scope', 'Scopes', 'list', description='List of scopes you want '
-            'to use with this credential'))
-        reg.add_property(SchemaField(
-            'client_id', 'Client ID', 'string', optional=True,
-            description='Required for Oauth2 Client ID'))
-        reg.add_property(SchemaField(
-            'api_key', 'API Key', 'string', optional=True,
-            description='Required for type API KEY, optional for '
-            'service account'))
-        reg.add_property(SchemaField(
-            'project_id', 'Project ID', 'string', optional=True,
-            description='Optional for service account'))
-        reg.add_property(SchemaField(
-            'project_key_id', 'Project ID Key', 'string', optional=True,
-            description='Optional for service account'))
-        reg.add_property(SchemaField(
-            'private_key', 'Private Key', 'text', optional=True,
-            description='Required for service account'))
-        reg.add_property(SchemaField(
-            'auth_uri', 'auth_uri', 'string', optional=True,
-            description='Optional for service account'))
-        reg.add_property(SchemaField(
-            'token_uri', 'token_uri', 'string', optional=True,
-            description='Optional for service account'))
-        reg.add_property(SchemaField(
-            'auth_provider_x509_cert_url', 'auth_provider_x509_cert_url',
-            'string', optional=True,
-            description='Optional for service account'))
-        reg.add_property(SchemaField(
-            'client_x509_cert_url', 'client_x509_cert_url', 'string',
-            optional=True, description='Optional for service account'))
+    select_data = []
+    for a, b in credential_type_tuple_list:
+        select_data.append((b, a))
 
-        return reg
+    # Making select_data read only for now since it will get auto populated
+    # depending on which one of the three links to add/edit the user
+    # clicks on. This will avoid overriding wrong data by mistake.
+    reg.add_property(
+        SchemaField(
+            'credential_type', 'Credential Type', 'string',
+            select_data=select_data, editable=False))
+    reg.add_property(SchemaField(
+        'client_email', 'Client Email', 'string', description='Email ID '
+        'of the account with which to use this credential'))
+    reg.add_property(SchemaField(
+        'sub_user_email', 'Sub User Email', 'string', optional=True,
+        description='Optional for service account'))
+    reg.add_property(SchemaField(
+        'scope', 'Scopes', 'list', description='List of scopes you want '
+        'to use with this credential'))
+    reg.add_property(SchemaField(
+        'client_id', 'Client ID', 'string', optional=True,
+        description='Required for Oauth2 Client ID'))
+    reg.add_property(SchemaField(
+        'api_key', 'API Key', 'string', optional=True,
+        description='Required for type API KEY, optional for '
+        'service account'))
+    reg.add_property(SchemaField(
+        'project_id', 'Project ID', 'string', optional=True,
+        description='Optional for service account'))
+    reg.add_property(SchemaField(
+        'project_key_id', 'Project ID Key', 'string', optional=True,
+        description='Optional for service account'))
+    reg.add_property(SchemaField(
+        'private_key', 'Private Key', 'text', optional=True,
+        description='Required for service account'))
+    reg.add_property(SchemaField(
+        'auth_uri', 'auth_uri', 'string', optional=True,
+        description='Optional for service account'))
+    reg.add_property(SchemaField(
+        'token_uri', 'token_uri', 'string', optional=True,
+        description='Optional for service account'))
+    reg.add_property(SchemaField(
+        'auth_provider_x509_cert_url', 'auth_provider_x509_cert_url',
+        'string', optional=True,
+        description='Optional for service account'))
+    reg.add_property(SchemaField(
+        'client_x509_cert_url', 'client_x509_cert_url', 'string',
+        optional=True, description='Optional for service account'))
+
+    return reg
+
 
 class GoogleServiceAccountRESTHandler(BaseRESTHandler):
     """Provides REST API to Google Service Account."""
@@ -246,10 +252,8 @@ class GoogleServiceAccountRESTHandler(BaseRESTHandler):
     DESCRIPTION = 'Update Google Service Account'
     REQUIRED_MODULES = [
         'gcb-rte', 'inputex-string', 'inputex-textarea']
-    SCHEMA_JSON = (GoogleServiceAccountBaseAdminHandler.
-                   create_service_account_registry().get_json_schema())
-    ANNOTATIONS_DICT = (GoogleServiceAccountBaseAdminHandler.
-                        create_service_account_registry().get_schema_dict())
+    SCHEMA_JSON = create_service_account_registry().get_json_schema()
+    ANNOTATIONS_DICT = create_service_account_registry().get_schema_dict()
 
     @classmethod
     def get_schema_annotations_dict(cls):
@@ -257,8 +261,7 @@ class GoogleServiceAccountRESTHandler(BaseRESTHandler):
 
     @classmethod
     def registration(cls):
-        return (GoogleServiceAccountBaseAdminHandler.
-                create_service_account_registry())
+        return create_service_account_registry()
 
     @classmethod
     def get_schema_dict(cls):

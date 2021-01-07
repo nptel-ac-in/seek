@@ -1,26 +1,17 @@
-/**
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 $(function() {
-  // Hide the OEditor widget which just lists the skill id's in a list in text
-  // inputs, and replace it with the skill widget div.
+  // Create a new skill editor widget and move the div.skill-panel (and thus
+  // the description it contains) to just after the buttons in that new widget.
   var skillPanelDiv = $('div.skill-panel');
   var skillEditorForOeditor = new SkillEditorForOeditor(cb_global);
-  skillPanelDiv.hide();
-  skillPanelDiv.after(skillEditorForOeditor.element());
+
+  // Insert the skill editor widget into the parent of the skill panel,
+  // just before the current location of the skill panel.
+  skillPanelDiv.before(skillEditorForOeditor.element());
+
+  // Re-parent the skill panel *inside* the new skill editor widget,
+  // just after the existing widget elements (skill display list, Add and
+  // Create buttons), so the description is last and properly left-aligns.
+  skillEditorForOeditor.element().append(skillPanelDiv);
 
   skillEditorForOeditor.init();
 });

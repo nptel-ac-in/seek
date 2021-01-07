@@ -1,0 +1,14 @@
+diff --git a/coursebuilder/test.py b/coursebuilder/main.py
+index a1a0c0684..53f688bd0 100644
+--- a/coursebuilder/test.py
++++ b/coursebuilder/test.py
+@@ -178,7 +178,8 @@ def ndb_wsgi_middleware(client, wsgi_app):
+         )
+     )
+     def middleware(environ, start_response):
+-        with client.context(global_cache=redis_cache):
++        # with client.context(global_cache=redis_cache):
++        with client.context():
+             return wsgi_app(environ, start_response)
+ 
+     return middleware

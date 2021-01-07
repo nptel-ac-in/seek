@@ -82,7 +82,7 @@ class OfflineAssignmentDashboardHandler(base.OfflineAssignmentBase):
             handler.render_page({
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': 'Bad Request: no "key" parameter provided'
-            }, in_action=cls.DASHBOARD_DEFAULT_ACTION, in_tab=cls.DASHBOARD_TAB)
+            }, in_action=cls.DASHBOARD_DEFAULT_ACTION)
             return
 
         course = handler.get_course()
@@ -91,7 +91,7 @@ class OfflineAssignmentDashboardHandler(base.OfflineAssignmentBase):
             handler.render_page({
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': 'Course not found'
-            }, in_action=cls.DASHBOARD_DEFAULT_ACTION, in_tab=cls.DASHBOARD_TAB)
+            }, in_action=cls.DASHBOARD_DEFAULT_ACTION)
             return
 
         unit = course.find_unit_by_id(key)
@@ -100,7 +100,7 @@ class OfflineAssignmentDashboardHandler(base.OfflineAssignmentBase):
             handler.render_page({
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': 'Offline Assignment not found'
-            }, in_action=cls.DASHBOARD_DEFAULT_ACTION, in_tab=cls.DASHBOARD_TAB)
+            }, in_action=cls.DASHBOARD_DEFAULT_ACTION)
             return
 
         students = models.Student.all().fetch(None)
@@ -120,7 +120,7 @@ class OfflineAssignmentDashboardHandler(base.OfflineAssignmentBase):
         template_value['scores'] = scores
         template_value['unit'] = unit
         template_value['back_url'] = handler.get_action_url(
-            cls.DASHBOARD_DEFAULT_ACTION)
+            cls.DASHBOARD_CATEGORY + '_' + cls.DASHBOARD_DEFAULT_ACTION)
         template_value['score_offline_assignment_url'] = (
             handler.get_action_url(cls.SCORE_OFFLINE_ASSIGNMENT_ACTION))
 
@@ -134,8 +134,7 @@ class OfflineAssignmentDashboardHandler(base.OfflineAssignmentBase):
             {
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': content},
-            in_action=cls.DASHBOARD_DEFAULT_ACTION,
-            in_tab=cls.DASHBOARD_TAB)
+            in_action=cls.DASHBOARD_DEFAULT_ACTION)
 
     @classmethod
     def get_bulk_score(cls, handler):
@@ -175,7 +174,7 @@ class OfflineAssignmentDashboardHandler(base.OfflineAssignmentBase):
         template_file = 'bulk_score_dashboard_view.html'
 
         template_value['back_url'] = handler.get_action_url(
-            cls.DASHBOARD_DEFAULT_ACTION)
+            cls.DASHBOARD_CATEGORY + '_' + cls.DASHBOARD_DEFAULT_ACTION)
         template_value['form_action'] = cls.SCORE_OFFLINE_ASSIGNMENT_ACTION
         template_value['bulk_score_xsrf_token'] = (
             handler.create_xsrf_token(cls.SCORE_OFFLINE_ASSIGNMENT_ACTION))
@@ -189,8 +188,7 @@ class OfflineAssignmentDashboardHandler(base.OfflineAssignmentBase):
             {
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': content},
-            in_action=cls.DASHBOARD_DEFAULT_ACTION,
-            in_tab=cls.DASHBOARD_TAB)
+            in_action=cls.DASHBOARD_DEFAULT_ACTION)
 
     @classmethod
     def post_bulk_score(cls, handler):
@@ -221,7 +219,7 @@ class OfflineAssignmentDashboardHandler(base.OfflineAssignmentBase):
             handler.render_page({
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': 'Bad Request: no data provided'
-            }, in_action=cls.DASHBOARD_DEFAULT_ACTION, in_tab=cls.DASHBOARD_TAB)
+            }, in_action=cls.DASHBOARD_DEFAULT_ACTION)
             return
 
         errors = []
@@ -237,7 +235,7 @@ class OfflineAssignmentDashboardHandler(base.OfflineAssignmentBase):
         template_value = dict()
         template_value['errors'] = errors
         template_value['back_url'] = handler.get_action_url(
-            cls.DASHBOARD_DEFAULT_ACTION)
+            cls.DASHBOARD_CATEGORY + '_' + cls.DASHBOARD_DEFAULT_ACTION)
         content = jinja2.utils.Markup(
             handler.get_template(
                 template_file, [os.path.dirname(__file__) + '/templates']
@@ -247,5 +245,4 @@ class OfflineAssignmentDashboardHandler(base.OfflineAssignmentBase):
             {
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': content},
-            in_action=cls.DASHBOARD_DEFAULT_ACTION,
-            in_tab=cls.DASHBOARD_TAB)
+            in_action=cls.DASHBOARD_DEFAULT_ACTION)

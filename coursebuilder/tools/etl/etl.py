@@ -18,23 +18,22 @@ There are four features:
 
 1. Download and upload of Course Builder 1.3+ data:
 
-$ python etl.py download course /cs101 myapp server.appspot.com archive.zip
+$ python etl.py download course /cs101 server.appspot.com archive.zip
 
 This will result in a file called archive.zip that contains the files that make
-up the Course Builder 1.3+ course found at the URL /cs101 on the application
-with id myapp running on the server named server.appspot.com. archive.zip will
-contain assets and data files from the course along with a manifest.json
-enumerating them. The format of archive.zip will change and should not be relied
-upon.
+up the Course Builder 1.3+ course found at the URL /cs101 on the deployment
+running on the server named server.appspot.com. archive.zip will contain assets
+and data files from the course along with a manifest.json enumerating them. The
+format of archive.zip will change and should not be relied upon.
 
 For upload of course and related data
 
-$ python etl.py upload course /cs101 myapp server.appspot.com \
+$ python etl.py upload course /cs101 server.appspot.com \
     --archive_path archive.zip
 
 2. Download of datastore entities. This feature is experimental.
 
-$ python etl.py download datastore /cs101 myapp server.appspot.com \
+$ python etl.py download datastore /cs101 server.appspot.com \
     --archive_path archive.zip --datastore_types model1,model2
 
 This will result in a file called archive.zip that contains a dump of all model1
@@ -48,7 +47,7 @@ respectively.
 
 3. Upload of datastore entities.  This feature is experimental.
 
-$ python etl.py upload datastore /cs101 myapp server.apppot.com \
+$ python etl.py upload datastore /cs101 server.apppot.com \
     --archive_path archive.zip
 
 Uploads should ideally be (but are not required to be) done to courses that
@@ -92,12 +91,12 @@ before uploading to a production installation:
 ./scripts/etl.sh --force_overwrite --batch_size=100 --resume \
   --exclude_types=RootUsageEntity,KeyValueEntity,DefinitionEntity,UsageEntity \
   --archive_path my_archive_file.zip \
-  upload datastore /new_course mycourse localhost:8081
+  upload datastore /new_course localhost
 
 4. Deletion of all datastore entities in a single course. Delete of the course
    itself not supported. To run:
 
-$ python etl.py delete datastore /cs101 myapp server.appspot.com
+$ python etl.py delete datastore /cs101 server.appspot.com
 
 Before delete commences, you will be told what entity kinds will be deleted and
 you will be prompted for confirmation. Note that this process is irreversible,
@@ -115,7 +114,7 @@ flush all operations, all caches for all courses will be flushed.
 
 5. Execution of custom jobs.
 
-$ python etl.py run path.to.my.Job /cs101 myapp server.appspot.com \
+$ python etl.py run path.to.my.Job /cs101 server.appspot.com \
     --job_args='more_args --delegated_to my.Job'
 
 This requires that you have written a custom class named Job found in the
@@ -135,23 +134,21 @@ In order to run this script, you must add the following to the head of sys.path:
      webapp2
      webob
 
-     Their locations in the supported 1.9.17 App Engine SDK are
+     Their locations in the supported App Engine SDK are
 
      <sdk_path>/lib/fancy_urllib
      <sdk_path>/lib/jinja2-2.6
      <sdk_path>/lib/webapp2-2.5.2
      <sdk_path>/lib/webob-1.2.3
 
-     where <sdk_path> is the absolute path of the 1.9.17 App Engine SDK.
+     where <sdk_path> is the absolute path of the App Engine SDK installed by
+     scripts/common.sh.
   4. If you are running a custom job, the absolute paths of all code required
      by your custom job, unless covered above.
 
-When running etl.py against a remote endpoint you will be prompted for a
-username and password. If the remote endpoint is a development server, you may
-enter any username and password. If the remote endpoint is in production, enter
-your username and an application-specific password. See
-http://support.google.com/accounts/bin/answer.py?hl=en&answer=185833 for help on
-application-specific passwords.
+When running etl.py against a remote endpoint, you must authenticate via OAuth2.
+If you have not authenticated, you will get an error with instructions on how to
+authenticate.
 
 Pass --help for additional usage information.
 """
@@ -181,6 +178,7 @@ common_utils = None
 config = None
 courses = None
 crypto = None
+datastore_types = None
 db = None
 entity_transforms = None
 etl_lib = None
@@ -202,17 +200,24 @@ _COURSE_JSON_PATH_SUFFIX = 'data/course.json'
 _COURSE_YAML_PATH_SUFFIX = 'course.yaml'
 # String. Message the user must type to confirm datastore deletion.
 _DELETE_DATASTORE_CONFIRMATION_INPUT = 'YES, DELETE'
+# Default value of --port passed to the dev appserver. Keep this in sync
+# with the value in scripts/parse_start_args.sh's CB_PORT.
+_DEV_APPSERVER_DEFAULT_PORT = 8081
 # List of types which are not to be downloaded.  These are types which
 # are either known to be transient, disposable state classes (e.g.,
 # map/reduce's "_AE_... classes), or legacy types no longer required.
 _EXCLUDE_TYPES = set([
     # Map/reduce internal types:
+    '_AE_Barrier_Index',
     '_AE_MR_MapreduceState',
+    '_AE_MR_OutputFile',
     '_AE_MR_ShardState',
+    '_AE_MR_TaskPayload',
     '_AE_Pipeline_Barrier',
     '_AE_Pipeline_Record',
     '_AE_Pipeline_Slot',
     '_AE_Pipeline_Status',
+    '_AE_TokenStorage_',
     # AppEngine internal background jobs queue
     '_DeferredTaskEntity',
     ])
@@ -223,10 +228,10 @@ _INTERNAL_DATASTORE_KIND_REGEX = re.compile(r'^__.*__$')
 # Names of fields in row which should be ignored when importing datastore.
 _KEY_FIELDS = set(['key.id', 'key.name', 'key'])
 # Path prefix strings from local disk that will be included in the archive.
-_LOCAL_ALLOWLIST = frozenset([_COURSE_YAML_PATH_SUFFIX, 'assets', 'data'])
-# Path prefix strings that are subdirectories of the allowlist that we actually
+_LOCAL_WHITELIST = frozenset([_COURSE_YAML_PATH_SUFFIX, 'assets', 'data'])
+# Path prefix strings that are subdirectories of the whitelist that we actually
 # want to exclude because they aren't userland code and will cause conflicts.
-_LOCAL_ALLOWLIST_EXCLUDES = frozenset(['assets/lib'])
+_LOCAL_WHITELIST_EXCLUDES = frozenset(['assets/lib'])
 # logging.Logger. Module logger.
 _LOG = logging.getLogger('coursebuilder.tools.etl')
 logging.basicConfig()
@@ -288,9 +293,6 @@ def create_args_parser():
             "URL prefix of the course you want to download (e.g. '/foo' in "
             "'course:/foo:/directory:namespace'"), type=str)
     parser.add_argument(
-        'application_id',
-        help="The id of the application to read from (e.g. 'myapp')", type=str)
-    parser.add_argument(
         'server',
         help=(
             'The full name of the source application to read from (e.g. '
@@ -331,15 +333,20 @@ def create_args_parser():
             'on the target system that are also present in the archive. Note '
             'that this operation is dangerous and may result in data loss.'))
     parser.add_argument(
+        '--port', default=_DEV_APPSERVER_DEFAULT_PORT,
+        help=(
+            'If running against localhost, this is the port remote API '
+            'requests are sent to. Default is %s. Ignored if running against '
+            'non-localhost deployments. Must be the value passed to '
+            'dev_appserver.py via --port.' % (_DEV_APPSERVER_DEFAULT_PORT)))
+    parser.add_argument(
         '--resume', action='store_true',
         help=(
-            'On upload, setting this flag indicates that you are starting or '
-            'resuming an upload.  Only use this flag when you are uploading '
-            'to a course that had no data prior to starting this upload.  This '
-            'flag assumes that the only data present is that provided by the '
-            'upload.  This permits significant time savings if an upload is '
-            'interrupted or otherwise needs to be performed in multiple '
-            'stages.'))
+            'Setting this flag indicates that you are starting or resuming '
+            'an upload or download.  If uploading, only use this flag when you '
+            'are uploading to a course that had no prior data, or conflicts '
+            'may occur.  When downloading, don\'t change the set of types '
+            'being downloaded when re-trying after a partial failure.  '))
     parser.add_argument(
         '--job_args', default=[],
         help=(
@@ -449,6 +456,12 @@ class _AbstractArchive(object):
         """
         self._path = path
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exception_type, exception_value, exception_traceback):
+        pass
+
     @classmethod
     def get_external_path(cls, internal_path, prefix=_ARCHIVE_PATH_PREFIX):
         """Gets external path string from results of cls.get_internal_path."""
@@ -520,11 +533,16 @@ class _AbstractArchive(object):
     @property
     def manifest(self):
         """Returns the archive's manifest."""
-        return _Manifest.from_json(self.get(_MANIFEST_FILENAME))
+        content = self.get(_MANIFEST_FILENAME)
+        return _Manifest.from_json(content) if content else None
 
     @property
     def path(self):
         return self._path
+
+    def listdir(self, path):
+        """Returns a list of names in a directory, excluding . and .."""
+        raise NotImplementedError()
 
 
 class _ZipArchive(_AbstractArchive):
@@ -532,6 +550,10 @@ class _ZipArchive(_AbstractArchive):
     def __init__(self, path):
         super(_ZipArchive, self).__init__(path)
         self._zipfile = None
+
+    def __exit__(self, exception_type, exception_value, exception_traceback):
+        if self._zipfile:
+            self.close()
 
     def add(self, filename, contents):
         """Adds contents to the archive.
@@ -578,6 +600,17 @@ class _ZipArchive(_AbstractArchive):
         assert not self._zipfile
         self._zipfile = zipfile.ZipFile(self._path, mode, allowZip64=True)
 
+    def listdir(self, path):
+        ret = []
+        names = self._zipfile.namelist()
+        for name in names:
+            if name.startswith(path):
+                name = name.replace(path, '', 1)
+                name = name.lstrip('/')
+                name = name.split('/')[0]
+                ret.append(name)
+        return ret
+
 
 class _DirectoryArchive(_AbstractArchive):
 
@@ -599,7 +632,10 @@ class _DirectoryArchive(_AbstractArchive):
         pass
 
     def get(self, filename):
-        with open(os.path.join(self.path, filename), 'rb') as fp:
+        path = os.path.join(self.path, filename)
+        if not os.path.exists(path):
+            return None
+        with open(path, 'rb') as fp:
             return fp.read()
 
     def open(self, mode):
@@ -608,6 +644,11 @@ class _DirectoryArchive(_AbstractArchive):
                 os.makedirs(self.path)
         elif not os.path.isdir(self.path):
             raise ValueError('"%s" is not a directory.' % self.path)
+
+    def listdir(self, path):
+        path = os.path.join(self.path, path)
+        return os.listdir(path) if os.path.exists(path) else []
+
 
 
 class _Manifest(object):
@@ -758,23 +799,44 @@ def _download(params):
     archive_path = os.path.abspath(params.archive_path)
     context = _get_context_or_die(params.course_url_prefix)
     course = etl_lib.get_course(context)
-    with common_utils.Namespace(context.get_namespace_name()):
-        if params.type == _TYPE_COURSE:
-            _download_course(context, course, archive_path, params)
-        elif params.type == _TYPE_DATASTORE:
-            _download_datastore(context, course, archive_path, params)
+    archive, already_done_names, manifest = _open_archive_for_write(
+        context, course, archive_path, params)
+    with archive:
+        with common_utils.Namespace(context.get_namespace_name()):
+            if params.type == _TYPE_COURSE:
+                _download_course(context, course, params, archive,
+                                 already_done_names, manifest)
+            elif params.type == _TYPE_DATASTORE:
+                _download_datastore(context, course, params, archive,
+                                    already_done_names, manifest)
+    _LOG.info('Done; archive saved to ' + archive.path)
 
 
-def _download_course(context, course, archive_path, params):
+def _open_archive_for_write(context, course, archive_path, params):
+    archive = _init_archive(
+        archive_path, vars(params).get('archive_type', ARCHIVE_TYPE_ZIP))
+    already_done_names = set()
+    manifest = None
+    if params.resume:
+        archive.open('a')
+        model_names = archive.listdir('models')
+        already_done_names.update([n.replace('.json', '') for n in model_names])
+        manifest = archive.manifest
+    else:
+        archive.open('w')
+
+    if not manifest:
+        manifest = _Manifest(context.raw, course.version)
+    return archive, already_done_names, manifest
+
+
+def _download_course(context, course, params, archive, already_done_names,
+                     manifest):
     """Downloads course content."""
     if course.version < courses.COURSE_MODEL_VERSION_1_3:
         _die(
             'Cannot export course made with Course Builder version < %s' % (
                 courses.COURSE_MODEL_VERSION_1_3))
-    archive = _init_archive(archive_path,
-                            vars(params).get('archive_type', ARCHIVE_TYPE_ZIP))
-    archive.open('w')
-    manifest = _Manifest(context.raw, course.version)
 
     _LOG.info('Processing course with URL prefix ' + params.course_url_prefix)
     datastore_files = set(_list_all(context))
@@ -815,15 +877,12 @@ def _download_course(context, course, archive_path, params):
     _LOG.info('Adding dependencies from datastore')
     all_entities = list(courses.COURSE_CONTENT_ENTITIES) + list(
         courses.ADDITIONAL_ENTITIES_FOR_COURSE_IMPORT)
-    for found_type in all_entities:
-        _download_type(
-            archive, manifest, found_type.__name__, params.batch_size,
-            _IDENTITY_TRANSFORM)
+    type_names = set([entity.__name__ for entity in all_entities])
+    _download_types(archive, manifest, type_names, already_done_names,
+                    params.batch_size, _IDENTITY_TRANSFORM)
 
-    _finalize_download(archive, manifest)
-
-
-def _download_datastore(context, course, archive_path, params):
+def _download_datastore(context, course, params, archive, already_done_types,
+                        manifest):
     """Downloads datastore content."""
     available_types = set(_get_datastore_kinds())
     type_names = params.datastore_types
@@ -841,16 +900,55 @@ def _download_datastore(context, course, archive_path, params):
     privacy_secret = _get_privacy_secret(params.privacy_secret)
     privacy_transform_fn = _get_privacy_transform_fn(
         params.privacy, privacy_secret)
+    found_types = (requested_types & available_types)
+    _download_types(archive, manifest, found_types, already_done_types,
+                    params.batch_size, privacy_transform_fn)
 
-    found_types = requested_types & available_types
-    archive = _init_archive(archive_path,
-                            vars(params).get('archive_type', ARCHIVE_TYPE_ZIP))
-    archive.open('w')
-    manifest = _Manifest(context.raw, course.version)
-    for found_type in found_types:
-        _download_type(archive, manifest, found_type, params.batch_size,
-                       privacy_transform_fn)
-    _finalize_download(archive, manifest)
+
+def _download_types(archive, manifest, type_names, already_done_names,
+                    batch_size, transform):
+    for type_name in type_names & already_done_names:
+        _LOG.info('Skipping already-downloaded type %s', type_name)
+    type_names -= already_done_names
+    _verify_downloadability(type_names)
+    _finalize_manifest(type_names, manifest, archive)
+    for type_name in sorted(type_names):
+        _download_type(archive, manifest, type_name, batch_size, transform)
+
+
+def _verify_downloadability(type_names):
+    problems = []
+    for type_name in type_names:
+        try:
+            cls = db.class_for_kind(type_name)
+            if not hasattr(cls, 'safe_key'):
+                problems.append(
+                    'Class %s has no safe_key method.  This probably means '
+                    'it is non-permanent (e.g., job control for map/reduce), '
+                    'or similar internal state.  Consider adding this type '
+                    'to the permanent exclusions list in tools/etl/etl.py. ' %
+                    type_name)
+        except Exception:  # pylint: disable=broad-except
+            problems.append(
+                'Could not locate the Python code for the type %s.' % type_name)
+
+        if problems:
+            for problem in problems:
+                logging.critical(problem)
+            _die('Remove these types from the --datastore_types list, '
+                 'or add them to the --exclude_types list.')
+
+
+def _finalize_manifest(type_names, manifest, archive):
+    if archive.manifest:
+        return  # We are resuming; manifest has already been written.
+
+    for type_name in type_names:
+        json_name = type_name + '.json'
+        internal_path = _AbstractArchive.get_internal_path(
+            json_name, prefix=_ARCHIVE_PATH_PREFIX_MODELS)
+        manifest.add(_ManifestEntity(internal_path, False))
+    archive.add(_MANIFEST_FILENAME, str(manifest))
 
 
 def _download_type(
@@ -876,7 +974,6 @@ def _download_type(
 
     _LOG.info('Adding %s to archive', internal_path)
     archive.add_local_file(json_file.name, internal_path)
-    manifest.add(_ManifestEntity(internal_path, False))
 
     _LOG.info('Removing temporary file ' + json_file.name)
     os.remove(json_file.name)
@@ -899,18 +996,11 @@ def _filter_filesystem_files(files):
     for path in files:
         relative_name = _remove_bundle_root(path)
         not_in_excludes = not any(
-            [relative_name.startswith(e) for e in _LOCAL_ALLOWLIST_EXCLUDES])
+            [relative_name.startswith(e) for e in _LOCAL_WHITELIST_EXCLUDES])
         head_directory = relative_name.split(os.path.sep)[0]
-        if not_in_excludes and head_directory in _LOCAL_ALLOWLIST:
+        if not_in_excludes and head_directory in _LOCAL_WHITELIST:
             filtered_files.append(path)
     return filtered_files
-
-
-def _finalize_download(archive, manifest):
-    _LOG.info('Adding manifest')
-    archive.add(_MANIFEST_FILENAME, str(manifest))
-    archive.close()
-    _LOG.info('Done; archive saved to ' + archive.path)
 
 
 def _force_config_reload():
@@ -988,6 +1078,7 @@ def _import_modules_into_global_scope():
     # pylint: disable=redefined-outer-name,unused-variable
     global appengine_config
     global memcache
+    global datastore_types
     global db
     global entities
     global entity_transforms
@@ -1005,6 +1096,7 @@ def _import_modules_into_global_scope():
     try:
         import appengine_config
         from google.appengine.api import memcache
+        from google.appengine.api import datastore_types
         from google.appengine.ext import db
         from google.appengine.ext.db import metadata
         from common import crypto
@@ -1290,7 +1382,7 @@ def _get_classes_for_type_names(type_names):
     for type_name in type_names:
         # TODO(johncox): Add class-method to troublesome types so they can be
         # regenerated from serialized ETL data.
-        if type_name in ('Submission', 'Review'):
+        if type_name in ('Submission', 'Review', 'Notification', 'Payload'):
             any_problems = True
             _LOG.critical(
                 'Cannot upload entities of type "%s". '
@@ -1311,6 +1403,16 @@ def _get_classes_for_type_names(type_names):
                 'substantial incompatiblity in versions; some or all '
                 'functionality may be affected.  Use the --exclude_types '
                 'flag to skip entities of this type.', type_name)
+
+        for field_name, prop in entity_class.properties().iteritems():
+            if prop.data_type == datastore_types.Blob:
+                _LOG.critical(
+                    'Cannot upload entities of type %s, since the field '
+                    '"%s" is a Blob field; this is not currently supported.',
+                    type_name, field_name)
+                any_problems = True
+                break
+
     if any_problems:
         _die('Cannot proceed with upload in the face of these problems.')
     return entity_classes
@@ -1511,11 +1613,22 @@ def _get_entity_key(entity_class, entity):
 
 
 def _build_entity(entity_class, schema, entity, key):
-    new_instance = entity_class(key=key)
-    typed_dict = transforms.json_to_dict(
-        entity, schema, permit_none_values=True)
-    entity_transforms.dict_to_entity(new_instance, typed_dict)
-    return new_instance
+    kwargs = transforms.json_to_dict(entity, schema, permit_none_values=True)
+    current_properties = entity_class.properties()
+    for name in list(kwargs.keys()):
+        if name not in current_properties:
+            # Remove args for fields that used to be present (and were exported
+            # when those fields were current), but are no longer supported.
+            kwargs.pop(name)
+        elif (isinstance(current_properties[name], db.ReferenceProperty) and
+              isinstance(kwargs[name], basestring)):
+            # Reference args need to be passed in as actual reference keys,
+            # not stringified versions.
+            kwargs[name] = entity_transforms.string_to_key(kwargs[name])
+        # else:
+        #     All other field types in kwargs do not need conversion beyond
+        #     that already done by transforms.json_to_dict().
+    return entity_class(key=key, **kwargs)
 
 
 def _validate_arguments(parsed_args):
@@ -1527,7 +1640,8 @@ def _validate_arguments(parsed_args):
         _die('--batch_size must be a positive value')
     if (parsed_args.mode == _MODE_DOWNLOAD and
         os.path.exists(parsed_args.archive_path) and
-        not parsed_args.force_overwrite):
+        not parsed_args.force_overwrite and
+        not parsed_args.resume):
         _die(
             'Cannot download to archive path %s; file already exists' % (
                 parsed_args.archive_path))
@@ -1552,23 +1666,21 @@ def _validate_arguments(parsed_args):
         _die(
             '--privacy_secret supported only if mode is %s, type is %s, and '
             '--privacy is passed' % (_MODE_DOWNLOAD, _TYPE_DATASTORE))
-    if parsed_args.resume and parsed_args.mode != _MODE_UPLOAD:
+    if parsed_args.resume and parsed_args.mode not in (_MODE_UPLOAD,
+                                                       _MODE_DOWNLOAD):
         _die('--resume flag is only supported for uploading.')
 
 
 def _write_model_to_json_file(json_file, privacy_transform_fn, model):
     entity_dict = _get_entity_dict(model, privacy_transform_fn)
-    json_file.write(transforms.dict_to_json(entity_dict, None))
+    json_file.write(transforms.dict_to_json(entity_dict))
 
 
-def main(parsed_args, environment_class=None):
+def main(parsed_args, testing=False):
     """Performs the requested ETL operation.
 
     Args:
         parsed_args: argparse.Namespace. Parsed command-line arguments.
-        environment_class: None or remote.Environment. Environment setup class
-            used to configure the service stub map. Injectable for tests only;
-            defaults to remote.Environment if not specified.
     """
     _validate_arguments(parsed_args)
     _LOG.setLevel(parsed_args.log_level.upper())
@@ -1576,16 +1688,14 @@ def main(parsed_args, environment_class=None):
     _set_env_vars_from_app_yaml()
     _import_entity_modules()
 
-    if not environment_class:
-        environment_class = remote.Environment
+    environment = remote.Environment(
+        parsed_args.server, port=parsed_args.port, testing=testing)
     _LOG.info('Mode is %s', parsed_args.mode)
-    _LOG.info(
-        'Target is url %s from application_id %s on server %s',
-        parsed_args.course_url_prefix, parsed_args.application_id,
-        parsed_args.server)
+    _LOG.info('Target is: %s', environment.get_info())
+
     if not parsed_args.disable_remote:
-        environment_class(
-            parsed_args.application_id, parsed_args.server).establish()
+        environment.establish()
+
     _force_config_reload()
 
     if parsed_args.mode == _MODE_DELETE:

@@ -36,10 +36,13 @@ class OfflineAssignmentBase(object):
     DASHBOARD_NAV = 'offline_assignment'
     DASHBOARD_TAB = 'offline_assignment'
     DASHBOARD_DEFAULT_ACTION = 'offline_assignment'
+    DASHBOARD_CATEGORY = 'analytics'
 
     ADMIN_NAV = 'admin_offline_assignment'
     ADMIN_ACTION = 'admin_offline_assignment'
-    ADMIN_DESCRIPTION = 'Bulk Score Offline Assignments'
+    ADMIN_CATEGORY = 'analytics'
+    ADMIN_SUBGROUP = 'advanced'
+    ADMIN_NAME = ADMIN_DESCRIPTION = 'Bulk Score Offline Assignments'
 
     @classmethod
     def get_template(cls, template_name, dirs):

@@ -30,6 +30,7 @@ from common import utils as common_utils
 from controllers import sites
 from models import config
 from models import courses
+from models import roles
 from models import transforms
 
 from google.appengine.api import namespace_manager
@@ -44,7 +45,9 @@ _INSTALLATION_IDENTIFIER = config.ConfigProperty(
         'has no intrinsic meaning, and no relation to any data or '
         'course setting; it is just used to correlate the weekly '
         'reports from this installation.'),
-    'A random value will be picked when the first report is sent.')
+    default_value='A random value will be picked when the first report is '
+    'sent.', label='Usage report ID',
+    )
 
 # Name of the item in the course settings dictionary which contains the
 # randomly-generated identifier for the course.  (This name needs to be
@@ -119,9 +122,10 @@ class Sender(object):
     @classmethod
     def _emit_message(cls, message):
         """Emit message if allowed, not if not, or raise exception."""
+        if is_disabled():
+            return
         cls._refresh_report_settings()
-        if cls._report_settings[cls._REPORT_ENABLED] and not is_disabled():
-
+        if cls._report_settings[cls._REPORT_ENABLED]:
             try:
                 payload = urllib.urlencode(
                     {cls._report_settings[cls._REPORT_FORM_FIELD]: message})
@@ -170,6 +174,9 @@ class Message(object):
     _METRIC = 'metric'  # A name from the set below.
     _VALUE = 'value'  # Integer or boolean value.
     _SOURCE = 'source'  # String name of system component.
+    _COURSE_TITLE = 'course_title'  # Only sent for Google-run courses
+    _COURSE_SLUG = 'course_slug'  # Only sent for Google-run courses
+    _COURSE_NAMESPACE = 'course_namespace'  # Only sent for Google-run courses
 
     # Values to be used for the _SOURCE field
     ADMIN_SOURCE = 'ADMIN_SETTINGS'
@@ -196,7 +203,7 @@ class Message(object):
         """If not yet chosen, randomly select an identifier for this course."""
 
         all_settings = course.get_environ(course.app_context)
-        course_settings = all_settings[courses.Course.SCHEMA_SECTION_COURSE]
+        course_settings = all_settings['course']
         reporting_id = course_settings.get(USAGE_REPORTING_FIELD_ID)
         if not reporting_id or reporting_id == 'None':
             reporting_id = str(uuid.uuid4())
@@ -237,6 +244,30 @@ class Message(object):
                     namespace))
             course = courses.Course(None, app_context=app_context)
             message[cls._COURSE] = cls._get_random_course_id(course)
+            cls._maybe_add_google_produced_course_info(course, message)
+
+    @classmethod
+    def _maybe_add_google_produced_course_info(cls, course, message):
+
+        # If you would like your course to additionally report title,
+        # short-name, and namespace, you may remove lines below, up
+        # through and including the 'if' statement; simply leave the
+        # lines from "app_context = course.app_context" and below.
+        # This will also require fixing up the unit test named
+        # "test_course_message_with_google_admin" in
+        # tests/functional/modules_usage_reporting.py to always expect
+        # these extra data.
+        all_settings = course.get_environ(course.app_context)
+        course_settings = all_settings['course']
+        admin_email_str = course_settings.get(roles.KEY_ADMIN_USER_EMAILS)
+        addrs = common_utils.text_to_list(
+            admin_email_str,
+            common_utils.BACKWARD_COMPATIBLE_SPLITTER)
+        if addrs and all([addr.endswith('@google.com') for addr in addrs]):
+            app_context = course.app_context
+            message[cls._COURSE_TITLE] = app_context.get_title()
+            message[cls._COURSE_SLUG] = app_context.get_slug()
+            message[cls._COURSE_NAMESPACE] = app_context.get_namespace_name()
 
     @classmethod
     def _build_message(cls, metric, value, source, timestamp):

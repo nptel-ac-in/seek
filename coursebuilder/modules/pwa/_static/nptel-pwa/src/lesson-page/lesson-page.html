@@ -1,0 +1,150 @@
+
+<dom-module id="lesson-page">
+  <template>
+    <style include="nptel-pwa-css"></style>
+      <app-route
+          route="{{route}}"
+          pattern="/:id"
+          data="{{courseID}}"
+          tail="{{courseData}}"
+          >
+      </app-route>
+      <app-route
+          route="{{courseData}}"
+          pattern="/:id"
+          data="{{unitID}}"
+          tail="{{lessonData}}"
+          >
+      </app-route>
+      <app-route
+          route="{{lessonData}}"
+          pattern="/:id"
+          data="{{lessonID}}">
+      </app-route>
+          <paper-spinner-lite class="spinner" active alt="Loading content.."></paper-spinner-lite>
+          <dom-if>
+            <template>
+            <a href="[[forumURL]]"><paper-button class="footer" on-tap="loadForum">Ask A Question</paper-button></a>
+            </template>
+          </dom-if>
+        <google-youtube video-id="[[videoId]]">
+        </google-youtube>
+        <div class="matCard">
+          <div id="objectives">
+          </div>
+          <div id="displayContent">
+          </div>
+          <div id="extraContent">
+          </div>
+        </div>
+        <paper-toast id="toast" text="Redirecting you to forum..." alwaysOnTop></paper-toast>
+    </template>
+    <script>
+      /**
+       * @customElement
+       * @polymer
+       */
+      class LessonPage extends Polymer.Element {
+        static get is() { return 'lesson-page'; }
+        static get properties() {
+          return {
+            videoId :{
+              type : String
+            },
+            header :{
+              type : String,
+              value:"Lesson Title",
+              notify : true
+            },
+            route : {
+              type: Boolean,
+              observer : '_isLessonSelected'
+            },
+            enrolled : {
+              type : String,
+              value : false,
+              notify : true
+            },
+            forumURL: {
+              type : String,
+              value : ''
+            }
+          };
+        }
+        loadForum(){
+          this.$.toast.open();
+        }
+        processResponse(payload){
+          if (payload)
+          {
+            if (payload.lesson)
+            {
+              var youtube = Polymer.dom(this.root).querySelector('google-youtube');
+              if (payload.lesson.video)
+              {
+                youtube.style.display = "block";
+                this.videoId = payload.lesson.video;
+              }
+              else
+                youtube.style.display = "none";
+              this.header = payload.lesson.title;
+            }
+
+            if (payload.lesson_objectives) Polymer.dom(this.root).querySelector("#objectives").innerHTML = payload.lesson_objectives ? payload.lesson_objectives : "";
+            if (payload.display_content) Polymer.dom(this.root).querySelector("#displayContent").innerHTML = payload.display_content ? payload.display_content : "" ;
+            if (payload.extra_content) Polymer.dom(this.root).querySelector("#extraContent").innerHTML = payload.extra_content ? payload.extra_content : "";
+            var matDisplay = Polymer.dom(this.root).querySelector(".matCard");
+            if (payload.lesson_objectives || payload.display_content || payload.extra_content)
+            matDisplay.style.display = "block";
+            else
+            matDisplay.style.display = "none";
+
+            var showbutton = Polymer.dom(this.root).querySelector('dom-if');
+            if (payload.is_enrolled)
+            {
+              showbutton.if = true;
+              if(payload.is_enrolled)
+              {
+                this.enrolled = true;
+                this.forumURL = payload.course_info.course.forum_url;
+                forum_url = payload.course_info.course.forum_url;// sets forum_url in main.js
+              }
+            }
+            else {
+              showbutton.if = false;
+              this.enrolled = false;
+            }
+          }
+        }
+        _isLessonSelected()
+        {
+          if (Polymer.dom(this.parentElement).node.selected == 'lesson')
+          {
+            if(this.courseID && this.unitID && this.lessonID)
+            {
+              if(this.courseID.id && this.unitID.id && this.lessonID.id)
+              {
+                var main=this; // to access "this" context in the anonymous function
+                showSpinnerHideError(this);
+                fetch('/'+this.courseID.id+'/m/unit?unit='
+                +this.unitID.id+'&lesson='+this.lessonID.id,{
+                  method: 'GET',
+                  credentials: 'include'
+                })
+                .then( obj => {
+                  validateResponse(main,obj);
+                })
+                .catch( obj =>{
+                  logError(obj);
+                });
+              }
+              else {
+                showErrorHideSpinner(this,"Course ID or Unit Id or Lesson ID is missing in the url");
+              }
+            }
+          }
+        }
+      }
+      window.customElements.define(LessonPage.is, LessonPage);
+    </script>
+</dom-module>

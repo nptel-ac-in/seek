@@ -1,0 +1,16 @@
+registration:
+  main_module: modules.mentor.register
+
+files:
+  - modules/mentor/__init__.py
+  - modules/mentor/base.py
+  - modules/mentor/manifest.yaml
+  - modules/mentor/mentor.py
+  - modules/mentor/mentor_list.py
+  - modules/mentor/mentor_model.py
+  - modules/mentor/register.py
+  - modules/mentor/settings.py
+  - modules/mentor/views/mentee_list.html
+  - modules/mentor/views/mentor.html
+  - modules/mentor/views/mentor_add.html
+  - modules/mentor/views/mentor_select.html

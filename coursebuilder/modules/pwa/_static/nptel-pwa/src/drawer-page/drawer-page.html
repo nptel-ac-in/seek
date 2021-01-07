@@ -1,0 +1,123 @@
+
+<dom-module id="drawer-page">
+  <template>
+    <style></style>
+    <app-route
+        route="{{route}}"
+        pattern="/:id"
+        data="{{courseID}}"
+        tail="{{courseData}}"
+        >
+    </app-route>
+    <app-header-layout>
+      <div id="scrollable-element">
+      <paper-drawer scroll-target="scrollable-element">
+        <button style="display: none; width: 0; height: 0;" id="login-refresh"  on-tap="loginChange">Trigger Log In Change</button>
+  			<a name="profile" href="#/profile"><paper-drawer-title fletter="[[fletter]]" name="[[name]]" email="[[email]]"></paper-drawer-title></a>
+        <template is="dom-if" if="{{enrolled}}" restamp="true">
+            <a name="progress" href="#/progress/[[courseID.id]]"><paper-drawer-icon-item icon="icons:done-all">Progress</paper-drawer-icon-item></a>
+            <a name="courseoutline" href="#/courseoutline/[[courseID.id]]"><paper-drawer-icon-item icon="icons:reorder">Course Outline</paper-drawer-icon-item></a>
+            <paper-drawer-icon-item on-tap="loadForum" icon="icons:question-answer">Ask A Question</paper-drawer-icon-item>
+            <a name="assignments" href="?namespace=[[courseID.id]]#/extra/assignment"><paper-drawer-icon-item icon="icons:assignment">Assignments</paper-drawer-icon-item></a>
+            <a name="announcement" href="#/announcement/[[courseID.id]]"><paper-drawer-icon-item icon="icons:announcement">Announcements</paper-drawer-icon-item></a>
+        </template>
+        <a name="mycourses" href="#/mycourses"><paper-drawer-icon-item icon="icons:view-list">My Courses</paper-drawer-icon-item></a>
+  			<a name="allcourse" href="#/allcourses"><paper-drawer-icon-item icon="icons:apps">All Courses</paper-drawer-icon-item></a>
+  			<paper-drawer-divider></paper-drawer-divider>
+        <template is="dom-if" if="{{login}}" restamp="true">
+          <paper-drawer-icon-item icon="icons:power-settings-new" on-tap="logout">Sign Out</paper-drawer-icon-item>
+          <paper-drawer-divider></paper-drawer-divider>
+        </template>
+  			<!-- <paper-drawer-icon-item icon="icons:settings">Settings</paper-drawer-icon-item> -->
+        <a href="#/extra/terms"><paper-drawer-icon-item icon="icons:description">Privacy & Terms</paper-drawer-icon-item></a>
+        <a href="#/extra/honor_code"><paper-drawer-icon-item icon="icons:gavel">Honor Code</paper-drawer-icon-item></a>
+        <a href="#/faq"><paper-drawer-icon-item icon="icons:help">FAQs</paper-drawer-icon-item></a>
+  		</paper-drawer>
+      <paper-toast id="toast" text="Redirecting you to forum..." alwaysOnTop></paper-toast>
+    </div>
+    </app-header-layout>
+  </template>
+  <script>  /**
+   * @customElement
+   * @polymer
+   */
+    class DrawerPage extends Polymer.Element {
+      static get is() { return 'drawer-page'; }
+      static get properties() {
+        return {
+          name : {
+            type: String,
+            value: "User"
+          },
+          email :{
+            type: String,
+            value: "Login to check your profile"
+          },
+          fletter : {
+            type: String,
+            value: "Hi"
+          },
+          login:{
+            type: Boolean,
+            notify : true,
+            observer : 'loginChange',
+          },
+        };
+      }
+      loadForum(e){
+        this.$.toast.open();
+        window.location = forum_url;
+      }
+      logout(){
+        this.login = false;
+        window.location.replace('/m/signout');
+      }
+      processResponse(payload){
+       if (payload)
+       {
+         if (payload.loginurl)
+         {
+           return;
+         }
+         if(payload.name)
+          {
+            this.name = payload.name;
+            this.fletter = this.name.substr(0,1).toUpperCase();
+          }
+          if(payload.email)
+          {
+            this.email = payload.email;
+          }
+        }
+      }
+      validateResponse(response) {
+        if(response.ok)
+        { var main=this;
+          response.text().then(obj => {
+            return this.processResponse(parseJSONP(main,obj));
+          });
+        }
+        else {
+          console.log(response);
+        }
+      }
+      loginChange(){
+        if (this.login)
+          {
+            var url = '/m/profile?push_token=' + loadPushToken();
+            fetch(url, {
+                method: 'GET',
+                credentials: 'include',
+              })
+              .then( obj => {
+                this.validateResponse(obj);
+              })
+              .catch( obj =>{
+                logError(obj);
+              });
+          }
+        }
+      }
+    window.customElements.define(DrawerPage.is, DrawerPage);
+  </script>
+</dom-module>

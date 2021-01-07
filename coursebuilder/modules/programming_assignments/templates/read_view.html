@@ -1,27 +1,35 @@
-<!--
- Copyright 2020 Google LLC
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 {% extends base %}
 
+{% block edit_unit_content %}
+{% if is_read_write_course and is_course_admin %}
+  {% if assignment %}
+    {% if assignment.edit_action %}
+      <a class="gcb-button pull-right" role="button"
+         style="float:right;width:60px;"
+         href="{{ assignment.edit_action }}" >Edit</a>
+    {% endif %}
+  {% endif %}
+{% endif %}
+{% endblock %}
+
+{% block main_content_header %}
+<div>
+  <h1 class="gcb-unit-header">
+    {# I18N: Header text for a unit page. #}
+    {{ gettext('%(title)s', title=unit.title) }}
+  </h1>
+</div>
+{% endblock %}
+
+{% block breadcrumb_content %}
+{% endblock %}
+
+
 {% block main_content_data %}
-<script src="/static/prettify/google-code-prettify/prettify.js"></script>
-<link href="/modules/code_tags/codemirror/lib/codemirror.css" rel="stylesheet"/>
-<script src="/modules/code_tags/codemirror/lib/codemirror.js"></script>
+<link href="/static/codemirror/lib/codemirror.css" rel="stylesheet"/>
+<script src="/static/codemirror/lib/codemirror.js"></script>
 {% for lang,lang_details in assignment.all_lang_data.iteritems() %}
-  <script src="/modules/code_tags/codemirror/mode/{{ lang_details.syntax }}/{{ lang_details.syntax }}.js"></script>
+  <script src="/static/codemirror/mode/{{ lang_details.syntax }}/{{ lang_details.syntax }}.js"></script>
 {% endfor %}
 <script src="/modules/ajax_registry/assets/js/registry.js"></script>
 
@@ -36,7 +44,7 @@ function createCodeMirrorEditor(div_id, read_only, first_line_number, lang){
   if (read_only) {
       theme = readonlyEditorTheme;
   }
-  return CodeMirror.fromTextArea(document.getElementById(div_id), 
+  return CodeMirror.fromTextArea(document.getElementById(div_id),
     {"mode": langSyntaxModeMap[lang] , "theme":theme, "readOnly":read_only, "lineNumbers":true, "firstLineNumber": first_line_number});
 }
 
@@ -57,24 +65,6 @@ function onLangChoiceChange() {
 </script>
 
 <link rel="stylesheet" type="text/css" href="/modules/programming_assignments/assets/css/prog.css"/>
-<link rel="stylesheet" type="text/css" href="/static/prettify/google-code-prettify/desert.css"/>
-
-{% if is_read_write_course and is_course_admin %}
-  {% if assignment %}
-    {% if assignment.edit_action %}
-      <a class="gcb-button pull-right" role="button"
-         style="float:right;width:60px;"
-         href="{{ assignment.edit_action }}" >Edit</a>
-    {% endif %}
-  {% endif %}
-{% endif %}
-
-<div>
-  <h1 class="gcb-unit-header">
-    {# I18N: Header text for a unit page. #}
-    {{ gettext('%(title)s', title=unit.title) }}
-  </h1>
-</div>
 
 {% if assignment.submission_due_date %}
   <div class="gcb-submission-due-date">
@@ -109,9 +99,10 @@ function onLangChoiceChange() {
                   display: block;
                   margin: -2px 0px;
                  ">
-               <label style="font-size: 16px; font-weight: bold;">
-                    {{ gettext('You scored %(score)s/100 ', score=assignment.score) }}
-                  </label>
+               <div style="font-size: 16px; font-weight: bold; padding: 2px;">
+                    <div>{{ assignment.num_test_passed }} out of {{ assignment.num_test_evaluated }} tests passed.</div>
+                    <div>{{ gettext('You scored %(score)s/100 ', score=assignment.score) }}</div>
+                  </div>
               {% else %}
                 {% if assignment.response %}
                   {% include 'compilation_response.html' %}
@@ -142,7 +133,8 @@ function onLangChoiceChange() {
             {{ gettext('You have already submitted this assignment') }}
           {% endif %}
           {% if assignment.score %}
-            {{ gettext('You scored %(score)s/100.', score=assignment.score) }}
+            <div>{{ assignment.num_test_passed }} out of {{ assignment.num_test_evaluated }} tests passed.</div>
+            <div>{{ gettext('You scored %(score)s/100.', score=assignment.score) }}</div>
           {% endif %}
           {% if assignment.previous_submission %}
             <br/>
@@ -215,7 +207,6 @@ function onLangChoiceChange() {
   {% endif %}
 {% endif %}
 <script type="text/javascript">
-prettyPrint();
 onLangChoiceChange();
 </script>
 {% endblock %}

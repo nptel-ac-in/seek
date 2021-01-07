@@ -20,12 +20,12 @@ import os
 
 import appengine_config
 from common import schema_fields
+from common import users
 from controllers import utils
 from models import courses
 from models import custom_modules
 from models import models
-
-from google.appengine.api import users
+import messages
 
 EXTRA_TABS_KEY = 'extra_tabs'
 LABEL_KEY = 'label'
@@ -68,30 +68,34 @@ def options_schema_provider(unused_course):
         'Extra Tab',
         extra_schema_dict_values={'className': 'settings-list-item'})
     extra_tab_type.add_property(schema_fields.SchemaField(
-        LABEL_KEY, 'Label', 'string', optional=True,
-        description='The tab to be shown on the navbar.'))
+        LABEL_KEY, 'Title', 'string',
+        description=messages.EXTRA_TABS_TITLE_DESCRIPTION))
     extra_tab_type.add_property(schema_fields.SchemaField(
-        POSITION_KEY, 'Tab Position', 'string', optional=True, i18n=False,
+        POSITION_KEY, 'Tab Position', 'string',
+        description=messages.EXTRA_TAB_POSITION_DESCRIPTION,
+        i18n=False, optional=True,
         select_data=[(POS_LEFT, 'Left'), (POS_RIGHT, 'Right')]))
     extra_tab_type.add_property(schema_fields.SchemaField(
         VISIBILITY_KEY, 'Visibility', 'string', optional=True, i18n=False,
+        description=messages.EXTRA_TABS_VISIBILITY_DESCRIPTION,
         select_data=[
             (VIS_ALL, 'Everyone'), (VIS_STUDENT, 'Registered students')]))
     extra_tab_type.add_property(schema_fields.SchemaField(
         URL_KEY, 'Tab URL', 'string', optional=True,
-        description='If a URL is provided, the tab will link to that URL. '
-        'Otherwise it will display the "tab content" in a page.'))
+        description=messages.EXTRA_TABS_URL_DESCRIPTION,
+        extra_schema_dict_values={'_type': 'url', 'showMsg': True}))
     extra_tab_type.add_property(schema_fields.SchemaField(
-        CONTENT_KEY, 'Tab Content', 'html', optional=True))
+        CONTENT_KEY, 'Tab Content', 'html', optional=True,
+        description=messages.EXTRA_TABS_CONTENT_DESCRIPTION))
     return schema_fields.FieldArray(
-        'course:' + EXTRA_TABS_KEY, 'Extra tabs',
+        'course:' + EXTRA_TABS_KEY, 'Extra Tabs',
         item_type=extra_tab_type,
-        description=(
-            'Extra tabs to appear on the course navbar.'),
+        description=messages.EXTRA_TABS_DESCRIPTION,
         extra_schema_dict_values={
             'className': 'settings-list wide',
             'listAddLabel': 'Add a tab',
-            'listRemoveLabel': 'Delete tab'})
+            'listRemoveLabel': 'Delete tab'},
+        optional=True)
 
 
 def _get_current_student():
@@ -99,7 +103,7 @@ def _get_current_student():
     if user is None:
         return None
     else:
-        return models.Student.get_enrolled_student_by_email(user.email())
+        return models.Student.get_enrolled_student_by_user(user)
 
 
 def _is_visible(tab_data, student):
@@ -139,14 +143,14 @@ def register_module():
 
     def on_module_enabled():
         courses.Course.OPTIONS_SCHEMA_PROVIDERS.setdefault(
-            courses.Course.SCHEMA_SECTION_HOMEPAGE, []).append(
+            courses.Course.SCHEMA_SECTION_COURSE, []).append(
                 options_schema_provider)
         utils.CourseHandler.LEFT_LINKS.append(left_links)
         utils.CourseHandler.RIGHT_LINKS.append(right_links)
 
     def on_module_disabled():
         courses.Course.OPTIONS_SCHEMA_PROVIDERS.setdefault(
-            courses.Course.SCHEMA_SECTION_HOMEPAGE, []).remove(
+            courses.Course.SCHEMA_SECTION_COURSE, []).remove(
                 options_schema_provider)
         utils.CourseHandler.LEFT_LINKS.remove(left_links)
         utils.CourseHandler.RIGHT_LINKS.remove(right_links)

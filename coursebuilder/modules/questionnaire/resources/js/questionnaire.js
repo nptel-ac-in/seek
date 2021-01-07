@@ -1,19 +1,3 @@
-/**
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 function parseJson(s) {
   var XSSI_PREFIX = ")]}'";
   return JSON.parse(s.replace(XSSI_PREFIX, ""));
@@ -51,23 +35,28 @@ function onAjaxPostFormData(data, button) {
   }
 }
 
-function ajaxGetFormData(xsrfToken, key) {
+function ajaxGetFormData(xsrfToken, key, button, singleSubmission) {
   $.ajax({
     type: "GET",
     url: "rest/modules/questionnaire",
     data: {"xsrf_token": xsrfToken, "key": key},
     dataType: "text",
     success: function(data) {
-      onAjaxGetFormData(data, key);
+      onAjaxGetFormData(data, key, button, singleSubmission);
     }
   });
 }
 
-function onAjaxGetFormData(data, key) {
+function onAjaxGetFormData(data, key, button, singleSubmission) {
   var data = parseJson(data);
   if (data.status == 200) {
     var payload = JSON.parse(data.payload || "{}");
-    setFormData(payload.form_data || {}, key);
+    var form_data = payload.form_data || [];
+    setFormData(form_data, key);
+    if (form_data.length && singleSubmission) {
+      disableForm(button, key);
+      cbShowMsg(button.data('single-submission-message'));
+    }
   }
   else {
     cbShowMsg(data.message);
@@ -120,13 +109,14 @@ function init() {
     var xsrfToken = button.data("xsrf-token");
     var key = button.data("form-id");
     var disabled = button.data("disabled");
+    var singleSubmission = button.data("single-submission");
     var registered = button.data("registered");
 
     if (! registered) {
-      cbShowMsg("Only registered students can submit answers.");
+      cbShowMsg(button.data("registered-message"));
       disableForm(button, key);
     } else {
-      ajaxGetFormData(xsrfToken, key);
+      ajaxGetFormData(xsrfToken, key, button, singleSubmission);
       if (disabled) {
         disableForm(button, key);
       } else {

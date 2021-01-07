@@ -1,27 +1,11 @@
-<!--
- Copyright 2020 Google LLC
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 {% if need_settings %}
-Data pump functionality is not currently enabled.  To enable it, please
+<p>Data pump functionality is not currently enabled.  To enable it, please
 configure the
-<a href="dashboard?action=settings&tab=data_pump&{{ exit_url }}">
+<a href="dashboard?action=settings_data_pump&amp;{{ exit_url }}">
 Data Pump settings</a> with
 information about the Google Cloud Computing project where you will use
 BigQuery to analyze your data.  You will need to specify the application ID
-and generate a JSON client key to authorize this instance of CourseBuilder.
+and generate a JSON client key to authorize this instance of CourseBuilder.</p>
 {% else %}
 
 <style>
@@ -74,14 +58,20 @@ div.warning {
       <td>{{ schema[field].description }}</td>
     </tr>
     {% if schema[field].type == 'array' %}
-      {{ schema_rows(schema[field]['items']['properties'], depth + 1) }}
+      {% if schema[field]['items']['type'] == 'object' %}
+        {{ schema_rows(schema[field]['items']['properties'], depth + 1) }}
+      {% else %}
+        {{ schema_rows({'': schema[field]['items']}, depth + 1) }}
+      {% endif %}
+    {% elif schema[field].type == 'object' %}
+      {{ schema_rows(schema[field]['properties'], depth + 1) }}
     {% endif %}
   {% endfor %}
 {%- endmacro %}
 
 <div class="settings-link">
   <p>
-    <a href="dashboard?action=settings&tab=data_pump&{{ exit_url }}">
+    <a href="dashboard?action=settings_data_pump&amp;{{ exit_url }}">
       Settings
     </a>
   </p>

@@ -40,17 +40,22 @@ class Mentor(ndb.Model):
         return self.key.id()
 
     @classmethod
-    def create(cls, user_id):
+    def create(cls, user_id, copy_data_from_profile=False):
         mentor = Mentor(id=user_id)
-        mentor.email = cls._get_mentor_profile(user_id).email
+        profile = cls._get_mentor_profile(user_id)
+        mentor.email = profile.email
+        if copy_data_from_profile:
+            mentor.local_chapter = profile.local_chapter
+            mentor.college_id = profile.college_id
         return mentor
 
     @classmethod
-    def get_or_create(cls, user_id):
+    def get_or_create(cls, user_id, copy_data_from_profile=False):
         value = cls.get_by_id(user_id)
         if value is not None:
             return value
-        return cls.create(user_id)
+        return cls.create(
+            user_id, copy_data_from_profile=copy_data_from_profile)
 
     @classmethod
     def _get_mentor_profile(cls, mentor_id):
@@ -130,3 +135,8 @@ class Mentor(ndb.Model):
         mentor = Mentor.get_by_id(mentor_id)
         if mentor:
             mentor.key.delete()
+
+    @classmethod
+    def bulk_get_mentor_by_user_id(cls, user_ids):
+        key_list = [ndb.Key(Mentor, uid) for uid in user_ids]
+        return ndb.get_multi(key_list)

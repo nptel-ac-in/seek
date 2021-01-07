@@ -1,0 +1,121 @@
+
+<dom-module id="category-course">
+  <template>
+    <style include="nptel-pwa-css"></style>
+    <app-route
+        route="{{route}}"
+        pattern="/:name"
+        data="{{category}}"
+        tail="{{categoryData}}"
+        >
+    </app-route>
+        <paper-spinner-lite class="spinner" active alt="Loading content.."></paper-spinner-lite>
+        <div style="height:100%;overflow:auto">
+        <dom-repeat items="[[courseCatg]]">
+          <template>
+            <paper-card class="courselist">
+              <a href="#/course[[item.slug]]" data-item="[[item]]">
+                <div class="card-content">
+                    <div class="course-header">[[item.title]]</iron-icon></div>
+                    <div class="course-detail"><iron-icon icon="icons:date-range"></iron-icon>[[_formatDate(item.start_date)]] - [[_formatDate(item.end_date)]]</div>
+                </div>
+              </a>
+            </paper-card>
+           </template>
+        <dom-repeat>
+        </div>
+  </template>
+  <script>
+    /**
+     * @customElement
+     * @polymer
+     */
+    class CategoryCourse extends Polymer.Element {
+      static get is() { return 'category-course'; }
+      static get properties() {
+        return {
+          header :{
+            type : String,
+            value:"Courses",
+            notify:true
+          },
+          courseCatg:{
+            type:Object
+          },
+          courseSlug: {
+            type:String
+          },
+          route : {
+            observer : '_isCategorySelected'
+          },
+        };
+      }
+      processResponse(payload){
+        if (payload.course_list)
+        {
+          var i;
+          this.courseCatg =[];
+          for (i = 0; i<payload.course_list.length;i++)
+          {
+            if (payload.course_list[i].category == this.category.name)
+            {
+              this.courseCatg.push(payload.course_list[i]);
+              continue;
+            }
+          }
+        }
+      }
+      _isCategorySelected()
+      {
+        if(this.category)
+        {
+          if (Polymer.dom(this.parentElement).node.selected == 'category')
+          {
+            this.header = "Courses";
+            var spinner = Polymer.dom(this.root).querySelector('paper-spinner-lite');
+            spinner.active = true;
+            spinner.style.display = "block";
+            var main = this; // to access "this" inside the anonymous function below.
+            caches.open('nptel-courselist').then(function(cache){
+              return cache.match('courselist').then(function(response){
+                /* Below logic is to manually update courselist cache after the
+                specified time in cl_cache_expire in main.js.*/
+                var objdate = new Date(response ? response.headers.get('Date') : null);
+                var currdate = new Date();
+                if (currdate.getTime() < (objdate.getTime()+(cl_cache_expire)))
+                    return response
+                else {
+                  return fetch('/m/allcourses',{
+                    method: 'GET'
+                  })
+                  .then( obj => {
+                    if(obj && obj.status === 200 && obj.type === 'basic')
+                    cache.put('courselist',obj.clone());
+                    return obj;
+                  })
+                  .catch(obj =>{
+                    logError(obj);
+                  });
+                }
+              }).then(function(resp){
+                validateResponse(main,resp);
+              });
+            });
+          }
+        }
+      }
+      _formatDate(dateString) {
+        var date = new Date(dateString);
+        var monthNames = ["January", "February", "March", "April", "May",
+          "June", "July", "August", "September", "October", "November",
+          "December"];
+        var result = monthNames[date.getMonth()] + ' ' + date.getDate();
+        if (date.getFullYear() != new Date().getFullYear()) {
+          result += ', ' + date.getFullYear();
+        }
+        return result;
+      }
+    }
+    window.customElements.define(CategoryCourse.is, CategoryCourse);
+  </script>
+</dom-module>

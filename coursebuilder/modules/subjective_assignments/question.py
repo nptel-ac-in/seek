@@ -33,7 +33,7 @@ from models import course_list
 from models import vfs
 from modules.subjective_assignments import drive_service
 from modules.oeditor import oeditor
-from modules.dashboard import messages
+from models import messages
 from tools import verify
 
 import yaml
@@ -121,7 +121,7 @@ def create_assignment_registry():
         SchemaField('title', 'Title', 'string', optional=False))
     reg.add_property(
         SchemaField('weight', 'Weight', 'number', optional=False))
-    reg.add_property(SchemaField('parent_unit', 'Parent Unit', 'string', select_data=[]))
+    reg.add_property(SchemaField('parent_unit', 'Parent Unit', 'string', editable=False, select_data=[]))
     reg.add_property(SchemaField(
         content_key(SubjectiveAssignmentBaseHandler.OPT_QUESTION_TYPE),
         'Assignment Type', 'string',
@@ -138,8 +138,9 @@ def create_assignment_registry():
 
     reg.add_property(
         SchemaField(workflow_key(courses.SUBMISSION_DUE_DATE_KEY),
-                    'Submission Due Date', 'string', optional=True,
-                    description=str(messages.DUE_DATE_FORMAT_DESCRIPTION)))
+                    'Submission Due Date', 'datetime', optional=False,
+                    description=messages.ASSESSMENT_DUE_DATE_FORMAT_DESCRIPTION,
+                    extra_schema_dict_values={'_type': 'datetime'}))
     reg.add_property(
         SchemaField(workflow_key(courses.SUBMIT_ONLY_ONCE),
                     'Number of Submissions', 'boolean',
@@ -219,7 +220,7 @@ class SubjectiveAssignmentRESTHandler(BaseRESTHandler, SubjectiveAssignmentBaseH
         'inputex-checkbox', 'inputex-list', 'inputex-number']
 
     @classmethod
-    def get_schema_annotations_dict(cls, course):
+    def get_schema(cls, course):
         unit_list = []
         for unit in course.get_units():
             if unit.type == 'U':
@@ -228,8 +229,10 @@ class SubjectiveAssignmentRESTHandler(BaseRESTHandler, SubjectiveAssignmentBaseH
                      cgi.escape('Unit %s - %s' % (unit.index, unit.title))))
         extra_select_options = dict()
         extra_select_options['parent_unit'] = unit_list
-        return  cls.REG.get_schema_dict(
+        cls.REG.get_schema_dict(
             extra_select_options=extra_select_options)
+        return cls.REG
+
 
 
     def unit_to_dict(self, course, unit):
@@ -240,11 +243,11 @@ class SubjectiveAssignmentRESTHandler(BaseRESTHandler, SubjectiveAssignmentBaseH
         content = self.get_content(course, unit)
 
         workflow = unit.workflow
+
         if workflow.get_submission_due_date():
-            submission_due_date = workflow.get_submission_due_date().strftime(
-                courses.ISO_8601_DATE_FORMAT)
+            submission_due_date = workflow.get_submission_due_date()
         else:
-            submission_due_date = ''
+            submission_due_date = None
 
         workflow_dict = dict()
         workflow_dict[courses.SUBMISSION_DUE_DATE_KEY] = submission_due_date
@@ -283,9 +286,7 @@ class SubjectiveAssignmentRESTHandler(BaseRESTHandler, SubjectiveAssignmentBaseH
         drive_folder_id = blob_dict[cls.OPT_DRIVE_DIR_ID]
         namespace = namespace_manager.get_namespace()
         cl = course_list.CourseListDAO.get_course_for_namespace(namespace)
-        course_admin_emails = utils.text_to_list(
-            cl.course_admin_email,
-            utils.BACKWARD_COMPATIBLE_SPLITTER)
+        course_admin_emails = cl.course_admin_email
 
         for email in course_admin_emails:
             email = email.strip()
@@ -318,6 +319,15 @@ class SubjectiveAssignmentRESTHandler(BaseRESTHandler, SubjectiveAssignmentBaseH
         unit.now_available = not entity_dict.get('is_draft')
 
         workflow_dict = entity_dict.get('workflow')
+
+        # Convert the due date
+        # TODO(rthakker) since this code is being used in 3 places, move it
+        # somewhere reusable.
+        due_date = workflow_dict.get(courses.SUBMISSION_DUE_DATE_KEY)
+        if due_date:
+            workflow_dict[courses.SUBMISSION_DUE_DATE_KEY] = due_date.strftime(
+                courses.ISO_8601_DATE_FORMAT)
+
         workflow_dict[courses.GRADER_KEY] = courses.AUTO_GRADER
         unit.workflow_yaml = yaml.safe_dump(workflow_dict)
         unit.workflow.validate(errors=errors)

@@ -19,7 +19,6 @@ __author__ = 'Thejesh GN (tgn@google.com)'
 
 from models import custom_modules
 from modules.dashboard import dashboard
-from modules.dashboard import tabs
 from modules.scoring import base
 from modules.scoring import scorer
 from modules.scoring import dashboard as scoring_dashboard
@@ -31,17 +30,12 @@ def register_module():
     """Registers this module in the registry."""
 
     namespaced_routes = []
-    tabs.Registry.register(
-        base.ScoringBase.DASHBOARD_NAV,
-        base.ScoringBase.DASHBOARD_RESCORING_TAB,
-        'Objectective Assessement',
-        scoring_dashboard.ScoringDashboardHandler)
 
-    dashboard.DashboardHandler.add_custom_get_action(
-        base.ScoringBase.DASHBOARD_NAV, None)
 
-    dashboard.DashboardHandler.add_nav_mapping(
-        base.ScoringBase.DASHBOARD_NAV, base.ScoringBase.NAME)
+    dashboard.DashboardHandler.add_sub_nav_mapping(
+        'analytics', base.ScoringBase.DASHBOARD_RESCORING_TAB, base.ScoringBase.NAME,
+        action=base.ScoringBase.DASHBOARD_RESCORING_TAB,
+        contents=scoring_dashboard.ScoringDashboardHandler.display_html)
 
     dashboard.DashboardHandler.add_custom_post_action(
         base.ScoringBase.RESCORE_OBJ_ASSESSMENT_ACTION,

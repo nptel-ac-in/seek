@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for common.tags."""
+"""Unit tests for common.utils."""
 
 __author__ = 'Mike Gainer (mgainer@google.com)'
 
@@ -211,7 +211,7 @@ class ParseTimedeltaTests(unittest.TestCase):
     def test_parse_trailing_valid_partial_gibberish(self):
         self.assertEquals(
             utils.parse_timedelta_string('we will leave in 5 days'),
-            datetime.timedelta(days=0))
+            datetime.timedelta(days=5))
 
     def test_parse_units(self):
         for unit in ('week', 'day', 'hour', 'minute', 'second'):
@@ -263,3 +263,89 @@ class ParseTimedeltaTests(unittest.TestCase):
         self.assertEquals(
             utils.parse_timedelta_string('3 weeks, 1 day, 3 minutes'),
             datetime.timedelta(weeks=3, days=1, minutes=3))
+
+
+class ValidateTimedeltaTests(unittest.TestCase):
+
+    def test_blank_is_allowed(self):
+        errors = []
+        utils.ValidateTimedelta.validate('', errors)
+        self.assertEquals(0, len(errors))
+
+    def test_none_is_allowed(self):
+        errors = []
+        utils.ValidateTimedelta.validate(None, errors)
+        self.assertEquals(0, len(errors))
+
+    def test_bare_numbers_not_allowed(self):
+        errors = []
+        utils.ValidateTimedelta.validate('0', errors)
+        self.assertEquals(1, len(errors))
+
+        errors = []
+        utils.ValidateTimedelta.validate('1', errors)
+        self.assertEquals(1, len(errors))
+
+        errors = []
+        utils.ValidateTimedelta.validate('-1', errors)
+        self.assertEquals(1, len(errors))
+
+        errors = []
+        utils.ValidateTimedelta.validate('100', errors)
+        self.assertEquals(1, len(errors))
+
+    def test_valid_items_allowed(self):
+        errors = []
+        utils.ValidateTimedelta.validate('1s', errors)
+        utils.ValidateTimedelta.validate('2m', errors)
+        utils.ValidateTimedelta.validate('3h', errors)
+        utils.ValidateTimedelta.validate('4d', errors)
+        utils.ValidateTimedelta.validate('5w', errors)
+        utils.ValidateTimedelta.validate('5 Weeks, 1D,2HOURS   3    seconds',
+                                          errors)
+        self.assertEquals(0, len(errors))
+
+    def test_invalid_items_disallowed(self):
+        errors = []
+        utils.ValidateTimedelta.validate('1t', errors)
+        self.assertEquals(1, len(errors))
+
+        errors = []
+        utils.ValidateTimedelta.validate('1 year', errors)
+        self.assertEquals(1, len(errors))
+
+    def test_parse_months_gives_error(self):
+        errors = []
+        utils.ValidateTimedelta.validate('3 months', errors)
+        self.assertEquals(1, len(errors))
+
+
+class ValidateYoutubeVideoRecognizer(unittest.TestCase):
+
+    def test_urls(self):
+        VIDEO_ID = 'MRc_tS-cw8Q'
+        self.assertEquals(VIDEO_ID, utils.find_youtube_video_id(
+            'https://youtu.be/MRc_tS-cw8Q'))
+        self.assertEquals(VIDEO_ID, utils.find_youtube_video_id(
+            'https://www.youtube.com/watch?v=MRc_tS-cw8Q'))
+        self.assertEquals(VIDEO_ID, utils.find_youtube_video_id(
+            '<iframe width="560" height="315" '
+            'src="https://www.youtube.com/embed/MRc_tS-cw8Q" '
+            'frameborder="0" allowfullscreen></iframe>'))
+        self.assertEquals(VIDEO_ID, utils.find_youtube_video_id(
+            '<a href="http://www.youtube.com/attribution_link?'
+            'a=l-cnFmYB3Wk&amp;u=/watch%3Fv%3DMRc_tS-cw8Q%26feature%3D'
+            'em-share_video_user" style="text-decoration:none;display:block" '
+            'class="nonplayable" target="_blank" '
+            'data-saferedirecturl="https://www.google.com/url?'
+            'hl=en&amp;q=http://www.youtube.com/attribution_link?'
+            'a%3Dl-cnFmYB3Wk%26u%3D/watch'
+            '%253Fv%253DMRc_tS-cw8Q%2526feature%253Dem-share_video_user&amp;'
+            'source=gmail&amp;ust=1465506905750000&amp;'
+            'usg=AFQjCNELKJqzhBDZku-v0uUapICQMZCGGg">'))
+        self.assertEquals(VIDEO_ID, utils.find_youtube_video_id(VIDEO_ID))
+        self.assertEquals(VIDEO_ID, utils.find_youtube_video_id(
+            'https://www.youtube.com/v/MRc_tS-cw8Q'))
+
+        self.assertIsNone(utils.find_youtube_video_id(''))
+        self.assertIsNone(utils.find_youtube_video_id(VIDEO_ID[1:]))

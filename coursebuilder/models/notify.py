@@ -16,10 +16,15 @@
 
 __author__ = 'Abhinav Khandelwal (abhinavk@google.com)'
 
+import appengine_config
+import bs4
+from common import users
 from modules.notifications import notifications
 
 from google.appengine.api import mail
-from google.appengine.api import users
+from google.appengine.api import namespace_manager
+
+from modules.pwa import notifications as push_notif
 
 
 class EmailManager(object):
@@ -39,16 +44,22 @@ class EmailManager(object):
             )
         return True
 
-    def send_mail_sync(self, subject, body, reciever, sender=None):
+    def send_mail_sync(self, subject, body, reciever, sender=None,
+            intent='default', html=None):
         """send email synchronously"""
         if sender is None:
             sender = self._user.email()
 
-        notifications.Manager.send_sync(reciever, sender, body, subject)
+        notifications.Manager.send_sync(reciever, sender, intent, body, subject,
+                                        html=html)
 
     def send_announcement(self, subject, body, intent):
         """Send an announcement to course announcement list."""
         announce_email = self._course.get_course_announcement_list_email()
         if announce_email:
-            self.send_mail(subject, body, announce_email, self._user.email(), intent)
+            self.send_mail(subject, body, announce_email,
+                           appengine_config.ANNOUNCEMENT_SENDER_EMAIL, intent)
+        body = bs4.BeautifulSoup(body).get_text()
+        push_notif.PushNotificationBase.send_message_for_namespace(
+            subject, body, namespace_manager.get_namespace())
         return False

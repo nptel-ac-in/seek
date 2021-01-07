@@ -31,6 +31,7 @@ from controllers.utils import ReflectiveRequestHandler
 from models import roles
 from models import student_work
 from models import transforms
+from modules.courses import unit_outline
 from modules.programming_assignments import base
 from modules.programming_assignments import evaluator
 from modules.programming_assignments import prog_models
@@ -89,6 +90,14 @@ class ProgAssignmentHandler(BaseHandler, base.ProgAssignment,
         return result.ProgramEvaluationResult.deserialize(answer_entity.data)
 
     @classmethod
+    def get_submission_response(self, student, unit_id):
+        submission_entity = prog_models.ProgrammingSumissionEntity.get(
+            student, unit_id)
+        if submission_entity:
+            return result.ProgramEvaluationResult.deserialize(
+                submission_entity.data)
+
+    @classmethod
     def get_evaluation_result(cls, course, unit, content, student, is_public,
                               lang, filename, answer):
         """Evaluates the programming assignment answer using some evaluator"""
@@ -110,6 +119,15 @@ class ProgAssignmentHandler(BaseHandler, base.ProgAssignment,
 
         return evaluation_result
 
+    def get_num_test_passed_data(self, student, unit_id):
+        """Returns data regarding the number of tests passed/run"""
+        result = self.get_submission_response(student, unit_id)
+        if result:
+            return {
+                'num_test_passed': result.num_test_passed,
+                'num_test_evaluated': result.num_test_evaluated
+            }
+        return {}
     def parse_result(self, student, unit, tests):
         if not self.request.get('show_result'):
             return None
@@ -167,6 +185,12 @@ class ProgAssignmentHandler(BaseHandler, base.ProgAssignment,
         success, student, course, unit = self._validate_request(True)
         if not success:
             return
+        student_view = unit_outline.StudentCourseView(course, student)
+        displayability = student_view._determine_displayability(unit)
+        if not (displayability.is_content_available or
+                roles.Roles.is_course_admin(self.app_context)):
+            self.redirect('/course')
+            return
         self.assignment_name = self.request.get('name')
         assignment = {}
         if self.request.get('answer'):
@@ -210,12 +234,17 @@ class ProgAssignmentHandler(BaseHandler, base.ProgAssignment,
             if saved_contents and language_code in saved_contents.keys():
                 code = saved_contents[language_code]['code']
                 filename = saved_contents[language_code]['filename']
+                if not code:
+                    # If the user saves empty code, reset it to the template
+                    if per_lang_data['code_template']:
+                        code = per_lang_data['code_template']
                 per_lang_data['saved_code'] = code
                 per_lang_data['filename'] = filename
                 per_lang_data['last_code'] = (
                     evaluator.ProgramEvaluator.get_full_code(
                         per_lang_data, code))
             elif per_lang_data['code_template']:
+                # If the user saves empty code, reset it to the template
                 per_lang_data['saved_code'] = per_lang_data['code_template']
             else:
                 per_lang_data['saved_code'] = ''
@@ -249,7 +278,9 @@ class ProgAssignmentHandler(BaseHandler, base.ProgAssignment,
             not student.is_transient):
             score = course.get_score(student, unit.unit_id)
             if score is not None:
-	        assignment['score'] = '%s' % (float(score))
+                assignment['score'] = '%s' % (float(score))
+                assignment.update(
+                    self.get_num_test_passed_data(student, unit.unit_id))
 
         if len(content) > 0:
             assignment['question'] = content['question']
@@ -331,6 +362,12 @@ class ProgAssignmentHandler(BaseHandler, base.ProgAssignment,
         success, student, course, unit = self._validate_request(False)
         if not success:
             return
+        student_view = unit_outline.StudentCourseView(course, student)
+        displayability = student_view._determine_displayability(unit)
+        if not (displayability.is_content_available or
+                roles.Roles.is_course_admin(self.app_context)):
+            self.redirect('/course')
+            return
         if self.has_deadline_passed(unit):
             self.error(404)
             return
@@ -349,6 +386,12 @@ class ProgAssignmentHandler(BaseHandler, base.ProgAssignment,
     def post_submit(self):
         success, student, course, unit = self._validate_request(False)
         if not success:
+            return
+        student_view = unit_outline.StudentCourseView(course, student)
+        displayability = student_view._determine_displayability(unit)
+        if not (displayability.is_content_available or
+                roles.Roles.is_course_admin(self.app_context)):
+            self.redirect('/course')
             return
         if self.has_deadline_passed(unit):
             self.redirect(self.get_action_url('list', unit.unit_id))

@@ -21,6 +21,7 @@ from common import jinja_utils
 
 class MentorBase(object):
     NAME = 'Mentor'
+    ADMIN_ADD_TAB = 'admin_add_mentors'
     DASHBOARD_NAV = 'mentor'
     DASHBOARD_SHOW_LIST_TAB = 'list_mentors'
     DASHBOARD_GET_ADD_TAB = 'get_add_mentors'

@@ -26,6 +26,7 @@ from common import schema_fields
 from common import xcontent
 from models import courses
 from modules.dashboard.question_editor import McQuestionRESTHandler
+from modules.i18n_dashboard import i18n_dashboard
 from tests.functional import actions
 
 
@@ -37,16 +38,10 @@ BASE_URL = '/' + COURSE_NAME
 STUDENT_EMAIL = 'foo@foo.com'
 
 
-FIELD_FILTER = schema_fields.FieldFilter(
-    type_names=['string', 'html', 'url'],
-    hidden_values=[False],
-    i18n_values=[None, True],
-    editable_values=[True])
-
-
 def _filter(binding):
     """Filter out translatable strings."""
-    return FIELD_FILTER.filter_value_to_type_binding(binding)
+    return i18n_dashboard.TRANSLATABLE_FIELDS_FILTER.\
+        filter_value_to_type_binding(binding)
 
 
 class I18NCourseSettingsTests(actions.TestBase):
@@ -91,16 +86,16 @@ class I18NCourseSettingsTests(actions.TestBase):
         binding = schema_fields.ValueToTypeBinding.bind_entity_to_schema(
             self.course_yaml, self.schema)
 
-        expected_unmapped = [
+        expected_unmapped = set([
             'html_hooks:preview:after_main_content_ends',
             'html_hooks:preview:after_top_content_ends',
             'html_hooks:unit:after_content_begins',
             'html_hooks:unit:after_leftnav_begins',
             'html_hooks:unit:before_content_ends',
             'html_hooks:unit:before_leftnav_ends',
-            'reg_form:allowlist',
-          ]
-        self.assertEqual(expected_unmapped, sorted(binding.unmapped_names))
+            'reg_form:whitelist',
+          ])
+        assert expected_unmapped.issubset(set(binding.unmapped_names))
         self.assertEqual(len(binding.name_to_field), len(binding.name_to_value))
 
         value = binding.find_value('test:i18n_test')
@@ -115,12 +110,10 @@ class I18NCourseSettingsTests(actions.TestBase):
         self.assertEqual('Power Searching with Google', value.value)
         self.assertEqual(binding.name_to_field['course:title'], value.field)
 
-        forum_url_field = binding.find_field('course:forum_url')
-        self.assertEquals('string', forum_url_field.type)
+        forum_email_field = binding.find_field('course:forum_email')
+        self.assertEquals('string', forum_email_field.type)
         blurb_field = binding.find_field('course:blurb')
         self.assertEquals('html', blurb_field.type)
-        now_avail_field = binding.find_field('course:now_available')
-        self.assertEquals('boolean', now_avail_field.type)
 
     def test_extract_translatable_fields(self):
         binding = schema_fields.ValueToTypeBinding.bind_entity_to_schema(
@@ -172,7 +165,7 @@ class I18NCourseSettingsTests(actions.TestBase):
         self.assertEqual('POWER SEARCHING WITH Google', mapping.target_value)
 
         mapping = xcontent.SourceToTargetMapping.find_mapping(
-            mappings, 'course:forum_url')
+            mappings, 'course:forum_email')
         self.assertEqual(
             mapping.verb, xcontent.SourceToTargetDiffMapping.VERB_NEW)
         self.assertEqual(None, mapping.target_value)

@@ -45,7 +45,7 @@ class AbstractScopedSingleton(object):
     """A singleton object bound to and managed by a container.
 
     This singleton stores its instance inside the container. When container is
-    wiped, the singleton instance is garbage collected and  destroyed. You can
+    wiped, the singleton instance is garbage collected and destroyed. You can
     use a dict as a container and then wipe it yourself. You can use
     threading.local as a container and it will be wiped automatically when
     thread exits.
@@ -81,7 +81,7 @@ class AbstractScopedSingleton(object):
             if _now != _before:
                 raise AssertionError(
                     'Singleton initiated with %s already exists. '
-                    'Failed to re-initialized it with %s.' % (_before, _now))
+                    'Failed to re-initialize it with %s.' % (_before, _now))
         return _instance
 
     @classmethod
@@ -91,6 +91,15 @@ class AbstractScopedSingleton(object):
             for _instance in list(cls._instances().values()):
                 _instance.clear()
             del cls.CONTAINER['instances']
+
+    @classmethod
+    def clear_instance(cls):
+        """Destroys the instance of this cls."""
+        appengine_config.log_appstats_event(
+            '%s.destroy' % cls.__name__, {})
+        _instance = cls._instances().get(cls)
+        if _instance:
+            del cls._instances()[cls]
 
     def clear(self):
         """Destroys this object and its content."""
@@ -371,7 +380,7 @@ class AbstractCacheConnection(object):
         will continue to serve deleted objects until they expire.
 
         Returns:
-          an dict of {key: update} objects that represent recent updates
+          a dict of {key: update} objects that represent recent updates
         """
         has_items, updated_on = self._get_most_recent_updated_on()
         if not has_items:

@@ -46,21 +46,20 @@ from models import courses
 from models import custom_modules
 from models import data_sources
 from models import jobs
-from models import roles
+from models import services
 from models import transforms
+from modules.courses import settings
 from modules.dashboard import dashboard
-from modules.dashboard import tabs
+from modules.data_pump import messages
 
 from google.appengine.ext import db
 from google.appengine.ext import deferred
 
 # CourseBuilder setup strings
-XSRF_ACTION_NAME = 'data_pump'
-DASHBOARD_ACTION = 'data_pump'
-
-# Separate permission to be able to push user data delegable to non-super-users
-ACCESS_PERMISSION = 'push_data'
-ACCESS_PERMISSION_DESCRIPTION = 'Can push user data outside CourseBuilder.'
+MODULE_NAME = 'data_pump'
+XSRF_ACTION_NAME = MODULE_NAME
+DASHBOARD_ACTION = MODULE_NAME
+MODULE_TITLE = 'Data pump'
 
 # Connection parameters for discovering and auth to BigQuery.
 BIGQUERY_RW_SCOPE = 'https://www.googleapis.com/auth/bigquery'
@@ -94,7 +93,7 @@ ITEMS_UPLOADED = 'items_uploaded'
 PII_SECRET = 'pii_secret'
 
 # Constants for items within course settings schema
-DATA_PUMP_SETTINGS_SCHEMA_SECTION = 'data_pump'
+DATA_PUMP_SETTINGS_SCHEMA_SECTION = MODULE_NAME
 PROJECT_ID = 'project_id'
 DATASET_NAME = 'dataset_name'
 JSON_KEY = 'json_key'
@@ -159,7 +158,7 @@ class DataPumpJob(jobs.DurableJobBase):
         deferred.defer(self.main, sequence_num)
         return sequence_num
 
-    def _mark_job_canceled(self, job, message, duration):
+    def _mark_job_canceled(self, job, message):
         """Override default behavior of setting job.output to error string."""
 
         if job.output:
@@ -242,7 +241,7 @@ class DataPumpJob(jobs.DurableJobBase):
             data_source_context)
 
         # Set job object state variables.
-        now = datetime.datetime.now()
+        now = datetime.datetime.utcnow()
         job.output = transforms.dumps({
             'job_context': job_context,
             'data_source_context': data_source_context_dict,
@@ -260,12 +259,10 @@ class DataPumpJob(jobs.DurableJobBase):
             xg_on = db.create_transaction_options(xg=True)
             db.run_in_transaction_options(
                 xg_on, jobs.DurableJobEntity._update, self._job_name,
-                sequence_num, job.status_code, job.output,
-                job.execution_time_sec)
+                sequence_num, job.status_code, job.output)
         else:
             jobs.DurableJobEntity._update(self._job_name, sequence_num,
-                                          job.status_code, job.output,
-                                          job.execution_time_sec)
+                                          job.status_code, job.output)
 
     @classmethod
     def _parse_pii_encryption_token(cls, token):
@@ -278,7 +275,7 @@ class DataPumpJob(jobs.DurableJobBase):
     def _is_pii_encryption_token_valid(cls, token):
         try:
             _, valid_until_date = cls._parse_pii_encryption_token(token)
-            return valid_until_date > datetime.datetime.now()
+            return valid_until_date > datetime.datetime.utcnow()
         except ValueError:
             return False
 
@@ -289,7 +286,7 @@ class DataPumpJob(jobs.DurableJobBase):
         table_lifetime_seconds = common_utils.parse_timedelta_string(
             timedelta_string).total_seconds()
         unix_epoch = datetime.datetime(year=1970, month=1, day=1)
-        now = datetime.datetime.now()
+        now = datetime.datetime.utcnow()
         table_lifetime_timedelta = datetime.timedelta(
             seconds=table_lifetime_seconds)
         valid_until_timestamp = int(
@@ -635,7 +632,7 @@ class DataPumpJob(jobs.DurableJobBase):
 
     def _note_retryable_failure(self, message, job_context):
         """Log a timestamped message into the job context object."""
-        timestamp = datetime.datetime.now().strftime(
+        timestamp = datetime.datetime.utcnow().strftime(
             utils.HUMAN_READABLE_DATETIME_FORMAT)
         job_context[CONSECUTIVE_FAILURES].append(timestamp + ' ' + message)
 
@@ -993,7 +990,7 @@ class DataPumpJob(jobs.DurableJobBase):
             if job.has_finished:
                 duration = job.execution_time_sec
             else:
-                duration = int((datetime.datetime.now() -
+                duration = int((datetime.datetime.utcnow() -
                                 job.updated_on) .total_seconds())
             ret['duration'] = datetime.timedelta(days=0, seconds=duration)
             ret['last_updated'] = job.updated_on.strftime(
@@ -1070,8 +1067,7 @@ class DataPumpJobsDataSource(data_sources.SynchronousQuery):
             crypto.XsrfTokenManager.create_xsrf_token(XSRF_ACTION_NAME))
         template_values['exit_url'] = urllib.urlencode({
             'exit_url': 'dashboard?%s' % urllib.urlencode({
-                'action': 'analytics',
-                'tab': 'data_pump'})})
+                'action': DASHBOARD_ACTION})})
         source_classes = [
           ds for ds in data_sources.Registry.get_rest_data_source_classes()
           if ds.exportable()]
@@ -1105,35 +1101,27 @@ class DashboardExtension(object):
 
     @classmethod
     def register(cls):
-        # Register new permission for pushing student data to external location.
-        dashboard.DashboardHandler.add_external_permission(
-            ACCESS_PERMISSION, ACCESS_PERMISSION_DESCRIPTION)
-
         # Register a new Analytics sub-tab for showing data pump status and
         # start/stop buttons.
         data_pump_visualization = analytics.Visualization(
-            'data_pumps', 'Data Pumps', 'data_pump.html',
+            MODULE_NAME, MODULE_TITLE, 'data_pump.html',
             data_source_classes=[DataPumpJobsDataSource])
-        tabs.Registry.register('analytics', 'data_pump', 'Data Pump',
-                               [data_pump_visualization])
+        dashboard.DashboardHandler.add_sub_nav_mapping(
+            'analytics', MODULE_NAME, MODULE_TITLE,
+            action=DASHBOARD_ACTION,
+            contents=analytics.TabRenderer([data_pump_visualization]),
+            placement=1000, sub_group_name=MODULE_NAME)
 
         def post_action(handler):
             cls(handler).post_data_pump()
         dashboard.DashboardHandler.post_actions.append(DASHBOARD_ACTION)
         setattr(dashboard.DashboardHandler, 'post_%s' % DASHBOARD_ACTION,
                 post_action)
-        dashboard.DashboardHandler.map_action_to_permission(
-            'post_%s' % DASHBOARD_ACTION, ACCESS_PERMISSION)
 
     @classmethod
     def unregister(cls):
         dashboard.DashboardHandler.post_actions.remove(DASHBOARD_ACTION)
         setattr(dashboard.DashboardHandler, 'post_%s' % DASHBOARD_ACTION, None)
-        dashboard.DashboardHandler.unmap_action_to_permission(
-            'post_%s' % DASHBOARD_ACTION, ACCESS_PERMISSION)
-
-        dashboard.DashboardHandler.remove_external_permission(ACCESS_PERMISSION)
-        roles.Roles.unregister_permissions(custom_module)
 
     def post_data_pump(self):
         source_name = self.handler.request.get('data_source')
@@ -1155,7 +1143,7 @@ class DashboardExtension(object):
                 for generator_class in data_source_class.required_generators():
                     generator_class(self.handler.app_context).cancel()
         self.handler.redirect(self.handler.get_action_url(
-            'analytics', extra_args={'tab': 'data_pump'}, fragment=source_name))
+            DASHBOARD_ACTION, fragment=source_name))
 
     def __init__(self, handler):
         self.handler = handler
@@ -1173,18 +1161,15 @@ def register_module():
                 'or dashes. IDs must start with a letter and may not end '
                 'with a dash.')
 
+    _project_id_name = DATA_PUMP_SETTINGS_SCHEMA_SECTION + ':' + PROJECT_ID
     project_id = schema_fields.SchemaField(
-        DATA_PUMP_SETTINGS_SCHEMA_SECTION + ':' + PROJECT_ID,
-        'Project ID', 'string', validator=validate_project_id,
-        description='The ID (not the name!) of the Project to which to '
-        'send data.  See the list of projects and their IDs at '
-        'https://console.developers.google.com/project',
-        i18n=False)
+        _project_id_name, 'Project ID', 'string',
+        description=services.help_urls.make_learn_more_message(
+            messages.PROJECT_ID, _project_id_name), i18n=False,
+        validator=validate_project_id)
     dataset_name = schema_fields.SchemaField(
         DATA_PUMP_SETTINGS_SCHEMA_SECTION + ':' + DATASET_NAME,
-        'Dataset Name', 'string',
-        description='Name of the BigQuery dataset to which to pump tables.  '
-        'If not set, this will default to the name of the course.',
+        'Dataset Name', 'string', description=messages.DATASET_NAME,
         optional=True, i18n=False)
 
     def validate_json_key(json_key, errors):
@@ -1209,15 +1194,12 @@ def register_module():
                 'pasting in the JSON version, not the .p12 (PKCS12) file.' +
                 str(ex))
 
+    _json_key_name = DATA_PUMP_SETTINGS_SCHEMA_SECTION + ':' + JSON_KEY
     json_key = schema_fields.SchemaField(
-        DATA_PUMP_SETTINGS_SCHEMA_SECTION + ':' + JSON_KEY,
-        'JSON Key', 'text',
-        i18n=False, validator=validate_json_key,
-        description='Contents of a JSON key created in the Developers Console '
-        'for the instance where BigQuery is to be run.  See '
-        # TODO(mgainer): Get CB location of instructions to get client key
-        # for destination application.
-        'the instructions at ')
+        _json_key_name, 'JSON Key', 'text',
+        description=services.help_urls.make_learn_more_message(
+            messages.JSON_KEY, _json_key_name), i18n=False,
+        validator=validate_json_key)
 
     def validate_table_lifetime(value, errors):
         if not value:
@@ -1229,34 +1211,21 @@ def register_module():
                 'has some problems; please check the instructions below '
                 'the field for instructions on accepted formats.')
 
+    _table_lifetime_name = (
+        DATA_PUMP_SETTINGS_SCHEMA_SECTION + ':' + TABLE_LIFETIME)
     table_lifetime = schema_fields.SchemaField(
-        DATA_PUMP_SETTINGS_SCHEMA_SECTION + ':' + TABLE_LIFETIME,
-        'Table Lifetime', 'string',
-        optional=True, i18n=False,
-        validator=validate_table_lifetime,
-        description='Amount of time a table pushed to BigQuery will last.  '
-        'After this amount of time, the table will be automatically deleted.  '
-        '(This is useful if your data retention or privacy policy mandates  '
-        'a limited time for analysis after which personal data must be '
-        'removed.)  Leaving this field blank will use the default value '
-        'of "' + PII_SECRET_DEFAULT_LIFETIME + '".  Supported units are: '
-        '"weeks", "days", "hours", "minutes", "seconds".  Units may be '
-        'specified as their first letter, singular, or plural.  Spaces '
-        'and commas may be used or omitted.  E.g., both of the following '
-        'are equivalent: "3w1d7h", "3 weeks, 1 day, 7 hours"')
+        _table_lifetime_name, 'Table Lifetime', 'string', optional=True,
+        i18n=False, validator=validate_table_lifetime,
+        description=services.help_urls.make_learn_more_message(
+            messages.TABLE_LIFETIME, _table_lifetime_name))
 
+    _pii_encryption_token_name = (
+        DATA_PUMP_SETTINGS_SCHEMA_SECTION + ':' + PII_ENCRYPTION_TOKEN)
     pii_encryption_token = schema_fields.SchemaField(
-        DATA_PUMP_SETTINGS_SCHEMA_SECTION + ':' + PII_ENCRYPTION_TOKEN,
-        'PII Encryption Token', 'string',
+        _pii_encryption_token_name, 'PII Encryption Token', 'string',
         optional=True, i18n=False, editable=False,
-        description='Automatically generated encryption secret used to '
-        'obscure PII fields when these are pushed to BigQuery.  This '
-        'key lasts only as long as the Table Lifetime setting above, or '
-        '30 days if the limit is not set.  After this secret has expired, '
-        'a new secret will be generated.  PII items with the same un-obscured '
-        'value which are obscured with different values for this secret will '
-        'have different values.  Most importantly, this means that joins on '
-        'fields that should be the same (e.g., user ID) will not work.')
+        description=services.help_urls.make_learn_more_message(
+            messages.PII_ENCRYPTION_TOKEN, _pii_encryption_token_name))
 
     course_settings_fields = (
         lambda c: project_id,
@@ -1270,8 +1239,8 @@ def register_module():
         data_sources.Registry.register(DataPumpJobsDataSource)
         courses.Course.OPTIONS_SCHEMA_PROVIDERS[
             DATA_PUMP_SETTINGS_SCHEMA_SECTION] += course_settings_fields
-        tabs.Registry.register('settings', 'data_pump', 'Data Pump',
-                               DATA_PUMP_SETTINGS_SCHEMA_SECTION)
+        settings.CourseSettingsHandler.register_settings_section(
+            DATA_PUMP_SETTINGS_SCHEMA_SECTION)
         DashboardExtension.register()
 
     def on_module_disabled():
@@ -1282,7 +1251,7 @@ def register_module():
 
     global custom_module  # pylint: disable=global-statement
     custom_module = custom_modules.Module(
-        'Data Pump', 'Pushes DB and generated content to a BigQuery project',
+        MODULE_TITLE, 'Pushes DB and generated content to a BigQuery project',
         [], [],
         notify_module_enabled=on_module_enabled,
         notify_module_disabled=on_module_disabled)

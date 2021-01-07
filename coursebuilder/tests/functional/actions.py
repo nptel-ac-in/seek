@@ -24,23 +24,26 @@ import re
 import urllib
 from xml.etree import cElementTree
 
+import bs4
 import html5lib
 
 import appengine_config
+from common import users
 from controllers import sites
 from controllers import utils
 import main
 from models import config
 from models import courses
+from models import course_list
 from models import custom_modules
+from models import permissions
 from models import transforms
 from models import vfs
 from tests import suite
 
 from google.appengine.api import memcache
 from google.appengine.api import namespace_manager
-from google.appengine.api import users
-
+from google.appengine.ext.testbed import datastore_stub_util
 
 # All URLs referred to from all the pages.
 UNIQUE_URLS_FOUND = {}
@@ -59,10 +62,6 @@ UNIT_HOOK_POINTS = [
     '<!-- unit.before_leftnav_ends -->',
     '<!-- unit.after_content_begins -->',
     '<!-- unit.before_content_ends -->']
-
-PREVIEW_HOOK_POINTS = [
-    '<!-- preview.after_top_content_ends -->',
-    '<!-- preview.after_main_content_ends -->']
 
 
 class MockAppContext(object):
@@ -157,46 +156,70 @@ class OverriddenConfig(object):
             config.Registry.test_overrides[self._name] = self._prev_value
 
 
-class PreserveOsEnvironDebugMode(object):
-    """Saves and restores os.environ['SERVER_SOFTWARE'] to retain debug mode.
+class OverriddenSchemaPermission(permissions.SimpleSchemaPermission):
+    """Bind read/write permissions to a single email address for testing.
 
-    TODO(mgainer): This can be removed once auto-backup CL is committed.
-    (That CL has a change to separate out the importation of tools.etl.remote
-    so that that module is included only in production)
+    Using this class does not require construction and registering
+    permissions and roles, just an email address.  This is useful when what
+    you're testing is not the permissions/roles setup, but page appearance due
+    to presence/absence of read/edit authority on one or more properties.
 
-    When certain libraries are loaded (specifically the remote access API as
-    used by tools/etl/etl.py), the os.environ variable SERVER_SOFTWARE is
-    modified from a value that indicates a development/unit-test environment
-    to a value that indicates a production environment.  This class is meant
-    to wrap calls to etl.main() so that this value is saved and restored so
-    that the call to etl.main() does not affect the calling test or subsequent
-    tests using the same environment.  This is particularly a problem for
-    tests which also use map/reduce.  The cloud storage API relies on the
-    value of this environment variable to determine whether to try to contact
-    production servers in Borg or to run locally.
-
-    Usage:
+    This class also supports Python's context-manager idiom, and so this
+    class can be used in a "with" statement, as:
 
     def test_foo(self):
-        do_some_stuff()
-        with PreserveOsEnvironDebugMode():
-           etl.main( ..... args ..... )
-        self.execute_all_deferred_tasks()
+        with OverriddenSchemaPermission(
+            'fake_course_perm', constants.SCOPE_COURSE_SETTINGS, 'foo@bar.com',
+            editable_perms=['course/course:now_available']):
+
+            actions.login('foo@bar.com')
+            response = self.get('dashboard?action=outline')
+            .... verify dashboard UI when user may edit course availability...
+
+            actions.login('not-foo@bar.com')
+            response = self.get('dashboard?action=outline')
+            .... verify dashboard UI when course availability not editable...
+
     """
 
-    def __init__(self):
-        self._save_mode = None
+    def __init__(self, permission_name, scope, email_address,
+                 readable_perms=None, editable_perms=None):
+        super(OverriddenSchemaPermission, self).__init__(
+            None, permission_name, readable_list=readable_perms,
+            editable_list=editable_perms)
+        self._scope = scope
+        self._email_address = email_address
+
+    def applies_to_current_user(self, unused_app_context):
+        return users.get_current_user().email() == self._email_address
 
     def __enter__(self):
-        self._save_mode = os.environ.get('SERVER_SOFTWARE')
+        permissions.SchemaPermissionRegistry.add(self._scope, self)
         return self
 
     def __exit__(self, *unused_exception_info):
-        if self._save_mode is None:
-            if 'SERVER_SOFTWARE' in os.environ:
-                del os.environ['SERVER_SOFTWARE']
-        else:
-            os.environ['SERVER_SOFTWARE'] = self._save_mode
+        permissions.SchemaPermissionRegistry.remove(self._scope,
+                                                    self._permission_name)
+        return False
+
+
+class PreserveUser(object):
+
+    def __enter__(self):
+        self._user_email = os.environ.get('USER_EMAIL')
+        self._user_id = os.environ.get('USER_ID')
+        self._user_is_admin = os.environ.get('USER_IS_ADMIN')
+        return self
+
+    def __exit__(self, *unused_exception_info):
+        if self._user_email:
+            os.environ['USER_EMAIL'] = self._user_email
+        elif 'USER_EMAIL' in os.environ:
+            del os.environ['USER_EMAIL']
+        elif 'USER_ID' in os.environ:
+            del os.environ['USER_ID']
+        elif 'USER_IS_ADMIN' in os.environ:
+            del os.environ['USER_IS_ADMIN']
 
 
 class TestBase(suite.AppEngineTestBase):
@@ -220,8 +243,12 @@ class TestBase(suite.AppEngineTestBase):
     def setUp(self):
         super(TestBase, self).setUp()
 
+        self.test_mode_value = os.environ.get('GCB_TEST_MODE', None)
+        os.environ['GCB_TEST_MODE'] = 'true'
+
         memcache.flush_all()
         sites.ApplicationContext.clear_per_process_cache()
+        courses.Course.clear_current()
 
         self.auto_deploy = sites.ApplicationContext.AUTO_DEPLOY_DEFAULT_COURSE
         sites.ApplicationContext.AUTO_DEPLOY_DEFAULT_COURSE = (
@@ -237,6 +264,12 @@ class TestBase(suite.AppEngineTestBase):
     def tearDown(self):
         self.assert_default_namespace()
         sites.ApplicationContext.AUTO_DEPLOY_DEFAULT_COURSE = self.auto_deploy
+
+        if self.test_mode_value is None:
+            del os.environ['GCB_TEST_MODE']
+        else:
+            os.environ['GCB_TEST_MODE'] = self.test_mode_value
+
         super(TestBase, self).tearDown()
 
     def canonicalize(self, href, response=None):
@@ -281,7 +314,7 @@ class TestBase(suite.AppEngineTestBase):
         srcs = re.findall(r'src=[\'"]?([^\'" >]+)', response.body)
         for url in hrefs + srcs:
             # We expect all internal URLs to be relative: 'asset/css/main.css',
-            # and use <base> tag. All others URLs must be allowlisted below.
+            # and use <base> tag. All others URLs must be whitelisted below.
             if url.startswith('/'):
                 absolute = url.startswith('//')
                 root = url == '/'
@@ -307,7 +340,8 @@ class TestBase(suite.AppEngineTestBase):
 
         return False
 
-    def parse_html_string(self, html_str):
+    @classmethod
+    def parse_html_string(cls, html_str):
         """Parse the given HTML string to a XML DOM tree.
 
         Args:
@@ -320,6 +354,10 @@ class TestBase(suite.AppEngineTestBase):
             tree=html5lib.treebuilders.getTreeBuilder('etree', cElementTree),
             namespaceHTMLElements=False)
         return parser.parse(html_str)
+
+    @classmethod
+    def parse_html_string_to_soup(cls, html_str):
+        return bs4.BeautifulSoup(html_str)
 
     def execute_all_deferred_tasks(self, queue_name='default',
                                    iteration_limit=None):
@@ -351,11 +389,12 @@ class TestBase(suite.AppEngineTestBase):
         response = self.testapp.get(url, **kwargs)
         return self.hook_response(response)
 
-    def post(self, url, params, expect_errors=False, upload_files=None):
+    def post(self, url, params, expect_errors=False, upload_files=None,
+             **kwargs):
         url = self.canonicalize(url)
         logging.info('HTTP Post: %s', url)
         response = self.testapp.post(url, params, expect_errors=expect_errors,
-                                     upload_files=upload_files)
+                                     upload_files=upload_files, **kwargs)
         return self.hook_response(response)
 
     def put(self, url, params, expect_errors=False):
@@ -396,8 +435,8 @@ class ExportTestBase(TestBase):
     safe_key, you probably want to test them with this TestCase.
     """
 
-    def assert_denylisted_properties_removed(self, original_model, exported):
-        for prop in original_model._get_export_denylist():
+    def assert_blacklisted_properties_removed(self, original_model, exported):
+        for prop in original_model._get_export_blacklist():
             self.assertFalse(hasattr(exported, prop))
 
     def transform(self, value):
@@ -495,14 +534,19 @@ def get_form_by_action(response, action):
 
 
 def login(email, is_admin=False):
+    assert email
+    # Encode email to generate a bogus user ID using the same algorithm the
+    # App Engine internals use for the dev server when creating fake IDs.
+    user_id = datastore_stub_util.SynthesizeUserId(email)
+    return login_with_specified_user_id(email, user_id, is_admin=is_admin)
+
+def login_with_specified_user_id(email, user_id, is_admin=False):
+    assert email
+    assert user_id
     os.environ['USER_EMAIL'] = email
-    os.environ['USER_ID'] = email
-
-    is_admin_value = '0'
-    if is_admin:
-        is_admin_value = '1'
-    os.environ['USER_IS_ADMIN'] = is_admin_value
-
+    os.environ['USER_ID'] = user_id
+    os.environ['USER_IS_ADMIN'] = '1' if is_admin else '0'
+    return users.get_current_user()
 
 def get_current_user_email():
     email = os.environ['USER_EMAIL']
@@ -512,9 +556,12 @@ def get_current_user_email():
 
 
 def logout():
-    del os.environ['USER_EMAIL']
-    del os.environ['USER_ID']
-    del os.environ['USER_IS_ADMIN']
+    if 'USER_EMAIL' in os.environ:
+        del os.environ['USER_EMAIL']
+    if 'USER_ID' in os.environ:
+        del os.environ['USER_ID']
+    if 'USER_IS_ADMIN' in os.environ:
+        del os.environ['USER_IS_ADMIN']
 
 
 def in_course(course, url):
@@ -529,6 +576,17 @@ def register(browser, name, course=None):
     response = view_registration(browser, course)
     register_form = get_form_by_action(response, 'register')
     register_form.set('form01', name)
+    register_form.set('mobile_number', '9945244496')
+    register_form.set('age_group', '20-30')
+    register_form.set('country_of_residence', 'IN')
+    register_form.set('profession', 'other')
+    register_form['state_of_residence'].force_value('Kerala')
+    register_form['city_of_residence'].force_value('Kochi')
+    register_form['college'].force_value('NIT')
+    register_form['local_chapter_college'].force_value('other')
+    register_form['graduationyear'].force_value("1990")
+    register_form.set('terms', True)
+    register_form.set('honor_code', True)
     response = browser.submit(register_form, response)
 
     assert_equals(response.status_int, 302)
@@ -549,17 +607,16 @@ def check_profile(browser, name, course=None):
 def view_registration(browser, course=None):
     response = browser.get(in_course(course, 'register'))
     check_personalization(browser, response)
-    assert_contains('What is your name?', response.body)
-    assert_contains_all_of([
-        '<!-- reg_form.additional_registration_fields -->'], response.body)
+    assert_contains('Name', response.body)
+
+    #TODO We have removed additional_registration_fields display in NPTEL Version
+    # assert_contains_all_of([
+    #     '<!-- reg_form.additional_registration_fields -->'], response.body)
     return response
 
 
 def register_with_additional_fields(browser, name, data2, data3):
     """Registers a new student with customized registration form."""
-
-    response = browser.get('/')
-    assert_equals(response.status_int, 302)
 
     response = view_registration(browser)
 
@@ -601,34 +658,17 @@ def check_personalization(browser, response):
         check_logout_link(response.body)
 
 
-def view_preview(browser):
-    """Views /preview page."""
-    response = browser.get('preview')
-    assert_contains(' the stakes are high.', response.body)
-    assert_contains(
-        '<li class=\'\'><p class="gcb-top-content"> '
-        '<span class="gcb-progress-none"></span> '
-        'Pre-course assessment </p> </li>',
-        response.body, collapse_whitespace=True)
-
-    assert_contains_none_of(UNIT_HOOK_POINTS, response.body)
-    assert_contains_all_of(PREVIEW_HOOK_POINTS, response.body)
-
-    return response
-
-
 def view_course(browser):
     """Views /course page."""
     response = browser.get('course')
 
     assert_contains(' the stakes are high.', response.body)
-    assert_contains('<a href="assessment?name=Pre">Pre-course assessment</a>',
-                    response.body)
+    assert_contains('<a href="assessment?name=Pre"> Pre-course assessment </a>',
+                    response.body, collapse_whitespace=True)
     check_personalization(browser, response)
 
     assert_contains_all_of(BASE_HOOK_POINTS, response.body)
     assert_contains_none_of(UNIT_HOOK_POINTS, response.body)
-    assert_contains_none_of(PREVIEW_HOOK_POINTS, response.body)
 
     return response
 
@@ -640,12 +680,12 @@ def view_unit(browser):
     assert_contains('Unit 1 - Introduction', response.body)
     assert_contains('1.3 How search works', response.body)
     assert_contains('1.6 Finding text on a web page', response.body)
-    assert_contains('https://www.youtube.com/embed/1ppwmxidyIE', response.body)
+    assert_contains(
+        '<script>gcbTagYoutubeEnqueueVideo("1ppwmxidyIE", ', response.body)
     check_personalization(browser, response)
 
     assert_contains_all_of(BASE_HOOK_POINTS, response.body)
     assert_contains_all_of(UNIT_HOOK_POINTS, response.body)
-    assert_contains_none_of(PREVIEW_HOOK_POINTS, response.body)
 
     return response
 
@@ -902,12 +942,12 @@ class Permissions(object):
     @classmethod
     def get_nonbrowsable_pages(cls):
         """Returns all non-browsable pages."""
-        return [view_preview, view_my_profile, view_registration]
+        return [view_my_profile, view_registration]
 
     @classmethod
     def get_logged_out_allowed_pages(cls):
         """Returns all pages that a logged-out user can see."""
-        return [view_announcements, view_preview]
+        return [view_announcements]
 
     @classmethod
     def get_logged_out_denied_pages(cls):
@@ -924,12 +964,12 @@ class Permissions(object):
     @classmethod
     def get_enrolled_student_denied_pages(cls):
         """Returns all pages that a logged-in, enrolled student can't see."""
-        return [view_registration, view_preview]
+        return [view_registration]
 
     @classmethod
     def get_unenrolled_student_allowed_pages(cls):
         """Returns all pages that a logged-in, unenrolled student can see."""
-        return [view_announcements, view_registration, view_preview]
+        return [view_announcements, view_registration]
 
     @classmethod
     def get_unenrolled_student_denied_pages(cls):
@@ -986,6 +1026,9 @@ def update_course_config(name, settings):
     slug = '/%s' % name
     rule = '%s:%s::%s' % (site_type, slug, namespace)
 
+    course_list.CourseListDAO.add_new_course(namespace=namespace,path='/%s' % name,
+        course_admin_email= None, title=name, errors=[])
+
     context = sites.get_all_courses(rule)[0]
     environ = courses.deep_dict_merge(settings,
                                       courses.Course.get_environ(context))
@@ -1002,21 +1045,9 @@ def update_course_config(name, settings):
 def update_course_config_as_admin(name, admin_email, settings):
     """Log in as admin and merge settings into course.yaml."""
 
-    prev_user = users.get_current_user()
-    if not prev_user:
+    with PreserveUser():
         login(admin_email, is_admin=True)
-    elif prev_user.email() != admin_email:
-        logout()
-        login(admin_email, is_admin=True)
-
-    ret = update_course_config(name, settings)
-
-    if not prev_user:
-        logout()
-    elif prev_user and prev_user.email() != admin_email:
-        logout()
-        login(prev_user.email())
-    return ret
+        return update_course_config(name, settings)
 
 
 def simple_add_course(name, admin_email, title):
@@ -1031,3 +1062,24 @@ def simple_add_course(name, admin_email, title):
                 'browsable': True,
                 },
             })
+
+
+class CourseOutlineTest(TestBase):
+    def assertAvailabilityState(self, element, available=None, active=None):
+        """Check the state of a lock icon"""
+        if available is True:
+            self.assertIn('public', element.get('class'))
+            self.assertNotIn('private', element.get('class'))
+        elif available is False:
+            self.assertNotIn('public', element.get('class'))
+            self.assertIn('private', element.get('class'))
+
+        if active is True:
+            self.assertNotIn('inactive', element.get('class'))
+        elif active is False:
+            self.assertIn('inactive', element.get('class'))
+
+    def assertEditabilityState(self, element, editable):
+        self.assertIsNotNone(element)
+        count = 1 if editable else 0
+        self.assertEquals(len(element.select('a')), count)

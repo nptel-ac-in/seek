@@ -21,6 +21,7 @@ from common import utils
 from models.models import RoleDAO
 from models.roles import Roles
 from modules.dashboard import dto_editor
+import messages
 
 
 class RoleManagerAndEditor(dto_editor.BaseDatastoreAssetEditor):
@@ -31,15 +32,17 @@ class RoleManagerAndEditor(dto_editor.BaseDatastoreAssetEditor):
         template_values['page_title'] = self.format_title('Edit Role')
         template_values['main_content'] = self.get_form(
             RoleRESTHandler, key,
-            self.get_action_url('roles'))
+            self.get_action_url('edit_roles'))
         return template_values
 
     def get_add_role(self):
-        self.render_page(self._prepare_template(''), 'roles')
+        self.render_page(
+            self._prepare_template(''), in_action='edit_roles')
 
     def get_edit_role(self):
         self.render_page(
-            self._prepare_template(self.request.get('key')), 'roles')
+            self._prepare_template(self.request.get('key')),
+            in_action='edit_roles')
 
 
 class RoleRESTHandler(dto_editor.BaseDatastoreRestHandler):
@@ -47,10 +50,9 @@ class RoleRESTHandler(dto_editor.BaseDatastoreRestHandler):
 
     URI = '/rest/role'
 
-    REQUIRED_MODULES = [
-        'inputex-hidden', 'inputex-string', 'inputex-checkbox',
-        'inputex-textarea', 'inputex-list', 'inputex-uneditable']
-    EXTRA_JS_FILES = ['resources/js/role_editor.js']
+    EXTRA_JS_FILES = ['role_editor.js']
+
+    EXTRA_CSS_FILES = ['role_editor.css']
 
     XSRF_TOKEN = 'role-edit'
 
@@ -74,11 +76,12 @@ class RoleRESTHandler(dto_editor.BaseDatastoreRestHandler):
         item_type.add_property(schema_fields.SchemaField(
             'description', 'Description', 'string', optional=True,
             editable=False,
-            extra_schema_dict_values={'className': 'inputEx-description'}))
+            extra_schema_dict_values={'className': 'permission-label'}))
 
         item_array = schema_fields.FieldArray(
             module_name, module_name, item_type=item_type,
-            extra_schema_dict_values={'className': 'permission-module'})
+            extra_schema_dict_values={'className': 'permission-module'},
+            optional=True)
 
         subschema.add_property(item_array)
 
@@ -91,12 +94,15 @@ class RoleRESTHandler(dto_editor.BaseDatastoreRestHandler):
         schema.add_property(schema_fields.SchemaField(
             'version', '', 'string', optional=True, hidden=True))
         schema.add_property(schema_fields.SchemaField(
-            'name', 'Name', 'string', optional=True))
+            'name', 'Name', 'string', optional=False,
+            description=messages.ROLE_NAME_DESCRIPTION))
         schema.add_property(schema_fields.SchemaField(
-            'description', 'Description', 'text', optional=True))
+            'description', 'Description', 'text', optional=True,
+            description=messages.ROLE_DESCRIPTION_DESCRIPTION))
         # TODO(gdejonghe) Use user.id instead of user.email
         schema.add_property(schema_fields.SchemaField(
-            'users', 'User Emails', 'text', optional=True))
+            'users', 'User Emails', 'text',
+            description=messages.ROLE_USER_EMAILS_DESCRIPTION))
 
         subschema = schema.add_sub_registry('modules', 'Permission Modules')
 
@@ -198,4 +204,5 @@ class RoleRESTHandler(dto_editor.BaseDatastoreRestHandler):
         return role_dict
 
     def after_save_hook(self):
-        Roles.update_permissions_map()
+        app_context = self.get_course().app_context
+        Roles.update_permissions_map(app_context)

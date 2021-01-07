@@ -1,0 +1,146 @@
+<dom-module id="announcement-page">
+  <template>
+    <style include="nptel-pwa-css"></style>
+    <style>
+      .item {
+        @apply --layout-horizontal;
+        padding: 20px;
+        background-color: white;
+        cursor: pointer;
+        margin-bottom: 10px;
+      }
+      .pad {
+        @apply --layout-flex;
+        @apply --layout-vertical);
+      }
+      .primary {
+        font-size: 16px;
+        font-weight: bold;
+      }
+      .longText {
+        font-size: 14px;
+      }
+      .longText {
+        padding-top: 10px;
+        /* color: gray; */
+        word-break: break-word;
+        display: none;
+      }
+      .cd-faq-trigger{
+        color : #a90909;
+        font-size: 16px;
+      }
+      .item.expanded .longText {
+        display: block;
+      }
+      .spacer {
+        @apply --layout-flex;
+      }
+
+    </style>
+      <app-route
+          route="{{route}}"
+          pattern="/:id"
+          data="{{acourseID}}"
+          tail="{{acourseData}}"
+          >
+      </app-route>
+      <paper-spinner-lite class="spinner" active alt="Loading content.."></paper-spinner-lite>
+        <div style="padding-top:10px;height:90%">
+          <iron-list id="list" items="[[data]]" as="item" selection-enabled multi-selection >
+          <template>
+            <div>
+              <div class$="[[getClassForItem(item, selected)]]" tabindex$="[[tabIndex]]">
+                <div class="pad">
+                  <div class="primary">[[item.title]]</div>
+                  <div class="longText" id="[[item.id]]">
+                  </div>
+                </div>
+                <iron-icon icon$="[[iconForItem(item,selected)]]"></iron-icon>
+              </div>
+            </div>
+          </template>
+        </iron-list>
+      </div>
+    </template>
+    <script>
+      /**
+       * @customElement
+       * @polymer
+       */
+      class AnnouncementPage extends Polymer.Element {
+        static get is() { return 'announcement-page'; }
+        static get properties() {
+          return {
+            data: {
+            type: Array,
+            value: []
+          },
+          header : {
+            type : String,
+            value : "FAQs",
+            notify : true
+          },
+          route : {
+            observer : '_isAnnouncementSelected'
+          },
+          enrolled : {
+            type : String,
+            value : false,
+            notify : true
+          },
+          };
+        }
+        iconForItem(item,selected) {
+          return selected ? 'expand-less' : 'expand-more'
+        }
+        getClassForItem(item, selected) {
+          var date = new Date(item.date);
+          var datefield = "<b>"+date.getDate()+"/"+date.getMonth()+"/"+date.getFullYear()+"</b><br/>"
+          Polymer.dom(this.root).querySelector("#"+item.id).innerHTML =datefield+item.html;
+          return selected ? 'item expanded' : 'item';
+        }
+        processResponse(payload){
+          if (payload)
+          {
+            var data = []
+            var i;
+            for (i=0;i<payload.announcements.length;i++)
+            {
+              var item = payload.announcements[i];
+              item.id = "a"+i;
+              data.push(item);
+            }
+            this.set('data',data);
+            this.enrolled = true;
+          }
+        }
+        _isAnnouncementSelected()
+        {
+            if (Polymer.dom(this.parentElement).node.selected == 'announcement')
+            {
+              var main=this; // to access "this" context in the anonymous function
+              this.header = "Announcements";
+              if(this.acourseID.id)
+              {
+                showSpinnerHideError(this);
+                fetch('/'+this.acourseID.id+'/m/announcement',{
+                  method: 'GET',
+                  credentials: 'include'
+                })
+                .then( obj => {
+                  validateResponse(main,obj);
+                })
+                .catch( obj =>{
+                  logError(obj);
+                });
+              }
+              else {
+                showErrorHideSpinner(this,"Course ID is missing in the URL");
+              }
+            }
+          }
+      }
+      window.customElements.define(AnnouncementPage.is, AnnouncementPage);
+    </script>
+</dom-module>

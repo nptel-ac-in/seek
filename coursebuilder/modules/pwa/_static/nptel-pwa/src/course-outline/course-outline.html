@@ -1,0 +1,125 @@
+
+<dom-module id="course-outline">
+  <template>
+    <style include="nptel-pwa-css"></style>
+      <app-route
+          route="{{route}}"
+          pattern="/:id"
+          data="{{outlineID}}"
+          tail="{{outlineData}}"
+          >
+      </app-route>
+        <paper-spinner-lite class="spinner" active alt="Loading content.."></paper-spinner-lite>
+        <template is="dom-repeat" items="[[_menuItems]]">
+          <paper-listbox>
+              <paper-item on-tap="showlessons" data-id$="[[item.unit.unit_id]]">[[item.unit.title]]<iron-icon style="margin-left:auto;" icon="icons:add"></iron-icon></paper-item>
+              <paper-listbox id="unit[[item.unit.unit_id]]" style="display:none;">
+                <template is="dom-repeat" items="[[item.lessons]]">
+                  <a href="#/lesson/[[outlineID.id]]/[[item.unit_id]]/[[item.lesson_id]]"><paper-item>[[item.title]]</paper-item></a>
+                </template>
+              </paper-listbox>
+          </paper-listbox>
+        </template>
+    </template>
+    <script>
+      /**
+       * @customElement
+       * @polymer
+       */
+      class CourseOutline extends Polymer.Element {
+        static get is() { return 'course-outline'; }
+        static get properties() {
+          return {
+            header :{
+              type : String,
+              value : "Course Outline",
+              notify : true
+            },
+            route : {
+              type: Boolean,
+              observer : '_isCourseOutlineSelected'
+            },
+            _menuItems : Array,
+            enrolled : {
+              type : String,
+              value : false,
+              notify : true
+            }
+          };
+        }
+        processResponse(payload){
+          if (payload && payload.order && payload.units && payload.lessons)
+            {
+              this._menuItems =[];
+              for (var i in payload.order)
+              {
+                var outline = {
+                  unit : null,
+                  lessons : []
+                }
+                if (payload.units[payload.order[i].id])
+                {
+                  var add = false;
+                  outline.unit=payload.units[payload.order[i].id];
+                  for (var j in payload.order[i].children)
+                  {
+                    if (payload.order[i].children[j].section == 'lesson')
+                    {
+                      var temp = payload.lessons[payload.order[i].children[j].id];
+                      if (temp !== void 0)
+                      {
+                        outline.lessons.push(temp);
+                        add = true;
+                      }
+                    }
+                  }
+                  if (add)
+                  this.push('_menuItems',outline);
+                }
+                this.enrolled = true;
+              }
+            }
+          }
+          _isCourseOutlineSelected()
+          {
+            if(this.outlineID)
+            {
+              if (Polymer.dom(this.parentElement).node.selected == 'courseoutline')
+              {
+                var main=this; // to access "this" context in the anonymous function
+                this.header = "Course Outline";
+                if(this.outlineID.id)
+                {
+                  showSpinnerHideError(this);
+                  fetch('/'+this.outlineID.id+'/m/courseoutline',{
+                    method: 'GET'
+                  })
+                  .then( obj => {
+                    validateResponse(main,obj);
+                  })
+                  .catch( obj =>{
+                    logError(obj);
+                  });
+                }
+                else {
+                  showErrorHideSpinner(this,"Course ID is missing in the URL");
+                }
+              }
+            }
+          }
+          showlessons(e)
+          {
+            var display = Polymer.dom(this.root).querySelector("#unit"+e.target.dataset.id);
+            if (display.style.display == 'none')
+            {
+              display.style.display = 'block';
+            }
+            else
+            {
+              display.style.display = 'none';
+            }
+          }
+        }
+      window.customElements.define(CourseOutline.is, CourseOutline);
+    </script>
+</dom-module>

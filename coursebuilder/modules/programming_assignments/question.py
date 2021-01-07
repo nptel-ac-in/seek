@@ -31,7 +31,7 @@ from controllers.utils import XsrfTokenManager
 from models import courses
 from models import roles
 from models import transforms
-from modules.dashboard import messages
+from models import messages
 from modules.oeditor import oeditor
 from modules.programming_assignments import base
 from modules.programming_assignments import evaluator
@@ -73,7 +73,7 @@ def create_prog_assignment_registry():
         'pa_id', 'PA_ID', 'string', editable=False,
         extra_schema_dict_values={'className': 'inputEx-Field keyHolder'},
         description='Unique id of the test cases in this assignment.'))
-    course_opts.add_property(SchemaField('parent_unit', 'Parent Unit', 'string', select_data=[]))
+    course_opts.add_property(SchemaField('parent_unit', 'Parent Unit', 'string', editable=False, select_data=[]))
     course_opts.add_property(
         SchemaField('type', 'Type', 'string', editable=False))
     course_opts.add_property(
@@ -108,8 +108,9 @@ def create_prog_assignment_registry():
 
     course_opts.add_property(
         SchemaField(workflow_key(courses.SUBMISSION_DUE_DATE_KEY),
-                    'Submission Due Date', 'string', optional=True,
-                    description=str(messages.DUE_DATE_FORMAT_DESCRIPTION)))
+                    'Submission Due Date', 'datetime', optional=False,
+                    description=messages.ASSESSMENT_DUE_DATE_FORMAT_DESCRIPTION,
+                    extra_schema_dict_values={'_type': 'datetime'}))
     course_opts.add_property(SchemaField(
         content_key('show_sample_solution'),
         'Show sample solution after deadline', 'boolean', optional=True,
@@ -214,6 +215,10 @@ class ProgAssignmentRESTHandler(BaseRESTHandler, base.ProgAssignment):
     SCHEMA_JSON = create_prog_assignment_registry().get_json_schema()
 
     @classmethod
+    def get_schema(cls, unused_handler):
+        return cls.registration()
+
+    @classmethod
     def registration(cls):
         return create_prog_assignment_registry()
 
@@ -247,11 +252,11 @@ class ProgAssignmentRESTHandler(BaseRESTHandler, base.ProgAssignment):
                 'allowed_languages', [])
 
         workflow = unit.workflow
+
         if workflow.get_submission_due_date():
-            submission_due_date = workflow.get_submission_due_date().strftime(
-                courses.ISO_8601_DATE_FORMAT)
+            submission_due_date = workflow.get_submission_due_date()
         else:
-            submission_due_date = ''
+            submission_due_date = None
 
         workflow_dict = dict()
         workflow_dict[courses.SUBMISSION_DUE_DATE_KEY] = submission_due_date
@@ -298,6 +303,15 @@ class ProgAssignmentRESTHandler(BaseRESTHandler, base.ProgAssignment):
         unit.html_check_answers = entity_dict.get('html_check_answers')
 
         workflow_dict = entity_dict.get('workflow')
+
+        # Convert the due date
+        # TODO(rthakker) since this code is being used in 3 places, move it
+        # somewhere reusable.
+        due_date = workflow_dict.get(courses.SUBMISSION_DUE_DATE_KEY)
+        if due_date:
+            workflow_dict[courses.SUBMISSION_DUE_DATE_KEY] = due_date.strftime(
+                courses.ISO_8601_DATE_FORMAT)
+
         workflow_dict[courses.GRADER_KEY] = courses.AUTO_GRADER
         unit.workflow_yaml = yaml.safe_dump(workflow_dict)
         unit.workflow.validate(errors=errors)
@@ -312,7 +326,7 @@ class ProgAssignmentRESTHandler(BaseRESTHandler, base.ProgAssignment):
         if not (test_run.ProgrammingAssignmentTestRun
                 .test_run(course, unit, entity_dict, errors)):
             errors.append('Saved, but could not compile and run.\n'
-                'For more details, go to /dashboard?action=programming_assignment_test_run\n'
+                'For more details, go to /dashboard?action=test_run\n'
                 'Please validate testcases and server settings')
 
     def get(self):

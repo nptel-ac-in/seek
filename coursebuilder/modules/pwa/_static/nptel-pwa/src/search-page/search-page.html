@@ -1,0 +1,275 @@
+
+<dom-module id="search-page">
+  <template>
+    <style include="nptel-pwa-css"></style>
+    <style>
+    input.search {
+      outline: 0;
+      width: 100%;
+      background-color: #FFF !important;
+      -webkit-appearance: none;
+      line-height: normal;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      font-size: 100%;
+      font: inherit;
+      vertical-align: baseline;
+    }
+
+    .toolbar {
+      padding: 0 16px;
+      height: 47px;
+      box-shadow: 0 0 4px rgba(0,0,0,0.3);
+      position: relative;
+      display: -webkit-flex;
+      display: flex;
+      -webkit-align-items: center;
+      align-items: center;
+    }
+    .search-bar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 0 16px;
+      background: #fff;
+      display: -webkit-flex;
+      display: flex;
+      -webkit-align-items: center;
+      align-items: center;
+      opacity: 1;
+      will-change: opacity;
+      -webkit-transition: opacity 0.1s ease-in-out;
+      transition: opacity 0.1s ease-in-out;
+    }
+    .search-results {
+      position: absolute;
+      left: 0;
+      right: 0;
+      border-top: 1px solid #ccc;
+      background: #fff;
+      color: #000;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+      z-index: 2;
+      -webkit-transition: opacity 0.1s ease-in-out;
+      transition: opacity 0.1s ease-in-out;
+    }
+    .search-result {
+      padding: 0 20px;
+    }
+    /* .search-result:hover {
+      box-shadow: 2px 2px 2px rgba(0,0,0,0.2);
+      background: #ba3a3a;
+      color: white;
+    } */
+    .item-list-item .title {
+        margin-top: 13px;
+    }
+    .item-list-item .description {
+      margin: 2px 0 13px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      font-size: 0.8rem;
+      opacity: 0.6;
+    }
+    ol{
+      padding: 0px;
+    }
+    </style>
+    <!-- <style include="nptel-pwa-css"></style> -->
+    <div class="toolbar">
+      <div class="search-bar">
+        <paper-icon-button on-tap="previousPage" icon="icons:arrow-back"></paper-icon-button>
+        <input type="text" id="search" class="search" on-input="searchCourses" placeholder="Search (Enter 3 characters)"></input>
+        <paper-icon-button on-tap="clearSearch" icon="icons:close"></paper-icon-button>
+      </div>
+    </div>
+    <div class="search-results" style="display:none;">
+      <ol>
+        <dom-repeat items="{{searchResult}}">
+          <template>
+            <li class="item-list-item search-result">
+              <a href="#/course[[item.slug]]">
+                <div class="title">{{item.title}}</div>
+                <!-- <div class="description">SDAS UAV is a Chinese UAV developed by Shandong Academy of Sciences (SDAS, 山东省科学院) specifically for pollution surveillance missions, and it has entered service with the local governmental environmental establishment, Shandong Environmental Protection Department (山东省环保厅) since June 2014.</div> -->
+              </a>
+            </li>
+          </template>
+        </dom-repeat>
+      </ol>
+    </div>
+
+    </template>
+    <script>
+      /**
+       * @customElement
+       * @polymer
+       */
+      class SearchPage extends Polymer.Element {
+        static get is() { return 'search-page'; }
+        static get properties() {
+          return {
+            courseList : Object,
+            searchResult : Object,
+            header : {
+              type : String,
+              value : "Search",
+              notify : true
+            },
+            route : {
+              observer : '_isSearchSelected'
+            },
+            enrolled : {
+              type : String,
+              value : false,
+              notify : true
+            },
+          };
+        }
+        previousPage(){
+          window.history.back();
+        }
+        clearSearch(){
+          Polymer.dom(this.root).querySelector("#search").value = "";
+          this.searchResult = "";
+          Polymer.dom(this.root).querySelector(".search-results").style.display = "none";
+        }
+        processResponse(payload){
+          if (payload.course_list)
+          {
+             this.courseList = payload.course_list;
+          }
+        }
+        validateResponse(response) {
+          if(response.ok)
+            {
+              var main= this;
+              response.text().then(obj => {
+                return this.processResponse(parseJSONP(main,obj));
+              });
+            }
+          else {
+              console.log(response);
+            }
+        }
+        searchCourses(){
+          var searchTerm = Polymer.dom(this.root).querySelector("#search").value.toLowerCase();
+          Polymer.dom(this.root).querySelector(".search-results").style.display = "block";
+          var output = [];
+          var item = [];
+          if (searchTerm.length < 3)
+          {
+            item.slug = "javascript: void(0)";
+            item.title = "Enter 3 or more characters";
+            output.push(item);
+          }
+          else {
+            var i;
+            for (i=0; i<this.courseList.length;i++) {
+              var curr = this.courseList[i];
+              if (curr.title && curr.title.toLowerCase().indexOf(searchTerm) > -1 )
+              {
+                output.push(curr);
+                continue;
+              }
+              if (curr.explorer_instructor_name && curr.explorer_instructor_name.toLowerCase().indexOf(searchTerm) > -1 )
+              {
+                output.push(curr);
+                continue;
+              }
+              if(curr.explorer_summary && curr.explorer_summary.toLowerCase().indexOf(searchTerm)>-1)
+              {
+                output.push(curr);
+                continue;
+              }
+              if(curr.slug && curr.slug.toLowerCase().indexOf(searchTerm)>-1)
+              {
+                output.push(curr);
+                continue;
+              }
+              if (curr.start_date && this._formatDate(curr.start_date).toLowerCase(searchTerm) > -1)
+              {
+                output.push(curr);
+                continue;
+              }
+              if (curr.end_date && this._formatDate(curr.end_date).toLowerCase(searchTerm) > -1)
+              {
+                output.push(curr);
+                continue;
+              }
+              if (curr.start_date && curr.end_date && searchTerm.indexOf(this._differenceInWeeks(curr.start_date,curr.end_date)) > -1)
+              {
+                output.push(curr);
+                continue;
+              }
+            }
+          }
+          if (output.length == 0)
+          {
+            item.slug = "javascript: void(0)";
+            item.title = "No Courses Found";
+            output.push(item);
+          }
+          this.searchResult = output;
+          return;
+        }
+        _isSearchSelected()
+        {
+            if (Polymer.dom(this.parentElement).node.selected == 'search')
+            {
+              this.header = "Search";
+              this.enrolled = false;
+            }
+        }
+        ready(){
+            super.ready();
+            var main = this; // to access "this" inside the anonymous function below.
+            caches.open('nptel-courselist').then(function(cache){
+              return cache.match('courselist').then(function(response){
+                /* Below logic is to manually update courselist cache after the
+                specified time in cl_cache_expire in main.js.*/
+                var objdate = new Date(response ? response.headers.get('Date') : null);
+                var currdate = new Date();
+                if (currdate.getTime() < (objdate.getTime()+(cl_cache_expire)))
+                    return response
+                else {
+                  return fetch('/m/allcourses',{
+                    method: 'GET'
+                  })
+                  .then( obj => {
+                    if(obj && obj.status === 200 && obj.type === 'basic')
+                    cache.put('courselist',obj.clone());
+                    return obj;
+                  })
+                  .catch(obj =>{
+                    logError(obj);
+                  });
+                }
+              }).then(function(resp){
+                main.validateResponse(resp);
+              });
+            });
+        }
+        _formatDate(dateString) {
+          var date = new Date(dateString);
+          var monthNames = ["January", "February", "March", "April", "May",
+            "June", "July", "August", "September", "October", "November",
+            "December"];
+          var result = monthNames[date.getMonth()] + ' ' + date.getDate();
+          if (date.getFullYear() != new Date().getFullYear()) {
+            result += ', ' + date.getFullYear();
+          }
+          return result;
+        }
+        _differenceInWeeks(startDate, endDate) {
+          return Math.ceil(
+            (new Date(endDate).getTime() - new Date(startDate).getTime()) /
+            1000 / 60 / 60 / 24 / 7);
+        }
+      }
+      window.customElements.define(SearchPage.is, SearchPage);
+    </script>
+</dom-module>

@@ -1,0 +1,44 @@
+{
+  "name": "NPTEL Online Courses Beta",
+  "short_name": "NPTEL Courses",
+  "description": "NPTEL Online courses PWA",
+  "icons": [
+      {
+        "src": "/modules/pwa/_static/nptel-pwa/assets/img/nptel-logo-48.png",
+        "type": "image/png",
+        "sizes": "48x48"
+      },
+
+      {
+        "src": "/modules/pwa/_static/nptel-pwa/assets/img/nptel-logo-72.png",
+        "type": "image/png",
+        "sizes": "72x72"
+      },
+      {
+        "src": "/modules/pwa/_static/nptel-pwa/assets/img/nptel-logo-96.png",
+        "type": "image/png",
+        "sizes": "96x96"
+      },
+      {
+        "src": "/modules/pwa/_static/nptel-pwa/assets/img/nptel-logo-144.png",
+        "type": "image/png",
+        "sizes": "144x144"
+      },
+      {
+        "src": "/modules/pwa/_static/nptel-pwa/assets/img/nptel-logo-192.png",
+        "type": "image/png",
+        "sizes": "191x192"
+      },
+      {
+        "src": "/modules/pwa/_static/nptel-pwa/assets/img/nptel-logo-512.png",
+        "type": "image/png",
+        "sizes": "512x512"
+      }
+      ],
+  "scope": "/m",
+  "background_color": "#a90909",
+  "theme_color": "#a90909",
+  "start_url": "/m#/allcourses",
+  "display": "standalone",
+  "gcm_sender_id": "103953800507"
+}

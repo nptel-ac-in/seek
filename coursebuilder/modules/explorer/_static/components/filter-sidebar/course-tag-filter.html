@@ -1,0 +1,41 @@
+<link rel="import" href="/static/polymer-1.2.0/polymer/polymer.html">
+<link rel="import" href="/static/polymer-1.2.0/paper-input/paper-input.html">
+
+<dom-module id="course-tag-filter">
+  <style>
+    paper-input {
+      width: 80%;
+    }
+  </style>
+  <template>
+    <paper-input
+        label="Filter by Tags" type="text" id="tag-input"
+        value="[[value]]" on-keydown="tagTextChanged"
+        class="horizontal-left">
+        <iron-icon suffix icon="search" on-click="tagTextChanged">Go</iron-icon>
+    </paper-input>
+    <paper-input style="display: none;" id="binded-tag-input"
+      value="{{value}}"></paper-input>
+  </template>
+  <script>
+    Polymer({
+      is: 'course-tag-filter',
+      properties: {
+        value: {
+          type: String,
+          value: '',
+          notify: true,
+        },
+      },
+      tagTextChanged: function(e) {
+        // Proceed only if user either presses enter or clicks "Go"
+        if (e.type !== "click") {
+          if (e.type !== "keydown" || e.keyCode !== 13) {
+            return;
+          }
+        }
+        document.getElementById("binded-tag-input").value = document.getElementById("tag-input").value;
+      },
+    })
+  </script>
+</dom-module>

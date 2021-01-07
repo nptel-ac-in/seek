@@ -24,7 +24,8 @@ from models import transforms
 from models.data_sources import utils as data_sources_utils
 
 
-class _AbstractRestDataSourceHandler(utils.ApplicationHandler):
+class _AbstractRestDataSourceHandler(
+    utils.ApplicationHandler, utils.RESTHandlerMixin):
     """Webapp2 handler for REST data sources.
 
     This class must be derived from to override the get_data_source_class()
@@ -60,6 +61,9 @@ class _AbstractRestDataSourceHandler(utils.ApplicationHandler):
             'base class the type of the DB table it is to wrap.')
 
     def get(self):
+        self.post()
+
+    def post(self):
         """Returns a JSON response with a page of data and meta-information.
 
         The object contains the following fields:
@@ -105,6 +109,8 @@ class _AbstractRestDataSourceHandler(utils.ApplicationHandler):
         with catch_and_log_.consume_exceptions('Getting data schema'):
             schema = data_source_class.get_schema(
                 self.app_context, catch_and_log_, source_context)
+            for data_filter in data_source_class.get_filters():
+                schema.update(data_filter.get_schema())
             output['schema'] = schema
         with catch_and_log_.consume_exceptions('Loading required job output'):
             jobz = data_sources_utils.get_required_jobs(

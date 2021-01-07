@@ -1,0 +1,12 @@
+tests:
+  tests.ext.lti.functional_tests.FieldsTest: 10
+  tests.ext.lti.functional_tests.LTIToolTagTest: 3
+  tests.ext.lti.functional_tests.LaunchHandlerTest: 8
+  tests.ext.lti.functional_tests.LoginHandlerTest: 7
+  tests.ext.lti.functional_tests.RedirectHandlerTest: 2
+  tests.ext.lti.functional_tests.RuntimeTest: 7
+  tests.ext.lti.functional_tests.SecurityParserTest: 9
+  tests.ext.lti.functional_tests.SerializerTest: 2
+  tests.ext.lti.functional_tests.ToolsParserTest: 7
+  tests.ext.lti.functional_tests.UrljoinTest: 6
+  tests.ext.lti.functional_tests.ValidationHandlerTest: 21

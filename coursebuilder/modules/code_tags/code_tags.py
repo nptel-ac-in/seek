@@ -20,13 +20,12 @@ from xml.etree import cElementTree
 import appengine_config
 from common import schema_fields
 from common import tags
-from controllers import sites
 from models import custom_modules
-from modules.oeditor import oeditor
+from modules.code_tags import messages
 
 CODETAGS_MODULE_URI = '/modules/code_tags'
 CODETAGS_RESOURCES_URI = CODETAGS_MODULE_URI + '/resources'
-CODEMIRROR_URI = CODETAGS_MODULE_URI + '/codemirror'
+CODEMIRROR_URI = '/static/codemirror'
 
 SELECT_DATA = [
     # codemirror does not have plain text mode
@@ -123,18 +122,20 @@ class CodeTag(tags.ContextAwareTag):
 
     @classmethod
     def name(cls):
-        return 'Embedded Code'
+        return 'Code'
 
     @classmethod
     def vendor(cls):
         return 'gcb'
 
     @classmethod
+    def required_modules(cls):
+        return super(CodeTag, cls).required_modules() + [
+            'gcb-code', 'inputex-select']
+
+    @classmethod
     def extra_js_files(cls):
-        if oeditor.CAN_HIGHLIGHT_CODE.value:
-            return ['code_tags_popup.js']
-        else:
-            return []
+        return ['code_tags_popup.js']
 
     @classmethod
     def additional_dirs(cls):
@@ -151,23 +152,16 @@ class CodeTag(tags.ContextAwareTag):
     def rollup_header_footer(self, context):
         """Include CodeMirror library only when a code tag is present."""
 
-        if oeditor.CAN_HIGHLIGHT_CODE.value:
-            header = tags.html_string_to_element_tree(
-                '<script src="%s/lib/codemirror.js"></script>'
-                '<link rel="stylesheet" href="%s/lib/codemirror.css">'
-                '<script src="%s/addon/mode/loadmode.js"></script>'
-                '<link rel="stylesheet" href="%s/code_tags.css">' % (
-                    CODEMIRROR_URI, CODEMIRROR_URI, CODEMIRROR_URI,
-                    CODETAGS_RESOURCES_URI))
-            footer = tags.html_string_to_element_tree(
-                '<script src="%s/code_tags.js">'
-                '</script>' % CODETAGS_RESOURCES_URI)
-        else:
-            header = cElementTree.Element('link')
-            header.attrib['rel'] = 'stylesheet'
-            header.attrib['href'] = '%s/code_tags_no_highlight.css' % (
-                CODETAGS_RESOURCES_URI)
-            footer = cElementTree.Comment('Empty footer')
+        header = tags.html_string_to_element_tree(
+            '<script src="%s/lib/codemirror.js"></script>'
+            '<link rel="stylesheet" href="%s/lib/codemirror.css">'
+            '<script src="%s/addon/mode/loadmode.js"></script>'
+            '<link rel="stylesheet" href="%s/code_tags.css">' % (
+                CODEMIRROR_URI, CODEMIRROR_URI, CODEMIRROR_URI,
+                CODETAGS_RESOURCES_URI))
+        footer = tags.html_string_to_element_tree(
+            '<script src="%s/code_tags.js">'
+            '</script>' % CODETAGS_RESOURCES_URI)
 
         return (header, footer)
 
@@ -179,13 +173,14 @@ class CodeTag(tags.ContextAwareTag):
         reg.add_property(
             schema_fields.SchemaField(
                 'mode', 'Language', 'string',
-                optional=True,
+                optional=True, description=messages.RTE_LANGUAGE,
                 select_data=SELECT_DATA))
         reg.add_property(
             schema_fields.SchemaField(
                 'code', 'Code', 'text',
-                optional=True,
-                description=('The code which will be displayed.')))
+                description=messages.RTE_CODE, extra_schema_dict_values={
+                    '_type': 'code',
+                }, optional=True))
         return reg
 
 
@@ -203,8 +198,7 @@ def register_module():
 
     global_routes = [
         (CODETAGS_RESOURCES_URI + '/.*', tags.ResourcesHandler),
-        (CODEMIRROR_URI + '/(.*)', sites.make_zip_handler(os.path.join(
-            appengine_config.BUNDLE_ROOT, 'lib/codemirror-4.5.0.zip')))]
+    ]
     namespaced_routes = []
 
     global custom_module  # pylint: disable=global-statement

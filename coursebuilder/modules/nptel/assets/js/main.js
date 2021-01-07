@@ -1,19 +1,3 @@
-/**
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 function submitOnEnter(evt, input) {
   var keyCode = evt.keyCode;
   if (keyCode == 13) {
@@ -93,10 +77,15 @@ function submitQuestionClient(resource_id) {
     'short_description': element('doubtSummaryField').value,
     'resource_id': resource_id
   };
-  ajax_server.submit_question(data);
+  if (data.question != "" && data.short_description !="")
+    ajax_server.submit_question(data);
+  else
+    element('errormessage').style.display = 'block';
+
 }
 
 function onSubmitSuccess() {
+  element('successmessage').style.display = 'block';
   ytplayer.playVideo();
   updateValue('doubtQuestionField', '');
   updateValue('doubtSummaryField', '');
@@ -106,6 +95,7 @@ function onSubmitSuccess() {
 }
 
 function cancel() {
+  element('successmessage').style.display = 'none';
   ytplayer.playVideo();
   element('doubtForm').style.display = 'none';
   element('lessonDoubtButton').style.display = 'table';
@@ -126,6 +116,7 @@ function retrieveAll() {
 }
 
 function viewDoubtForm() {
+  element('successmessage').style.display = 'none';
   ytplayer.pauseVideo();
   element('retrievedQuestions').style.display = 'none';
   element('doubtForm').style.display = 'inline';
@@ -159,7 +150,7 @@ function getCurrentVideoTimeInSecs() {
 function onPlayerStateChange(event) {
   if (event.data == YT.PlayerState.PLAYING) {
      timer = setInterval(recordWatchDuration, 500);
-     timer2 = setInterval(sendWatchDuration, 1000);
+     timer2 = setInterval(sendWatchDuration, 60000);
      if (startTime.length != endTime.length) {
        startTime[startTime.length - 1] = parseInt(ytplayer.getCurrentTime());
      } else {
@@ -180,13 +171,15 @@ function recordWatchDuration() {
 }
 
 function sendWatchDuration() {
-  if (startTime.length > 0) {
-    ajax_server.record_video_watchtime({
-      'start': startTime,
-      'end': endTime,
-      'duration': ytplayer.getDuration(),
-      'resource_id': videoId});
-  }
+  // Not sending any ajax request for testing purposes
+  // if (startTime.length > 0) {
+  //   ajax_server.record_video_watchtime({
+  //     'start': startTime,
+  //     'end': endTime,
+  //     'duration': ytplayer.getDuration(),
+  //     'resource_id': videoId});
+  // }
+  return;
 }
 
 function loadIFramePlayer(vID, div_id) {
@@ -283,3 +276,16 @@ hideMenu = function() {
   var div = document.getElementById('logout-div');
   div.style.display = 'none'
 }
+
+function editForMobile() {
+  if ($(window).width() < $(window).height()) {
+    var leftNav = document.getElementById("gcb-nav-left");
+    if (leftNav) {
+      leftNav.style.width = "auto";
+    }
+  }
+}
+
+$(document).ready(function() {
+  editForMobile();
+})

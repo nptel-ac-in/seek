@@ -17,6 +17,7 @@
 __author__ = ['Michael Gainer (mgainer@google.com)']
 
 import collections
+import datetime
 import logging
 import zlib
 
@@ -34,6 +35,9 @@ from models import transforms
 
 from google.appengine.api import datastore_types
 from google.appengine.ext import db
+
+UNIX_EPOCH = datetime.datetime(year=1970, month=1, day=1)
+
 
 class AbstractStudentAggregationComponent(object):
     """Allows modules to contribute to map/reduce on EventEntity by Student.
@@ -141,6 +145,10 @@ class AbstractStudentAggregationComponent(object):
         """
         raise NotImplementedError()
 
+    @classmethod
+    def _fix_timestamp(cls, timestamp):
+        return int((timestamp - UNIX_EPOCH).total_seconds())
+
 
 class StudentAggregateEntity(entities.BaseEntity):
     """Holds data aggregated from Event entites for a single Student.
@@ -227,7 +235,7 @@ class StudentAggregateGenerator(jobs.MapReduceJob):
         # Convenience for collections: Pre-load Student and Course objects.
         student = None
         try:
-            student = models.Student.get_student_by_user_id(user_id)
+            student = models.Student.get_by_user_id(user_id)
         # pylint: disable=broad-except
         except Exception:
             common_utils.log_exception_origin()
@@ -344,17 +352,23 @@ class StudentAggregateComponentRegistry(
     @classmethod
     def get_schema(cls, app_context, log, data_source_context):
         ret = schema_fields.FieldRegistry('student_aggregation')
-        for component in cls._components:
-            ret.add_property(component.get_schema())
         if data_source_context.send_uncensored_pii_data:
             obfuscation = 'Un-Obfuscated'
         else:
             obfuscation = 'Obfuscated'
         description = (obfuscation + ' version of user ID.  Usable to join '
                        'to other tables also keyed on obfuscated user ID.')
-
         ret.add_property(schema_fields.SchemaField(
             'user_id', 'User ID', 'string', description=description))
+
+        for component in cls._components:
+            schema = component.get_schema()
+            if isinstance(schema, schema_fields.FieldRegistry):
+                name = cls.get_schema_name(component)
+                ret.add_sub_registry(name, registry=schema)
+            else:
+                ret.add_property(schema)
+
         return ret.get_json_schema_dict()['properties']
 
     @classmethod
@@ -374,7 +388,7 @@ class StudentAggregateComponentRegistry(
     @classmethod
     def get_schema_name(cls, component):
         schema = component.get_schema()
-        if hasattr(schema, 'name'):
+        if hasattr(schema, 'name') and schema.name:
             return schema.name
         return schema.title
 

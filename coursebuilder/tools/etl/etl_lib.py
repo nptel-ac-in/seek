@@ -20,10 +20,15 @@ __author__ = [
 
 import argparse
 import datetime
+import logging
+import sys
 import time
 
+from common import utils as common_utils
 from controllers import sites
 from models import courses
+
+_LOG = logging.getLogger('coursebuilder.tools.etl')
 
 
 def get_context(course_url_prefix):
@@ -70,15 +75,14 @@ class Job(object):
 
     Custom jobs can be executed by etl.py. The advantage of this is that they
     can run arbitrary local computations, but calls to App Engine services
-    (db.get() or db.put(), for example) are executed against a remove server.
+    (db.get() or db.put(), for example) are executed against a remote server.
     This allows you to perform arbitrary computations against your app's data,
     and to construct data pipelines that are not possible within the App Engine
     execution environment.
 
     When you run your custom job under etl.py in this way, it authenticates
-    against the remove server, prompting the user for credentials if necessary.
-    It then configures the local environment so RPCs execute against the
-    requested remote endpoint.
+    against the remote server. It then configures the local environment so RPCs
+    execute against the requested remote endpoint.
 
     It then imports your custom job. Your job must be a Python class that is
     a child of this class. Before invoking etl.py, you must configure sys.path
@@ -88,7 +92,7 @@ class Job(object):
 
     You invoke your custom job via etl.py:
 
-    $ python etl.py run path.to.my.Job /cs101 myapp server.appspot.com \
+    $ python etl.py run path.to.my.Job /cs101 server.appspot.com \
         --job_args='more_args --delegated_to my.Job'
 
     Before main() is executed, arguments are parsed. The full set of parsed
@@ -158,6 +162,33 @@ class Job(object):
         """Executes the job; called for you by etl.py."""
         self._parse_args()
         self.main()
+
+
+class CourseJob(Job):
+
+    @classmethod
+    def _get_app_context_or_die(cls, course_url_prefix):
+        app_context = get_context(course_url_prefix)
+        if not app_context:
+            _LOG.critical('Unable to find course with url prefix ' +
+                          course_url_prefix)
+            sys.exit(1)
+        return app_context
+
+    def run(self):
+        app_context = self._get_app_context_or_die(
+            self.etl_args.course_url_prefix)
+        course = courses.Course(None, app_context=app_context)
+
+        sites.set_path_info(app_context.slug)
+        courses.Course.set_current(course)
+        try:
+            with common_utils.Namespace(app_context.get_namespace_name()):
+                super(CourseJob, self).run()
+        finally:
+            courses.Course.clear_current()
+            sites.unset_path_info()
+
 
 
 class _ProgressReporter(object):

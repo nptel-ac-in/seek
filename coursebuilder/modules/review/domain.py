@@ -18,6 +18,8 @@ __author__ = [
     'johncox@google.com (John Cox)',
 ]
 
+from models import transforms
+
 # Identifier for reviews that have been computer-assigned.
 ASSIGNER_KIND_AUTO = 'AUTO'
 # Identifier for reviews that have been assigned by a human.
@@ -99,9 +101,10 @@ class TransitionError(Error):
 class Review(object):
     """Domain object for a student work submission."""
 
-    def __init__(self, contents=None, key=None):
+    def __init__(self, contents=None, key=None, score=None):
         self._contents = contents
         self._key = key
+        self._score = score
 
     @property
     def contents(self):
@@ -110,6 +113,14 @@ class Review(object):
     @property
     def key(self):
         return self._key
+
+    @property
+    def score(self):
+        return self._score
+
+    @property
+    def contents_dict(self):
+        return transforms.loads(self.contents)
 
 
 class ReviewStep(object):

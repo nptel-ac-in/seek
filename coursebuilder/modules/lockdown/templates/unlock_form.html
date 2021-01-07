@@ -1,0 +1,17 @@
+{% if is_super_admin %}
+	<form id='unlock_assessment_action' action='{{ unlock_url }}' method='POST'>
+	<p>
+	{{ gettext('Choose the Assignment to be Unlocked.') }}
+	</p>
+	<select name='unit_id' id='unit_id'>
+	  <option value='' selected>--</option>
+	  {% for u in locked_units %}
+	    <option value='{{ u.unit_id }}'>{{ u.title }}</option>
+	  {% endfor %}
+	</select>
+	<input type="hidden" name="xsrf_token" value="{{ submit_xsrf_token|escape }}">
+	<button type="submit" name='Submit' value='Submit' class="gcb-button">Submit</button>
+	</form>
+{% else %}
+	{{ gettext('Only super admin can unlock.') }}
+{% endif %}

@@ -21,7 +21,7 @@ from models import courses
 from models import data_sources
 from models import jobs
 from models import transforms
-from modules.dashboard import tabs
+from modules.dashboard import dashboard
 from modules.review import peer
 
 
@@ -105,8 +105,11 @@ class PeerReviewStatsSource(data_sources.SynchronousQuery):
 def register_analytic():
     data_sources.Registry.register(PeerReviewStatsSource)
     name = 'peer_review'
-    title = 'Peer Review'
+    title = 'Peer review assignments'
     peer_review = analytics.Visualization(
         name, title, 'stats.html',
         data_source_classes=[PeerReviewStatsSource])
-    tabs.Registry.register('analytics', name, title, [peer_review])
+    dashboard.DashboardHandler.add_sub_nav_mapping(
+        'analytics', name, title, action=name,
+        contents=analytics.TabRenderer([peer_review]),
+        placement=2000, sub_group_name=name)

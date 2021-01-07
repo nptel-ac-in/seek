@@ -1,0 +1,37 @@
+<link rel="import" href="/static/polymer-1.2.0/polymer/polymer.html">
+<link rel="import" href="/static/polymer-1.2.0/paper-dropdown-menu/paper-dropdown-menu.html">
+<link rel="import" href="/static/polymer-1.2.0/paper-listbox/paper-listbox.html">
+<link rel="import" href="/static/polymer-1.2.0/paper-item/paper-item.html">
+
+<dom-module id="course-status-selector">
+  <template>
+
+    <paper-dropdown-menu label="Course Status">
+      <paper-listbox class="dropdown-content" selected="{{status}}"
+       attr-for-selected="name">
+        <paper-item name="all">All</paper-item>
+        <paper-item name="featured">Featured</paper-item>
+        <paper-item id="enrolled-status-selector" name="enrolled">Enrolled</paper-item>
+        <paper-item name="ended">Ended</paper-item>
+      </paper-listbox>
+    </paper-dropdown-menu>
+
+  </template>
+  <script>
+    Polymer({
+      is: 'course-status-selector',
+      properties: {
+        status: {
+          type: String,
+          value: 'all',
+          notify: true,
+        },
+      },
+      ready: function() {
+        if (!window.userLoggedIn) {
+          this.$$("#enrolled-status-selector").style.display = "none";
+        }
+      }
+    })
+  </script>
+</dom-module>

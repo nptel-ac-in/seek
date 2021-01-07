@@ -1,0 +1,112 @@
+
+<dom-module id="my-courses">
+  <template>
+    <style include="nptel-pwa-css"></style>
+      <paper-spinner-lite class="spinner" active alt="Loading content.."></paper-spinner-lite>
+      <a href="#/allcourses"><paper-button class="footer">Go to All Courses</paper-button></a>
+      <dom-repeat items="[[courseList]]">
+        <template>
+          <paper-card class="courselist">
+            <a href="#/course[[item.slug]]" data-item="[[item]]">
+              <div class="card-content">
+                  <div class="course-header">[[item.title]]</div>
+                  <div class="course-detail"><iron-icon icon="icons:date-range"></iron-icon>[[_formatDate(item.start_date)]] - [[_formatDate(item.end_date)]]</div>
+              </div>
+            </a>
+          </paper-card>
+         </template>
+       </dom-repeat>
+  </template>
+  <script>
+    /**
+     * @customElement
+     * @polymer
+     */
+    class MyCourses extends Polymer.Element {
+        static get is() { return 'my-courses'; }
+        static get properties() {
+          return {
+            videoId :{
+              type : String
+            },
+            header :{
+              type : String,
+              value:"My Courses",
+              notify: true
+            },
+            courseList:{
+              type:Object
+            },
+            courseSlug: {
+              type:String
+            },
+            route : {
+              observer : '_isMycoursesSelected'
+            },
+            enrolled : {
+              type : String,
+              value : false,
+              notify : true
+            },
+            login:{
+              type: Boolean,
+              notify : true,
+            }
+          };
+        }
+        processResponse(payload){
+          var params = (new URL(document.location)).searchParams;
+          var destURL = params.get("desturl");
+          if (destURL)
+          {
+            var destURLdata = b64DecodeUnicode(destURL);
+            if (destURLdata == 'mycourses')
+            {
+              this.login = true;
+            }
+          }
+          if(payload)
+          {
+                if (payload.courses) this.courseList = payload.courses;
+          }
+        }
+        _isMycoursesSelected()
+        {
+          if (Polymer.dom(this.parentElement).node.selected == 'mycourses')
+          {
+            this.header = "My Courses";
+            this.enrolled = false;
+            if (!this.courseList)
+            {
+              var main=this; // to access "this" context in the anonymous function
+              var spinner = Polymer.dom(this.root).querySelector('paper-spinner-lite');
+              spinner.active = true;
+              spinner.style.display = "block";
+              fetch('/m/mycourses',{
+                method: 'GET',
+                credentials: 'include'
+              })
+              .then( obj => {
+                validateResponse(main,obj);
+              })
+              .catch( obj =>{
+                logError(obj);
+              });
+            }
+          }
+        }
+        _formatDate(dateString) {
+          var date = new Date(dateString);
+          var monthNames = ["January", "February", "March", "April", "May",
+            "June", "July", "August", "September", "October", "November",
+            "December"];
+          var result = monthNames[date.getMonth()] + ' ' + date.getDate();
+          if (date.getFullYear() != new Date().getFullYear()) {
+            result += ', ' + date.getFullYear();
+          }
+          return result;
+        }
+      }
+      window.customElements.define(MyCourses.is, MyCourses);
+  </script>
+</dom-module>

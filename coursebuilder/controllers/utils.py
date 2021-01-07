@@ -16,19 +16,25 @@
 
 __author__ = 'Saifu Angto (saifu@google.com)'
 
+import collections
 import datetime
 import HTMLParser
+import logging
 import os
 import re
 import urllib
 import urlparse
-import logging
+import uuid
 
 import json
 import jinja2
 import sites
 import webapp2
 import httpagentparser
+from webob import multidict
+
+from google.appengine.api import namespace_manager
+
 import appengine_config
 
 from common import jinja_utils
@@ -37,13 +43,17 @@ from common import resource
 from common import safe_dom
 from common import schema_fields
 from common import tags
+from common import users
 from common import utils as common_utils
 from common.crypto import XsrfTokenManager
 from gae_mini_profiler import templatetags
+from controllers import messages
 from models import courses
-from models import resources_display
+from models import custom_modules
+from models import jobs
 from models import models
-from models import notify
+from models import resources_display
+from models import roles
 from models import transforms
 from models.config import ConfigProperty
 from models.courses import Course
@@ -52,11 +62,15 @@ from models.models import StudentProfileDAO
 from models.models import TransientStudent
 from models.roles import Roles
 from modules.local_chapter import local_chapter_model
+from modules.local_chapter import base as local_chapter_base
 from modules import courses as courses_module
 from modules.course_staff import course_staff
 from modules.mentor import base as mentor_base
 from modules.mentor.mentor_model import Mentor
 from modules.google_service_account import google_service_account
+from modules.spoc import roles as spoc_roles
+from modules.spoc import base as spoc_base
+from modules.pwa import notifications as push_notif
 
 import phonenumbers
 
@@ -76,33 +90,22 @@ TRANSIENT_STUDENT = TransientStudent()
 
 # Whether to output debug info into the page.
 CAN_PUT_DEBUG_INFO_INTO_PAGES = ConfigProperty(
-    'gcb_can_put_debug_info_into_pages', bool, (
-        'Whether or not to put debugging information into the web pages. '
-        'This may be useful for debugging purposes if you develop custom '
-        'Course Builder features or extensions.'), False)
+    'gcb_can_put_debug_info_into_pages', bool,
+    messages.SITE_SETTINGS_DEBUG_INFORMATION, False, label='Debug Information')
 
 # Whether to record page load/unload events in a database.
 CAN_PERSIST_PAGE_EVENTS = ConfigProperty(
-    'gcb_can_persist_page_events', bool, (
-        'Whether or not to record student page interactions in a '
-        'datastore. Without event recording, you cannot analyze student '
-        'page interactions. On the other hand, no event recording reduces '
-        'the number of datastore operations and minimizes the use of Google '
-        'App Engine quota. Turn event recording on if you want to analyze '
-        'this data.'),
-    False)
-
+    'gcb_can_persist_page_events', bool,
+    'This property has been deprecated; this constructor is retained to '
+    'suppress warnings about unknown legacy settings.  Replaced by per-course '
+    'setting Enable Student Analytics.', deprecated=True)
 
 # Whether to record tag events in a database.
 CAN_PERSIST_TAG_EVENTS = ConfigProperty(
-    'gcb_can_persist_tag_events', bool, (
-        'Whether or not to record student tag interactions in a '
-        'datastore. Without event recording, you cannot analyze student '
-        'tag interactions. On the other hand, no event recording reduces '
-        'the number of datastore operations and minimizes the use of Google '
-        'App Engine quota. Turn event recording on if you want to analyze '
-        'this data.'),
-    False)
+    'gcb_can_persist_tag_events', bool,
+    'This property has been deprecated; this constructor is retained to '
+    'suppress warnings about unknown legacy settings.  Replaced by per-course '
+    'setting Enable Student Analytics.', deprecated=True)
 
 ISO_8601_DATE_FORMAT = '%Y-%m-%d %H:%M'
 
@@ -120,14 +123,10 @@ def is_date_time_specified_correctly(value, errors):
 
 # Whether to record events in a database.
 CAN_PERSIST_ACTIVITY_EVENTS = ConfigProperty(
-    'gcb_can_persist_activity_events', bool, (
-        'Whether or not to record student activity interactions in a '
-        'datastore. Without event recording, you cannot analyze student '
-        'activity interactions. On the other hand, no event recording reduces '
-        'the number of datastore operations and minimizes the use of Google '
-        'App Engine quota. Turn event recording on if you want to analyze '
-        'this data.'),
-    False)
+    'gcb_can_persist_activity_events', bool,
+    'This property has been deprecated; this constructor is retained to '
+    'suppress warnings about unknown legacy settings.  Replaced by per-course '
+    'setting Enable Student Analytics.', deprecated=True)
 
 # Whether to record events in a database.
 MIN_PROFILE_UPDATE = ConfigProperty(
@@ -144,6 +143,32 @@ HUMAN_READABLE_DATE_FORMAT = '%Y-%m-%d'
 
 # Time format string for displaying times. Example: 01:16:40 UTC.
 HUMAN_READABLE_TIME_FORMAT = '%H:%M:%S UTC'
+
+# Regular expression for parsing email addresses
+EMAIL_PATTERN = re.compile(r'^(?P<name>[^@]+)@(?P<domain>.+)$')
+
+
+class RESTHandlerMixin(object):
+    """A mixin class to mark any handler as REST handler."""
+    pass
+
+
+class RebindableMixin(object):
+    """A mixin class to mark handlers which may rebind to existing bindings."""
+    pass
+
+
+class StarRouteHandlerMixin(object):
+    """A mixin class to mark any handler that supports '*' routes."""
+    pass
+
+
+class QueryableRouteMixin(object):
+    """Add to handler to dynamically choose whether it's active or not."""
+
+    @classmethod
+    def can_handle_route_method_path_now(cls, route, method, path):
+        raise NotImplementedError()
 
 
 class PageInitializer(object):
@@ -193,9 +218,6 @@ class ReflectiveRequestHandler(object):
     These methods will now be called automatically based on the 'action'
     GET/POST parameter.
     """
-
-    def create_xsrf_token(self, action):
-        return XsrfTokenManager.create_xsrf_token(action)
 
     def get(self):
         """Handles GET."""
@@ -280,7 +302,7 @@ class HtmlHooks(object):
 
     def __init__(self, course, prefs=None):
         if prefs is None:
-            prefs = models.StudentPreferencesDAO.load_or_create()
+            prefs = models.StudentPreferencesDAO.load_or_default()
 
         # Fetch all the hooks.  Since these are coming from the course
         # settings, getting them all is not too inefficient.
@@ -289,7 +311,7 @@ class HtmlHooks(object):
         # Call callbacks to let extension modules know we have text loaded,
         # in case they need to modify, replace, or extend anything.
         for callback in self.POST_LOAD_CALLBACKS:
-            callback(self.content)
+            callback(self.content, course.app_context)
 
         # When the course admin sees hooks, we may need to add nonblank
         # text so the admin can have a place to click to edit them.
@@ -430,7 +452,8 @@ class CBRequestHandler(webapp2.RequestHandler):
     def is_old_browser(self):
         user_agent = self.user_agent()
         browser_name = user_agent['browser']['name']
-        browser_version = user_agent['browser']['version']
+        browser_version = user_agent['browser']['version'] \
+            if user_agent['browser'].has_key('version') else None
         if not browser_name or not browser_version:
             return True
         if browser_name != 'Microsoft Internet Explorer':
@@ -559,11 +582,103 @@ class ResourceHtmlHook(resource.AbstractResourceHandler):
         return ret
 
 
+class CronHandler(webapp2.RequestHandler):
+    """Cron HTTP handlers should ensure caller is AppEngine, not external."""
+
+    def is_not_from_appengine_cron(self):
+        if 'X-AppEngine-Cron' not in self.request.headers:
+            self.response.out.write('Forbidden.')
+            self.response.set_status(403)
+            return True
+        return False
+
+
+class AbstractAllCoursesCronHandler(CronHandler):
+    """Common logic enabling Cron handlers to operate on all courses.
+
+    Individual cron handlers commonly need to operate against all courses
+    in an installation.  This class provides common base functionality
+    to do the iteration over courses and error handling, freeing
+    derived classes to implement only the feature-specific business logic.
+
+    Use by extending is_globally_enabled(), is_enabled_for_course() and
+    putting the business logic in cron_action().
+    """
+
+    @classmethod
+    def is_globally_enabled(cls):
+        """Derived classes tell base class whether feature is enabled."""
+        raise NotImplementedError()
+
+    @classmethod
+    def is_enabled_for_course(cls, app_context):
+        """Derived classes tell whether feature is enabled for a course."""
+        raise NotImplementedError()
+
+    def global_setup(self):
+        """Perform any expensive work.  Return value passed to cron_action()."""
+        return None
+
+    def cron_action(self, app_context, global_state):
+        """Do work for courses where is_enabled_for_course() returned true."""
+        raise NotImplementedError()
+
+    def get(self):
+        # Allow AppEngine owner to manually force cron jobs to run, but
+        # otherwise insist that we are being run from AppEngine's cron engine.
+        if (not Roles.is_direct_super_admin() and
+            self.is_not_from_appengine_cron()):
+            return
+        self._internal_get()
+
+    @classmethod
+    def _for_testing_only_get(cls):
+        """Permits direct call to code under test, as opposed to using HTTP."""
+        response = webapp2.Response()
+        instance = cls()
+        instance.response = response
+        instance._internal_get()  # pylint: disable=protected-access
+
+    def _internal_get(self):
+        """Separate function from get() to permit simple calling by tests."""
+
+        if self.is_globally_enabled():
+            global_state = self.global_setup()
+            for app_context in sites.get_all_courses():
+                if self.is_enabled_for_course(app_context):
+                    namespace = app_context.get_namespace_name()
+                    with common_utils.Namespace(namespace):
+                        try:
+                            self.cron_action(app_context, global_state)
+                        except Exception, ex:  # pylint: disable=broad-except
+                            logging.critical(
+                                'Cron handler %s for course %s: %s',
+                                self.__class__.__name__, app_context.get_slug(),
+                                str(ex))
+                            common_utils.log_exception_origin()
+                else:
+                    logging.info(
+                        'Skipping cron handler %s for course %s',
+                        self.__class__.__name__, app_context.get_slug())
+            self.response.write('OK.')
+        else:
+            logging.info('Skipping cron handler %s; globally disabled.',
+                         self.__class__.__name__)
+            self.response.write('Disabled.')
+        self.response.set_status(200)
+
+
 class ApplicationHandler(CBRequestHandler):
     """A handler that is aware of the application context."""
 
+    # Lists of functions that produce lists of links to be displayed in
+    # student-facing templates.
+    # Type: [app_context => [(href, label)]]
     LEFT_LINKS = []
     RIGHT_LINKS = []
+    AUTH_LINKS = []
+    SITE_INFO = []
+
     EXTRA_GLOBAL_CSS_URLS = []
     EXTRA_GLOBAL_JS_URLS = []
 
@@ -584,6 +699,13 @@ class ApplicationHandler(CBRequestHandler):
             base = urlparse.urlunparse(
                 (parts.scheme, parts.netloc, base, None, None, None))
         return base
+
+    def error(self, error_code, hint=None):
+        if hint and not appengine_config.PRODUCTION_MODE:
+            logging.info(
+                'Error %s on path %s: %s',
+                error_code, self.request.path if self.request else None, hint)
+        super(ApplicationHandler, self).error(error_code)
 
     def render_template_to_html(self, template_values, template_file,
                                 additional_dirs=None):
@@ -611,26 +733,132 @@ class ApplicationHandler(CBRequestHandler):
         else:
             return location
 
-    def redirect(self, location, normalize=True):
+    def redirect(self, location, normalize=True, abort=False):
         if normalize:
             location = self.canonicalize_url(location)
-        super(ApplicationHandler, self).redirect(location)
+        super(ApplicationHandler, self).redirect(location, abort=abort)
+
+    def create_xsrf_token(self, action):
+        return XsrfTokenManager.create_xsrf_token(action)
+
+    def before_method(self, method, path):
+        pass
+
+    def after_method(self, method, path):
+        pass
+
+
+class NoopInstanceLifecycleRequestHandler(webapp2.RequestHandler):
+    """Noop Handler for internal App Engine instance lifecycle requests.
+
+    See https://cloud.google.com/appengine/docs/python/modules/.
+    """
+
+    def get(self):
+        self.response.status_code = 200
+
+
+class _ExtensionSwitcher(ApplicationHandler):
+    """Facade class used by ApplicationHandlerSwitcher."""
+
+    def __init__(
+            self, switch_on_course_schema_key,
+            orig_handler_factory, new_handler_factory, *args, **kwargs):
+        self._switch_on_course_schema_key = switch_on_course_schema_key
+        self._orig_handler_factory = orig_handler_factory
+        self._new_handler_factory = new_handler_factory
+        super(_ExtensionSwitcher, self).__init__(*args, **kwargs)
+
+    def _get_handler(self):
+        env = self.app_context.get_environ()
+        if env.get('course', {}).get(self._switch_on_course_schema_key):
+            handler = self._new_handler_factory()
+        else:
+            handler = self._orig_handler_factory()
+
+        handler.app_context = self.app_context
+        handler.request = self.request
+        handler.response = self.response
+        handler.path_translated = self.path_translated
+
+        return handler
+
+    def _invoke_http_verb(self, verb):
+        path = sites.get_path_info()
+        handler = self._get_handler()
+        sites.set_default_response_headers(handler)
+
+        if hasattr(handler, 'before_method'):
+            handler.before_method(verb, path)
+        try:
+            getattr(handler, verb.lower())()
+        finally:
+            if hasattr(handler, 'after_method'):
+                handler.after_method(verb, path)
+
+    def get(self):
+        self._invoke_http_verb('GET')
+
+    def post(self):
+        self._invoke_http_verb('POST')
+
+    def put(self):
+        self._invoke_http_verb('PUT')
+
+    def delete(self):
+        self._invoke_http_verb('DELETE')
+
+
+class ApplicationHandlerSwitcher(object):
+    """A utility which allows URI bindings to be switched dynamically."""
+
+    def __init__(self, switch_on_course_schema_key):
+        self._switch_on_course_schema_key = switch_on_course_schema_key
+
+    def switch(self, orig_handler_factory, new_handler_factory):
+        switch_on_course_schema_key = self._switch_on_course_schema_key
+        class _ExtensionSwitcherInClosure(_ExtensionSwitcher, RebindableMixin):
+            def __init__(self, *args, **kwargs):
+                # pylint: disable=bad-super-call
+                super(_ExtensionSwitcherInClosure, self).__init__(
+                    switch_on_course_schema_key,
+                    orig_handler_factory, new_handler_factory, *args, **kwargs)
+        return _ExtensionSwitcherInClosure
 
 
 class CourseHandler(ApplicationHandler):
     """Base handler that is aware of the current course."""
+
+    FOOTER_ITEMS = []
 
     def __init__(self, *args, **kwargs):
         super(CourseHandler, self).__init__(*args, **kwargs)
         self.course = None
         self.template_value = {}
 
-    def get_student(self):
+    @classmethod
+    def get_user(cls):
+        """Get the current user."""
+        return users.get_current_user()
+
+    @classmethod
+    def get_student(cls):
         """Get the current student."""
-        user = self.get_user()
+        user = cls.get_user()
         if user is None:
             return None
-        return Student.get_by_email(user.email())
+        return Student.get_by_user(user)
+
+    @classmethod
+    def get_user_and_student_or_transient(cls):
+        user = cls.get_user()
+        if user is None:
+            student = TRANSIENT_STUDENT
+        else:
+            student = Student.get_enrolled_student_by_user(user)
+            if not student:
+                student = TRANSIENT_STUDENT
+        return user, student
 
     def _pick_first_valid_locale_from_list(self, desired_locales):
         available_locales = self.app_context.get_allowed_locales()
@@ -669,7 +897,7 @@ class CourseHandler(ApplicationHandler):
 
             # check if user preferences have been set
             if prefs is None:
-                prefs = models.StudentPreferencesDAO.load_or_create()
+                prefs = models.StudentPreferencesDAO.load_or_default()
             if prefs is not None and prefs.locale is not None:
                 return prefs.locale
 
@@ -703,7 +931,7 @@ class CourseHandler(ApplicationHandler):
         return self.course
 
     def get_track_matching_student(self, student):
-        """Gets units whose labels match those on the student."""
+        """Gets units and lessons whose labels match those on the student."""
         return self.get_course().get_track_matching_student(student)
 
     def get_progress_tracker(self):
@@ -722,6 +950,9 @@ class CourseHandler(ApplicationHandler):
         """Gets all lessons (in order) in the specific course unit."""
         return self.get_course().get_lessons(unit_id)
 
+    def get_children_order(self):
+        """Gets the order in which children are displayed."""
+        return self.get_course().get_children_order()
 
     def get_unit_lessons_dict(self):
         return self.get_course().get_unit_lessons_dict()
@@ -748,34 +979,48 @@ class CourseHandler(ApplicationHandler):
         # it is not; we also have circular import dependencies if we were to
         # put them at the top...
         from models import vfs
-        from modules.i18n_dashboard import i18n_dashboard
+        from models import model_caching
         vfs_items = cls._cache_debug_info(
             vfs.ProcessScopedVfsCache.instance().cache)
-        rb_items = cls._cache_debug_info(
-            i18n_dashboard.ProcessScopedResourceBundleCache.instance().cache)
-        return ''.join([
-              '\nDebug Info: %s' % datetime.datetime.utcnow(),
-              '\n\nServer Environment Variables: %s' % '\n'.join([
-                  'item: %s, %s' % (key, value)
-                  for key, value in os.environ.iteritems()]),
-              '\n\nVfsCacheKeys:\n%s' % '\n'.join(vfs_items),
-              '\n\nResourceBundlesCache:\n%s' % '\n'.join(rb_items),
-              ])
+        cache_sections = [
+            '',
+            'Debug Info: %s' % datetime.datetime.utcnow(),
+            'Server Environment Variables: %s' % '\n'.join([
+                'item: %s, %s' % (key, value)
+                for key, value in os.environ.iteritems()]),
+            'VfsCacheKeys:\n%s' % '\n'.join(vfs_items),
+        ]
+        for cache_instance in model_caching.CacheFactory.all_instances():
+            line = '\n'.join(cls._cache_debug_info(cache_instance.cache))
+            cache_sections.append(line)
+        return '\n\n'.join(cache_sections)
 
     def init_template_values(self, environ, prefs=None):
         """Initializes template variables with common values."""
         self.template_value[COURSE_INFO_KEY] = environ
+        self.template_value['site_info'] = {}
+        for func in self.SITE_INFO:
+            self.template_value['site_info'].update(func(self.app_context))
         self.template_value[
             'page_locale'] = self.app_context.get_current_locale()
         self.template_value['html_hooks'] = HtmlHooks(
             self.get_course(), prefs=prefs)
         self.template_value['is_course_admin'] = Roles.is_course_admin(
             self.app_context)
+        self.template_value['can_view_spoc_dashboard'] = (
+            spoc_roles.SPOCRoleManager.can_view())
+        self.template_value['spoc_dashboard_action'] = (
+            spoc_base.SPOCBase.DASHBOARD_LIST_ACTION
+        )
         self.template_value['can_see_drafts'] = (
-            courses_module.courses.can_see_drafts(self.app_context))
+            custom_modules.can_see_drafts(self.app_context))
         self.template_value[
             'is_read_write_course'] = self.app_context.fs.is_read_write()
+        self.template_value['course_availability'] = (
+            self.get_course().get_course_availability())
         self.template_value['is_super_admin'] = Roles.is_super_admin()
+        self.template_value['can_view_spoc_admin'] = (
+            spoc_roles.SPOCRoleManager.can_view())
         self.template_value[COURSE_BASE_KEY] = self.get_base_href(self)
         self.template_value['left_links'] = []
         for func in self.LEFT_LINKS:
@@ -783,9 +1028,14 @@ class CourseHandler(ApplicationHandler):
         self.template_value['right_links'] = []
         for func in self.RIGHT_LINKS:
             self.template_value['right_links'].extend(func(self.app_context))
+        self.template_value['footer_items'] = []
+        for func in self.FOOTER_ITEMS:
+            self.template_value['footer_items'].extend(func(self))
+        self.template_value['auth_links'] = [
+            item for func in self.AUTH_LINKS for item in func(self.app_context)]
 
         if not prefs:
-            prefs = models.StudentPreferencesDAO.load_or_create()
+            prefs = models.StudentPreferencesDAO.load_or_default()
         self.template_value['student_preferences'] = prefs
 
         if (Roles.is_course_admin(self.app_context) and
@@ -804,6 +1054,8 @@ class CourseHandler(ApplicationHandler):
             'extra_global_css_urls'] = self.EXTRA_GLOBAL_CSS_URLS
         self.template_value[
             'extra_global_js_urls'] = self.EXTRA_GLOBAL_JS_URLS
+        if not appengine_config.PRODUCTION_MODE:
+            self.template_value['page_uuid'] = str(uuid.uuid1())
 
         # Common template information for the locale picker (only shown for
         # user in session)
@@ -821,6 +1073,7 @@ class CourseHandler(ApplicationHandler):
                     StudentLocaleRESTHandler.XSRF_TOKEN_NAME))
             self.template_value['selected_locale'] = self.get_locale_for(
                 self.request, self.app_context, prefs=prefs)
+        self.template_value['STATIC_CDN_PATH'] = appengine_config.STATIC_CDN_PATH
 
 
     def get_template(self, template_file, additional_dirs=None, prefs=None):
@@ -832,6 +1085,7 @@ class CourseHandler(ApplicationHandler):
             self.app_context.get_current_locale(), additional_dirs)
         template_environ.filters[
             'gcb_tags'] = jinja_utils.get_gcb_tags_filter(self)
+        course = self.get_course()
         template_environ.globals.update({
             'display_unit_title': (
                 lambda unit: resources_display.display_unit_title(
@@ -839,11 +1093,33 @@ class CourseHandler(ApplicationHandler):
             'display_short_unit_title': (
                 lambda unit: resources_display.display_short_unit_title(
                     unit, self.app_context)),
-            'display_lesson_title': (
-                lambda unit, lesson: resources_display.display_lesson_title(
-                    unit, lesson, self.app_context))})
+            'is_lesson_available': course.is_lesson_available,
+            })
 
         return template_environ.get_template(template_file)
+
+    def can_record_student_events(self):
+        settings = self.app_context.get_environ().get('course')
+        return settings and settings.get('can_record_student_events')
+
+    def check_displayability(self, availability, shown_when_unavailable=False):
+        """Get a Displayability object for this availability level."""
+        class Element(object):
+            def __init__(self, availability, shown_when_unavailable):
+                self.availability = availability
+                self.shown_when_unavailable = shown_when_unavailable
+
+        _user, student = self.get_user_and_student_or_transient()
+        return courses.Course.get_element_displayability(
+            self.get_course().get_course_availability(),
+            student.is_transient,
+            custom_modules.can_see_drafts(self.app_context),
+            Element(availability, shown_when_unavailable),
+        )
+
+    def check_availability(self, availability):
+        """Check if content with this availability level should be visible."""
+        return self.check_displayability(availability).is_content_available
 
 
 class BaseHandler(CourseHandler):
@@ -873,21 +1149,23 @@ class BaseHandler(CourseHandler):
                 )['reg_form']['can_register']
 
         if user:
+            student = Student.get_enrolled_student_by_user(user)
+            if student:
+                student.update_last_seen_on()
+
             email = user.email()
             self.template_value['email_no_domain_name'] = (
                 email[:email.find('@')] if '@' in email else email)
             self.template_value['email'] = email
-            self.template_value['logoutUrl'] = (
-                users.create_logout_url(self.request.uri))
+            url = urlparse.urlparse(self.request.uri)
+            base_uri = urlparse.urlunsplit(
+                [url.scheme, url.netloc, self.app_context.get_slug(), '', ''])
+            self.template_value['logoutUrl'] = users.create_logout_url(base_uri)
             self.template_value['transient_student'] = False
 
             # configure page events
-            self.template_value['record_tag_events'] = (
-                CAN_PERSIST_TAG_EVENTS.value)
-            self.template_value['record_page_events'] = (
-                CAN_PERSIST_PAGE_EVENTS.value)
-            self.template_value['record_events'] = (
-                CAN_PERSIST_ACTIVITY_EVENTS.value)
+            self.template_value['can_record_student_events'] = (
+                self.can_record_student_events())
             self.template_value['event_xsrf_token'] = (
                 XsrfTokenManager.create_xsrf_token('event-post'))
         else:
@@ -905,14 +1183,16 @@ class BaseHandler(CourseHandler):
         if user is None:
             student = TRANSIENT_STUDENT
         else:
-            student = Student.get_enrolled_student_by_email(user.email())
+            student = Student.get_enrolled_student_by_user(user)
             if not student:
                 self.template_value['transient_student'] = True
                 student = TRANSIENT_STUDENT
 
         if student.is_transient:
             if supports_transient_student and (
-                    self.app_context.get_environ()['course']['browsable']):
+                    courses.Course.is_course_browsable(self.app_context) or
+                    roles.Roles.is_course_admin(self.app_context) or
+                    roles.Roles.in_any_role(self.app_context)):
                 return TRANSIENT_STUDENT
             elif user is None:
                 self.redirect(
@@ -920,14 +1200,8 @@ class BaseHandler(CourseHandler):
                 )
                 return None
             else:
-                self.redirect('/preview')
+                self.redirect('/course')
                 return None
-
-        # Patch Student models which (for legacy reasons) do not have a user_id
-        # attribute set.
-        if not student.user_id:
-            student.user_id = user.user_id()
-            student.put()
 
         return student
 
@@ -939,9 +1213,51 @@ class BaseHandler(CourseHandler):
             return False
         return True
 
+    def filter_visible_units(self, units, is_transient):
+        course = self.get_course()
+        course_availability = course.get_course_availability()
+        can_see_drafts = custom_modules.can_see_drafts(self.app_context)
+        for u in units:
+            displayability = courses.Course.get_element_displayability(
+                course_availability, is_transient, can_see_drafts,
+                u)
+            if (displayability.is_name_visible or
+                    roles.Roles.is_course_admin(self.app_context)):
+                u.is_name_visible = True
+            else:
+                u.is_name_visible = False
+        return units
+
+    def filter_visible_lessons_dict(self, lessons_dict, is_transient):
+        course = self.get_course()
+        course_availability = course.get_course_availability()
+        can_see_drafts = custom_modules.can_see_drafts(self.app_context)
+        for u in lessons_dict.keys():
+            lessons = lessons_dict[u]
+            for l in lessons:
+                displayability = courses.Course.get_element_displayability(
+                    course_availability, is_transient, can_see_drafts,
+                    l)
+                if (displayability.is_name_visible or
+                        roles.Roles.is_course_admin(self.app_context)):
+                    l.is_name_visible = True
+                else:
+                    l.is_name_visible = False
+        return lessons_dict
+
+    def set_custom_template_values(self, student):
+        units = self.get_units()
+        is_transient = student.is_transient if student else True
+        self.filter_visible_units(units, is_transient)
+        self.template_value['visible_units'] = units
+        lessons_dict = self.get_unit_lessons_dict()
+        self.filter_visible_lessons_dict(lessons_dict, is_transient)
+        self.template_value['visible_lessons_dict'] = lessons_dict
+
     @appengine_config.timeandlog('BaseHandler.render')
-    def render(self, template_file, additional_dirs=None):
+    def render(self, template_file, additional_dirs=None, save_location=True):
         """Renders a template."""
+        prefs = models.StudentPreferencesDAO.load_or_default()
 
         user = self.get_user()
         if user:
@@ -967,32 +1283,52 @@ class BaseHandler(CourseHandler):
         self.template_value['units'] = self.get_units()
         self.template_value['lessons_dict'] = self.get_unit_lessons_dict()
         self.template_value['unit_dict'] = self.get_unit_sub_unit_dict()
+        # Set custom template values
+        if user and student:
+            self.set_custom_template_values(student)
+        else:
+            self.set_custom_template_values(None)
+
         self.template_value['profiler_includes'] = templatetags.profiler_includes()
+        self.template_value['children_order'] = self.get_children_order()
 
         courses.Course.set_current(course)
         models.MemcacheManager.begin_readonly()
         try:
             template = self.get_template(
                 template_file, additional_dirs=additional_dirs)
+            self.response.headers["X-Frame-Options"] = "SAMEORIGIN"
             self.response.out.write(template.render(self.template_value))
         finally:
             models.MemcacheManager.end_readonly()
             courses.Course.clear_current()
+
+        # If the page displayed successfully, save the location for registered
+        # students so future visits to the course's base URL sends the student
+        # to the most-recently-visited page.
+        # TODO(psimakov): method called render() must not have mutations
+        if save_location and self.request.method == 'GET':
+            user = self.get_user()
+            if user:
+                student = models.Student.get_enrolled_student_by_user(user)
+                if student:
+                    prefs.last_location = self.request.path_qs
+                    models.StudentPreferencesDAO.save(prefs)
 
     def get_redirect_location(self, student):
         if (not student.is_transient and
             (self.request.path == self.app_context.get_slug() or
              self.request.path == self.app_context.get_slug() + '/' or
              self.request.get('use_last_location'))):  # happens on '/' page
-            prefs = models.StudentPreferencesDAO.load_or_create()
+            prefs = models.StudentPreferencesDAO.load_or_default()
             # Belt-and-suspenders: prevent infinite self-redirects
-            if (prefs.last_location and
+            if (prefs and
+                prefs.last_location and
                 prefs.last_location != self.request.path_qs):
                 return prefs.last_location
         return None
 
-
-class BaseRESTHandler(CourseHandler):
+class BaseRESTHandler(CourseHandler, RESTHandlerMixin):
     """Base REST handler."""
 
     def __init__(self, *args, **kwargs):
@@ -1009,13 +1345,28 @@ class BaseRESTHandler(CourseHandler):
             return False
         return True
 
-    def validation_error(self, message, key=None):
-        """Deliver a validation message."""
+    def validation_error(self, message, key=None, errors=None):
+        """Deliver validation error messages.
+
+        Args:
+            message. Concatenation of all error messages separated with
+                        new lines.
+            key.     The id of the validated object.
+            errors.  A list of key-value pair, where the key is a property and
+                        the value is an error message for that property,
+                        for example, [('skill-name', 'Name must be unique')].
+                        There can be multiple pairs with the same key.
+        """
+        payload_dict = {}
         if key:
-            transforms.send_json_response(
-                self, 412, message, payload_dict={'key': key})
-        else:
-            transforms.send_json_response(self, 412, message)
+            payload_dict['key'] = key
+        if errors:
+            error_messages = {}
+            for k, v in errors:
+                error_messages.setdefault(k, []).append(v)
+            payload_dict['messages'] = error_messages
+        transforms.send_json_response(
+            self, 412, message, payload_dict=payload_dict or None)
 
 
 class PreviewHandler(BaseHandler):
@@ -1027,7 +1378,7 @@ class PreviewHandler(BaseHandler):
         if user is None:
             student = TRANSIENT_STUDENT
         else:
-            student = Student.get_enrolled_student_by_email(user.email())
+            student = Student.get_enrolled_student_by_user(user)
             if not student:
                 student = TRANSIENT_STUDENT
 
@@ -1046,14 +1397,15 @@ class PreviewHandler(BaseHandler):
         self.template_value['show_registration_page'] = True
 
         course = self.app_context.get_environ()['course']
-        self.template_value['video_exists'] = bool(
-            'main_video' in course and
-            'url' in course['main_video'] and
-            course['main_video']['url'])
-        self.template_value['image_exists'] = bool(
-            'main_image' in course and
-            'url' in course['main_image'] and
-            course['main_image']['url'])
+        image_or_video_data = unicode(
+            course.get('main_image', {}).get('url'))
+        if image_or_video_data:
+            video_id = common_utils.find_youtube_video_id(image_or_video_data)
+            if video_id:
+                self.template_value['show_video'] = True
+                self.template_value['video_id'] = video_id
+            else:
+                self.template_value['show_image'] = True
 
         if user:
             profile = self.get_profile_for_user(user)
@@ -1070,7 +1422,7 @@ class BaseProfileHandler(object):
     """Handler for course registration."""
     def fill_local_chapter_data(self):
         # Get local chapter list from database
-        local_chapter_list = local_chapter_model.LocalChapterDAO.get_local_chapter_list()
+        local_chapter_list = local_chapter_model.LocalChapterDAO.get_local_chapter_list_for_org(local_chapter_base.LocalChapterBase.LOCAL_CHAPTER_ORG_COLLEGE)
         local_chapters = {}
         for local_chapter in local_chapter_list:
             local_chapters[local_chapter.code] = {
@@ -1078,8 +1430,20 @@ class BaseProfileHandler(object):
                 'name': local_chapter.name,
                 'city': local_chapter.city,
                 'state': local_chapter.state,
+                'org_type': local_chapter.org_type
             }
         self.template_value['local_chapter_dict'] = json.dumps(local_chapters)
+
+
+        local_chapter_list = local_chapter_model.LocalChapterDAO.get_local_chapter_list_for_org(local_chapter_base.LocalChapterBase.LOCAL_CHAPTER_ORG_INDUSTRY)
+        local_chapters = {}
+        for local_chapter in local_chapter_list:
+            local_chapters[local_chapter.code] = {
+                'employer_id': local_chapter.code,
+                'name': local_chapter.name,
+                'org_type': local_chapter.org_type
+            }
+        self.template_value['industry_local_chapter_dict'] = json.dumps(local_chapters)
 
     def fill_profile_data(self, profile):
         if profile.nick_name:
@@ -1121,8 +1485,12 @@ class BaseProfileHandler(object):
             self.template_value['employer_name'] = (
                 profile.employer_name)
 
-        self.template_value['local_chapter'] = (
-            profile.local_chapter if profile.local_chapter else False)
+
+
+
+
+
+
 
         self.template_value['college_id'] = (
             profile.college_id if profile.college_id else "other")
@@ -1130,18 +1498,53 @@ class BaseProfileHandler(object):
         self.template_value['college_roll_no'] = (
             profile.college_roll_no if profile.college_roll_no else "")
 
+        self.template_value['motivation'] = (
+            profile.motivation if profile.motivation else "")
+
+        self.template_value['exam_taker'] = (
+            profile.exam_taker if profile.exam_taker else False)
+
+        self.template_value['qualification'] = (
+            profile.qualification if profile.qualification else "")
+
+        if "student" == profile.profession:
+            self.template_value['study_year'] = (
+                profile.study_year if profile.study_year else "")
+            self.template_value['student_department'] = (
+                profile.department if profile.department else "")
+            self.template_value['student_degree'] = (
+                profile.degree if profile.degree else "")
+            self.template_value['local_chapter'] = (
+                profile.local_chapter if profile.local_chapter else False)
+
+        if "faculty" == profile.profession:
+            self.template_value['faculty_department'] = (
+                profile.department if profile.department else "")
+            self.template_value['local_chapter'] = (
+                profile.local_chapter if profile.local_chapter else False)
+
+
+        if "employed" == profile.profession:
+            self.template_value['employer_name'] = (
+                profile.employer_name if profile.employer_name else "")
+            self.template_value['employer_id'] = (
+                profile.employer_id if profile.employer_id else "")
+            self.template_value['industry_local_chapter'] = (
+                profile.local_chapter if profile.local_chapter else False)
+
     def get_valid_mobile_number(self):
         mobile_number = self.request.get('mobile_number')
         phone_number = phonenumbers.parse(mobile_number, 'IN')
         if phonenumbers.is_valid_number(phone_number):
             return phonenumbers.format_number(
                 phone_number, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
-        return None
+        return mobile_number
 
     def update_profile_data(self, user, profile_only=False):
         """Updates the user profile"""
         user_id = user.user_id()
         email = user.email()
+        mobile_number = self.get_valid_mobile_number()
 
         country_of_residence = self.request.get('country_of_residence')
         if "IN" == country_of_residence:
@@ -1151,24 +1554,62 @@ class BaseProfileHandler(object):
 
         name = self.request.get('form01')
         city_of_residence = self.request.get('city_of_residence')
-        college = self.request.get('college')
         age_group = self.request.get('age_group')
         graduation_year = int(self.request.get('graduationyear'))
         profession = self.request.get('profession')
-        if 'employed' == profession:
-            employer_name = self.request.get('employer')
+        motivation = self.request.get('motivation')
+        if str(self.request.get('exam_taker')).lower() == 'true':
+            exam_taker = True
         else:
-            employer_name = None
-        accepted_terms = bool(self.request.get('terms'))
-        accepted_honor = bool(self.request.get('honor_code'))
-        if str(self.request.get('local_chapter')).lower() == 'true':
-            local_chapter = True
-        else:
-            local_chapter = False
-        mobile_number = self.get_valid_mobile_number()
-        college_id = self.request.get('college_id')
+            exam_taker = False
+        qualification = self.request.get('qualification')
 
-        if college_id:
+
+        #These are filled based on profession, so set them to default first
+        employer_name = ""
+        employer_id = ""
+        designation = ""
+        college = ""
+        college_id = ""
+        college_roll_no = ""
+        degree = ""
+        department = ""
+        study_year = None
+        local_chapter = False
+
+
+        if 'employed' == profession:
+            employer_name = self.request.get('employer_name')
+            employer_id = self.request.get('employer_id')
+            designation = self.request.get('designation')
+
+        elif 'student' == profession:
+            college = self.request.get('college')
+            college_id = self.request.get('college_id')
+            college_roll_no = self.request.get('college_roll_no')
+            degree = self.request.get('student_degree')
+            department = self.request.get('student_department')
+            study_year = self.request.get('study_year')
+            if study_year is not None:
+                study_year = int(study_year)
+
+        elif 'faculty' == profession:
+            college = self.request.get('college')
+            college_id = self.request.get('college_id')
+            designation = self.request.get('designation')
+            department = self.request.get('faculty_department')
+
+
+
+        if profession in ['student','faculty'] and str(self.request.get('local_chapter')).lower() == 'true':
+            local_chapter = True
+
+        if "employed" == profession  and str(self.request.get('industry_local_chapter')).lower() == 'true':
+            local_chapter = True
+
+
+
+        if college_id and profession in ['student','faculty'] :
             # Override required fields from local chapter list
             local_chapter_obj = (
                 local_chapter_model
@@ -1184,7 +1625,62 @@ class BaseProfileHandler(object):
                 .replace('_And_', '_and_'))
             college = local_chapter_obj.name
 
-        college_roll_no = self.request.get('college_roll_no')
+
+        if employer_id and 'employed' == profession:
+            # Override required fields from local chapter list
+            emp_local_chapter_obj = (
+                local_chapter_model
+                .LocalChapterDAO.get_local_chapter_by_key(employer_id))
+            if not emp_local_chapter_obj:
+                # TODO(rthakker) redirect somewhere
+                return
+            city_of_residence = emp_local_chapter_obj.city
+            # TODO(rthakker) standardize local chapter city/state names
+            state_of_residence = (
+                emp_local_chapter_obj.state.title()
+                .replace(' ', '_')
+                .replace('_And_', '_and_'))
+            employer_name = emp_local_chapter_obj.name
+
+
+
+        # Sometimes students select a college name even after selecting
+        # NO in the LC, then we need to find LC using college name and make
+        # student part of that LC. Same with professionals
+
+        if local_chapter is False:
+            if college is not None and college != "" and profession in ['student','faculty'] :
+                local_chapter_obj = (
+                            local_chapter_model
+                            .LocalChapterDAO.get_local_chapter_by_name(college))
+                if local_chapter_obj:
+                    local_chapter = True
+                    city_of_residence = local_chapter_obj.city
+                    state_of_residence = (
+                        local_chapter_obj.state.title()
+                        .replace(' ', '_')
+                        .replace('_And_', '_and_'))
+                    college = local_chapter_obj.name
+                    college_id = local_chapter_obj.code
+
+            if employer_name is not None and employer_name != "" and 'employed' == profession:
+                emp_local_chapter_obj = (
+                            local_chapter_model
+                            .LocalChapterDAO.get_local_chapter_by_name(employer_name))
+
+                if emp_local_chapter_obj:
+                    local_chapter = True
+                    city_of_residence = emp_local_chapter_obj.city
+                    state_of_residence = (
+                        emp_local_chapter_obj.state.title()
+                        .replace(' ', '_')
+                        .replace('_And_', '_and_'))
+                    employer_name = emp_local_chapter_obj.name
+                    employer_id = emp_local_chapter_obj.code
+
+
+        accepted_terms = bool(self.request.get('terms'))
+        accepted_honor = bool(self.request.get('honor_code'))
 
         StudentProfileDAO.update(user_id, email,
                                  nick_name=name,
@@ -1202,11 +1698,26 @@ class BaseProfileHandler(object):
                                  local_chapter=local_chapter,
                                  college_id=college_id,
                                  college_roll_no=college_roll_no,
-                                 profile_only=profile_only)
+                                 profile_only=profile_only,
+                                 motivation=motivation,
+                                 exam_taker=exam_taker,
+                                 qualification=qualification,
+                                 degree=degree,
+                                 department=department,
+                                 study_year=study_year,
+                                 designation=designation,
+                                 employer_id=employer_id)
 
 
 class RegisterHandler(BaseHandler, BaseProfileHandler):
     """Handler for course registration."""
+
+    # Hooks provide a mechanism to prevent students from registering.  Hooks
+    # are called with the current application context and the user_id trying to
+    # register.  If registration should be prevented, the hook should return
+    # a list of alternate content to display on the registration page instead
+    # of the normal registration form.
+    PREVENT_REGISTRATION_HOOKS = []
 
     def get(self):
         """Handles GET request."""
@@ -1216,7 +1727,7 @@ class RegisterHandler(BaseHandler, BaseProfileHandler):
                 users.create_login_url(self.request.uri), normalize=False)
             return
 
-        student = Student.get_enrolled_student_by_email(user.email())
+        student = Student.get_enrolled_student_by_user(user)
         if student:
             self.redirect('/course')
             return
@@ -1241,6 +1752,23 @@ class RegisterHandler(BaseHandler, BaseProfileHandler):
         self.template_value['transient_student'] = True
         self.template_value['register_xsrf_token'] = (
             XsrfTokenManager.create_xsrf_token('register-post'))
+
+        alternate_content = []
+        for hook in self.PREVENT_REGISTRATION_HOOKS:
+            alternate_content.extend(hook(self.app_context, user.user_id()))
+        self.template_value['alternate_content'] = alternate_content
+
+        # Get local chapter list from database
+        local_chapter_list = local_chapter_model.LocalChapterDAO.get_local_chapter_list()
+        self.template_value['local_chapter_list'] = []
+        local_chapters = []
+        for local_chapter in local_chapter_list:
+            local_chapters.append(
+                [local_chapter.code, local_chapter.name,
+                 local_chapter.city, local_chapter.state]
+            )
+        self.template_value['local_chapter_list'] = json.dumps(local_chapters)
+
         self.render('register.html')
 
     def post(self):
@@ -1267,6 +1795,12 @@ class RegisterHandler(BaseHandler, BaseProfileHandler):
             self.redirect('/register')
             return
 
+        if str(self.request.get('local_chapter')).lower() == 'true':
+            if 'profession' in self.request.POST.keys():
+                if self.request.POST['profession'] != 'faculty':
+                    if not self.request.get('college_roll_no'):
+                        self.redirect('/register')
+                        return
 
         if 'name_from_profile' in self.request.POST.keys():
             profile = self,get_profile_for_user(user)
@@ -1288,6 +1822,7 @@ class RegisterHandler(BaseHandler, BaseProfileHandler):
             self.update_profile_data(user)
 
         added_to_lists = self.EnrollStudentToGroups(user)
+        self.addPushTokensToTopic(user)
 
         # Render registration confirmation page
         self.redirect('/course#registration_confirmation')
@@ -1326,9 +1861,21 @@ class RegisterHandler(BaseHandler, BaseProfileHandler):
             ret = ret and ret2
         return ret
 
+    @classmethod
+    def addPushTokensToTopic(cls, user):
+        """Adds existing push tokens of the user to the course's topic"""
+        namespace = namespace_manager.get_namespace()
+        profile = models.StudentProfileDAO.get_profile_by_user_id(user.user_id())
+        push_notif.PushNotificationBase.add_tokens_for_namespace(
+            profile.push_tokens_as_list, namespace)
+
 
 class ForumHandler(BaseHandler):
     """Handler for forum page."""
+
+    FORUM_EMBED_TEMPLATE = (
+        'https://groups.google.com/forum/embed/?place=forum/{name}'
+        '{domain_portion}')
 
     def get(self):
         """Handles GET requests."""
@@ -1337,8 +1884,80 @@ class ForumHandler(BaseHandler):
         if not student:
             return
 
+        environ = self.app_context.get_environ()
+        forum_email = environ.get('course', {}).get('forum_email', None)
+
+        if not forum_email:
+            self.error(404)
+            return
+
+        self.template_value['forum_embed_url'] =\
+            self.generate_forum_embed_url(forum_email)
+
         self.template_value['navbar'] = {'forum': True}
+
         self.render('forum.html')
+
+    @classmethod
+    def generate_forum_embed_url(cls, email):
+        if not email:
+            return None
+
+        parsed_email = EMAIL_PATTERN.match(str(email))
+        if not parsed_email:
+            return None
+
+        domain = parsed_email.group('domain')
+        name = parsed_email.group('name')
+
+        domain_portion = ''
+        if domain != 'googlegroups.com':
+            domain_portion = '&domain={}'.format(domain)
+
+        return cls.FORUM_EMBED_TEMPLATE.format(
+            name=name, domain_portion=domain_portion)
+
+
+class LocalizedGlobalHandler(ApplicationHandler):
+    """A handler not scoped to a course that supports template localization."""
+
+    _DEFAULT_LOCALE = 'en_US'
+
+    def get_template(self, template_file, additional_dirs=None):
+        assert additional_dirs, 'Must specify template dirs'
+
+        locale = self._get_locale(
+            accept_language_header=self._get_accept_language(
+                self.request.headers))
+        return self._get_template_env(
+            additional_dirs, locale=locale).get_template(template_file)
+
+    @classmethod
+    def _get_accept_language(cls, headers):
+        return headers.get('Accept-Language')
+
+    @classmethod
+    def _get_locale(cls, accept_language_header=None):
+        # Gets the locale. Because we are not scoped to a course, we cannot
+        # consult datastore to learn the user's preferences. We can, however,
+        # get the value sent by their browser and take the highest-priority
+        # value found. If no header is sent, we fall back to the declared
+        # default.
+        locale = cls._DEFAULT_LOCALE
+        pairs = []
+        if accept_language_header:
+            pairs = locales.parse_accept_language(accept_language_header)
+
+        if pairs:
+            locale = sorted(pairs, key=lambda t: t[1], reverse=True)[0][0]
+
+        return locale
+
+    @classmethod
+    def _get_template_env(cls, templates_dirs, locale=None):
+        return jinja_utils.create_jinja_environment(
+            jinja2.FileSystemLoader(templates_dirs),
+            locale=locale if locale else cls._DEFAULT_LOCALE, autoescape=True)
 
 
 class StudentProfileHandler(BaseHandler):
@@ -1349,6 +1968,11 @@ class StudentProfileHandler(BaseHandler):
     # course object and should return a pair of strings; the first being the
     # title of the data and the second the value to display.
     EXTRA_STUDENT_DATA_PROVIDERS = []
+
+    # A list of callbacks which provides extra sections to the Student Progress
+    # page. Each callback is passed the current handler, the app_context,
+    # and the student and returns a jinja2.Markup or a safe_dom object.
+    EXTRA_PROFILE_SECTION_PROVIDERS = []
 
     def get(self):
         """Handles GET requests."""
@@ -1371,23 +1995,17 @@ class StudentProfileHandler(BaseHandler):
                 'labels': list(course.get_unit_track_labels(unit)),
                 })
 
-        name = student.name
-        profile = student.profile
-        if profile:
-            name = profile.nick_name
         student_labels = student.get_labels_of_type(
             models.LabelDTO.LABEL_TYPE_COURSE_TRACK)
         self.template_value['navbar'] = {'progress': True}
         self.template_value['student'] = student
-        self.template_value['student_name'] = name
+        self.template_value['student_name'] = student.name
         self.template_value['date_enrolled'] = student.enrolled_on.strftime(
             HUMAN_READABLE_DATE_FORMAT)
-        self.template_value['score_list'] = course.get_all_scores(student,include_deleted_assessments=True)
+        self.template_value['score_list'] = course.get_all_scores(student)
         self.template_value['overall_score'] = course.get_overall_score(student)
         self.template_value['student_edit_xsrf_token'] = (
             XsrfTokenManager.create_xsrf_token('student-edit'))
-        self.template_value['can_edit_name'] = (
-            not models.CAN_SHARE_STUDENT_PROFILE.value)
         self.template_value['track_labels'] = track_labels
         self.template_value['student_labels'] = student_labels
         self.template_value['units'] = units
@@ -1401,6 +2019,13 @@ class StudentProfileHandler(BaseHandler):
         for data_provider in self.EXTRA_STUDENT_DATA_PROVIDERS:
             extra_student_data.append(data_provider(self, student, course))
         self.template_value['extra_student_data'] = extra_student_data
+
+        profile_sections = []
+        for profile_section_provider in self.EXTRA_PROFILE_SECTION_PROVIDERS:
+            section = profile_section_provider(self, self.app_context, student)
+            if section:
+                profile_sections.append(section)
+        self.template_value['profile_sections'] = profile_sections
 
         self.render('student_profile.html')
 
@@ -1456,32 +2081,102 @@ class StudentSetTracksHandler(BaseHandler):
 class StudentUnenrollHandler(BaseHandler):
     """Handler for students to unenroll themselves."""
 
+    # Each hook in this list is excuted on get().  Hooks are passed the
+    # application context for the request.  They return a list of items which
+    # are included in the unenroll_confirmation_check.html page within the
+    # context of the form users submit to enroll.
+    GET_HOOKS = []
+
+    # Hooks in this list are executed on the POST of the form generated by
+    # get().  It is expected that based on the values of additional fields
+    # added to the form by GET_HOOKS, various extension modules will need to
+    # hijack the flow of control.  For example, on unenroll, the data_deletion
+    # module wants to put in an extra page to confirm removal of all user data
+    # (if the relevant checkbox was checked).
+    #
+    # In order to support flow hijacking and continuation, the method
+    # unenroll_post_continue() is provided.  When an item in POST_HOOKS
+    # is called, it is provided with three items:
+    # - The Student object corresponding to the logged-in user
+    # - Some handler inheriting from BaseHandler (not necessarily
+    #   a StudentUnenrollHandler instance - see below)
+    # - A list of form parameters - a list of key, value 2-tuples.
+    #   Hooks will probably want to instantiate a MultiDict instance to
+    #   provide the familiar API for accessing parameters.  See
+    #   unenroll_post_continue(), below, for an example of how.
+    #
+    # If a POST_HOOK entry decides it needs to hijack the flow of pages
+    # presented to the user, on completion, that hook should finish by
+    # calling back to unenroll_post_continue(), providing two values:
+    # - A Handler object, usually the instance handling the final POST in the
+    #   hijacking flow
+    # - The same set of form parameters provided to the hook in the callback.
+    #   (Hooks will probably want to JSON serialize the parameters value
+    #   to simplify retention for use on flow completion)
+    # Note: If the flow has controls that permit abandoning the unenroll,
+    # it is _not_ necessary to call back to unenroll_post_continue(); just
+    # redirect the user back to 'student/home'.
+    #
+    # See modules/data_removal.py for a worked example of how to handle this
+    # flow control.
+    #
+    # Yes, this is overly complex and not very intuitive.  If/when we get to
+    # a point where we have a use case for multi-page flows with sub-flows,
+    # an appropriate framework should be applied here as well.
+    #
+    POST_HOOKS = collections.OrderedDict()
+    _POST_HOOK_NAMES_PARAM = 'post_hook_names'
+
     def get(self):
         """Handles GET requests."""
         student = self.personalize_page_and_get_enrolled()
         if not student:
             return
-
         self.template_value['student'] = student
         self.template_value['navbar'] = {}
         self.template_value['student_unenroll_xsrf_token'] = (
             XsrfTokenManager.create_xsrf_token('student-unenroll'))
+        hook_items = []
+        for hook in self.GET_HOOKS:
+            hook_items.extend(hook(self.app_context))
+        self.template_value['hook_items'] = hook_items
         self.render('unenroll_confirmation_check.html')
 
     def post(self):
         """Handles POST requests."""
-        student = self.personalize_page_and_get_enrolled()
+        # First time into the POST handling, add all the names of the hooks
+        # we need to do.  As these are done, we will remove them one-by-one.
+
+        # pylint: disable=abstract-class-instantiated
+        parameters = multidict.MultiDict(self.request.params.items())
+        for post_hook_name in self.POST_HOOKS.iterkeys():
+            parameters.add(self._POST_HOOK_NAMES_PARAM, post_hook_name)
+        self.unenroll_post_continue(self, parameters)
+
+    @classmethod
+    def unenroll_post_continue(cls, handler, parameters_list):
+        student = handler.personalize_page_and_get_enrolled()
         if not student:
             return
-
-        if not self.assert_xsrf_token_or_fail(self.request, 'student-unenroll'):
+        # pylint: disable=abstract-class-instantiated
+        parameters = multidict.MultiDict(parameters_list)
+        if not handler.assert_xsrf_token_or_fail(parameters,
+                                                 'student-unenroll'):
             return
 
-        Student.set_enrollment_status_for_current(False)
+        # Before calling each hook, remove the name of the hook from the
+        # parameters list, so that on callback by a hijacking flow, we
+        # don't call that same hook again.
+        hook_name = parameters.pop(cls._POST_HOOK_NAMES_PARAM, None)
+        while hook_name:
+            if cls.POST_HOOKS[hook_name](student, handler, parameters.items()):
+                return
+            hook_name = parameters.pop(cls._POST_HOOK_NAMES_PARAM, None)
 
-        self.template_value['navbar'] = {}
-        self.template_value['transient_student'] = True
-        self.render('unenroll_confirmation.html')
+        Student.set_enrollment_status_for_current(False)
+        handler.template_value['navbar'] = {}
+        handler.template_value['transient_student'] = True
+        handler.render('unenroll_confirmation.html')
 
 
 class StudentLocaleRESTHandler(BaseRESTHandler):
@@ -1500,7 +2195,7 @@ class StudentLocaleRESTHandler(BaseRESTHandler):
             transforms.send_json_response(self, 401, 'Bad locale')
             return
 
-        prefs = models.StudentPreferencesDAO.load_or_create()
+        prefs = models.StudentPreferencesDAO.load_or_default()
         if prefs:
             # Store locale in StudentPreferences for logged-in users
             prefs.locale = selected
@@ -1512,3 +2207,26 @@ class StudentLocaleRESTHandler(BaseRESTHandler):
                 max_age=GUEST_LOCALE_COOKIE_MAX_AGE_SEC)
 
         transforms.send_json_response(self, 200, 'OK')
+
+class JobStatusRESTHandler(BaseRESTHandler):
+    URL = '/rest/core/jobs/status'
+
+    def get(self):
+        if not roles.Roles.is_course_admin(self.app_context):
+            transforms.send_json_response(self, 401, 'Unauthorized.')
+            return
+        # pylint: disable=protected-access
+        job_entity = jobs.DurableJobEntity._get_by_name(
+            self.request.get('name'))
+        result = {'running': bool(job_entity and not job_entity.has_finished)}
+        transforms.send_json_response(self, 200, 'Success.', result)
+
+
+def get_namespaced_handlers():
+    return [
+        (JobStatusRESTHandler.URL, JobStatusRESTHandler)
+    ]
+
+
+def map_handler_urls(handlers):
+    return [('/' + handler.URL, handler) for handler in handlers]

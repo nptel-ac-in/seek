@@ -1,0 +1,113 @@
+
+<dom-module id="all-courses">
+  <template>
+    <style include="nptel-pwa-css"></style>
+        <paper-spinner-lite class="spinner" active alt="Loading content.."></paper-spinner-lite>
+        <dom-repeat items="[[courseCatg]]">
+          <template>
+            <paper-card class="courselist">
+              <a href="#/category/[[item.category]]" data-item="[[item]]">
+                <div class="card-content">
+                    <div class="course-header">[[item.description]] <iron-icon icon="icons:chevron-right" style="float:right;margin-right:-15px"></iron-icon></div>
+                    <!-- <div class="course-detail"><iron-icon icon="icons:date-range"></iron-icon>[[_formatDate(item.start_date)]] - [[_formatDate(item.end_date)]]</div> -->
+                </div>
+              </a>
+            </paper-card>
+           </template>
+        <dom-repeat>
+  </template>
+  <script>
+    /**
+     * @customElement
+     * @polymer
+     */
+    class AllCourses extends Polymer.Element {
+      static get is() { return 'all-courses'; }
+      static get properties() {
+        return {
+          videoId :{
+            type : String
+          },
+          header :{
+            type : String,
+            value:"Course Categories",
+            notify: true
+          },
+          enrolled : {
+            type : String,
+            value : false,
+            notify : true
+          },
+          route : {
+            observer : '_isAllCoursesSelected'
+          },
+          courseCatg:{
+            type:Object
+          },
+          courseSlug: {
+            type:String
+          },
+        };
+      }
+      processResponse(payload){
+        if (payload.categories)
+        {
+           this.courseCatg = payload.categories;
+        }
+      }
+      _isAllCoursesSelected()
+      {
+          if (Polymer.dom(this.parentElement).node.selected == 'allcourses')
+          {
+            this.header = "Course Categories";
+            this.enrolled = false;
+          }
+      }
+      ready(){
+          super.ready();
+          var spinner = Polymer.dom(this.root).querySelector('paper-spinner-lite');
+          spinner.active = true;
+          spinner.style.display = "block";
+          var main = this; // to access "this" inside the anonymous function below.
+          caches.open('nptel-categories').then(function(cache){
+            return cache.match('categories').then(function(response){
+              /* Below logic is to manually update categories cache after the
+              specified time in cl_cache_expire in main.js.*/
+              var objdate = new Date(response ? response.headers.get('Date') : null);
+              var currdate = new Date();
+              if (currdate.getTime() < (objdate.getTime()+(cl_cache_expire)))
+                  return response
+              else {
+                return fetch('/m/categories',{
+                  method: 'GET'
+                })
+                .then( obj => {
+                  if(obj && obj.status === 200 && obj.type === 'basic')
+                  cache.put('categories',obj.clone());
+                  return obj;
+                })
+                .catch(obj =>{
+                  logError(obj);
+                });
+              }
+            }).then(function(resp){
+              validateResponse(main,resp);
+            });
+          });
+
+      }
+      _formatDate(dateString) {
+        var date = new Date(dateString);
+        var monthNames = ["January", "February", "March", "April", "May",
+          "June", "July", "August", "September", "October", "November",
+          "December"];
+        var result = monthNames[date.getMonth()] + ' ' + date.getDate();
+        if (date.getFullYear() != new Date().getFullYear()) {
+          result += ', ' + date.getFullYear();
+        }
+        return result;
+      }
+    }
+    window.customElements.define(AllCourses.is, AllCourses);
+  </script>
+</dom-module>

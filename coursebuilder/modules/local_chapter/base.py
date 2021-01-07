@@ -22,7 +22,7 @@ from common import jinja_utils
 
 class LocalChapterBase(object):
     LINK_URL = 'dashboard'
-    NAME = 'Local Chapter'
+    NAME = 'Local Chapters'
     DASHBOARD_NAV = 'local_chapter'
     DASHBOARD_SHOW_LIST_TAB = 'local_chapters'
     DASHBOARD_ADD_LOCAL_CHAPTER = 'add_local_chapter'
@@ -30,6 +30,9 @@ class LocalChapterBase(object):
     DASHBOARD_EDIT_LOCAL_CHAPTER = 'edit_local_chapter'
     DASHBOARD_DELETE_LOCAL_CHAPTER = 'delete_local_chapter'
     LOCAL_CHAPTER_SECTION = 'local_chapter'
+    LOCAL_CHAPTER_ORG_COLLEGE = "college"
+    LOCAL_CHAPTER_ORG_INDUSTRY = "industry"
+
 
     @classmethod
     def get_template(self, template_name, dirs):

@@ -23,23 +23,12 @@ from modules.manual_review import assign
 from modules.manual_review import dashboard as manual_review_dashboard
 from modules.manual_review import base
 from modules.dashboard import dashboard
-from modules.dashboard import tabs
 
 custom_module = None
 
 
 def register_module():
     """Registers this module in the registry."""
-
-    # Register the dashboard handler
-    tabs.Registry.register(
-        base.ManualReviewBase.DASHBOARD_NAV,
-        base.ManualReviewBase.DASHBOARD_TAB,
-        base.ManualReviewBase.NAME,
-        manual_review_dashboard.ManualReviewDashboardHandler)
-
-    dashboard.DashboardHandler.add_custom_get_action(
-        base.ManualReviewBase.DASHBOARD_NAV, None)
 
     dashboard.DashboardHandler.add_custom_get_action(
         base.ManualReviewBase.COURSE_STAFF_VIEW_ACTION,
@@ -65,8 +54,13 @@ def register_module():
          delete_manual_review)
     )
 
-    dashboard.DashboardHandler.add_nav_mapping(
-        base.ManualReviewBase.DASHBOARD_NAV, base.ManualReviewBase.NAME)
+
+    dashboard.DashboardHandler.add_sub_nav_mapping(
+        base.ManualReviewBase.DASHBOARD_CATEGORY,
+        base.ManualReviewBase.DASHBOARD_NAV, base.ManualReviewBase.NAME,
+        contents=(manual_review_dashboard.
+                  ManualReviewDashboardHandler.display_html)
+    )
 
     # register cron handler
     cron_handlers = [

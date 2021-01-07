@@ -1,0 +1,20 @@
+{% macro display(data) %}
+  <script>
+    var questionData = questionData || {};
+    questionData.savedAnswers = questionData.savedAnswers || {};
+    $.extend(questionData.savedAnswers,
+        JSON.parse("{{ data['saved_answers'] | js_string }}"));
+    questionData.scored = true;
+  </script>
+  <div class="gcb-assessment-body assessment-readonly">
+    {{ data['content'] | gcb_tags }}
+  </div>
+  <div>
+    <span>
+      <label>Score: </label>
+    </span>
+    <span>
+      <input disabled="" type="text" value="{{data.score}}"/>
+    </span>
+  </div>
+{% endmacro %}

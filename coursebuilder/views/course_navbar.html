@@ -1,19 +1,3 @@
-<!--
- Copyright 2020 Google LLC
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 {% macro show_full_progress_state(suffix, uid) -%}
 <div class="gcb-progress-icon-holder"><img src="/modules/nptel/assets/img/not_started.png"
     alt="{# I18N: Alt text for image representing student progress. #}{{ gettext('Not Started') }}"
@@ -54,7 +38,7 @@
 {%- endmacro %}
 
 {% macro show_lesson(u, lesson, show_progress) -%}
-  {% if lesson.now_available or is_course_admin %}
+  {% if lesson.is_name_visible or is_course_admin %}
     {{ start_subunit(page_type == 'unit' and lesson_id and lesson.lesson_id == lesson_id) }}
       <a href="unit?unit={{ u.unit_id }}&lesson={{ lesson.lesson_id }}">{{ gettext('%(title)s', title=lesson.title) }}</a>
       {% if not transient_student and show_progress %}
@@ -73,7 +57,7 @@
 {%- endmacro %}
 
 {% macro show_subunit(subunit, show_progress) -%}
-  {% if subunit.now_available or is_course_admin %}
+  {% if subunit.is_name_visible or is_course_admin %}
     {{ start_subunit(unit and subunit.unit_id == unit.unit_id) }}
       {% if subunit.type == 'PA' %}
         <a href="progassignment?name={{ subunit.unit_id }}">{{ gettext('Assignment : %(title)s', title=subunit.title) }}</a>
@@ -91,20 +75,48 @@
   {% endif %}
 {%- endmacro %}
 
+
+{% macro render_unit_children(item, lessons, sub_units) -%}
+  {% for unit_order in children_order %}
+      {% if unit_order.id == item.unit_id %}
+        {% for child in unit_order.children %}
+          {% if child.section == 'lesson'%}
+            {% for lesson in lessons %}
+                {% if child.id == lesson.lesson_id %}
+                  {{ show_lesson(item,lesson, is_enrolled) }}
+                {% endif %}
+            {% endfor %}
+          {% endif %}
+          {% if child.section == 'sub_unit' %}
+            {% for sub_unit in sub_units %}
+                {% if child.id == sub_unit.unit_id %}
+                  {{ show_subunit(sub_unit, is_enrolled) }}
+                {% endif %}
+            {% endfor %}
+          {% endif %}
+        {% endfor %}
+      {% endif %}
+  {% endfor %}
+{%- endmacro %}
+
+
 <div class="gcb-nav" id="gcb-nav-left" role="navigation">
    <div class='gcb-aside'>
   <h2>Course outline</h2>
-
     {% for uiter in units %}
-      {% if uiter.title != "FAQ's" and (uiter.now_available or is_course_admin) %}
+      {% if uiter.title != "FAQ's" and (uiter.is_name_visible or is_course_admin) %}
         {% if uiter.type == 'U' %}
           {{ start_unit_navbar(uiter, False, '') }}
-            {% for lesson in lessons_dict[uiter.unit_id] %}
-              {{ show_lesson(uiter, lesson, is_enrolled) }}
-            {% endfor %}
-            {% for subunit in unit_dict[uiter.unit_id] %}
-              {{ show_subunit(subunit, is_enrolled) }}
-            {% endfor %}
+            {% if children_order %}
+              {{ render_unit_children(uiter, lessons_dict[uiter.unit_id], unit_dict[uiter.unit_id]) }}
+            {% else %}
+              {% for lesson in lessons_dict[uiter.unit_id] %}
+                {{ show_lesson(uiter, lesson, is_enrolled) }}
+              {% endfor %}
+              {% for subunit in unit_dict[uiter.unit_id] %}
+                {{ show_subunit(subunit, is_enrolled) }}
+              {% endfor %}
+            {% endif %}
           {{ end_unit_navbar() }}
         {% endif %}
       {% endif %}
@@ -113,17 +125,21 @@
   </div>
 
   {% for uiter in units %}
-    {% if uiter.title == "FAQ's" and (uiter.now_available or is_course_admin) %}
+    {% if uiter.title == "FAQ's" and (uiter.is_name_visible or is_course_admin) %}
       <div class='gcb-aside'>
       <ul class="unit_navbar_ul" id="faq_navbar">
         {% if uiter.type == 'U' %}
           {{ start_unit_navbar(uiter, True, 'Help and FAQs') }}
-            {% for lesson in lessons_dict[uiter.unit_id] %}
-              {{ show_lesson(uiter, lesson, False) }}
-            {% endfor %}
-            {% for subunit in unit_dict[uiter.unit_id] %}
-              {{ show_subunit(subunit, False) }}
-            {% endfor %}
+            {% if children_order %}
+              {{ render_unit_children(uiter, lessons_dict[uiter.unit_id], unit_dict[uiter.unit_id]) }}
+            {% else %}
+              {% for lesson in lessons_dict[uiter.unit_id] %}
+                {{ show_lesson(uiter, lesson, false) }}
+              {% endfor %}
+              {% for subunit in unit_dict[uiter.unit_id] %}
+                {{ show_subunit(subunit, false) }}
+              {% endfor %}
+            {% endif %}
           {{ end_unit_navbar() }}
         {% endif %}
       </ul>

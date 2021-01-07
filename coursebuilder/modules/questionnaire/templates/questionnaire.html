@@ -1,19 +1,3 @@
-<!--
- Copyright 2020 Google LLC
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 <link rel="stylesheet" type="text/css"
     href="/modules/questionnaire/resources/css/button.css">
 <div class="gcb-questionnaire">
@@ -22,7 +6,27 @@
       data-form-id="{{ form_id }}"
       data-xsrf-token="{{ xsrf_token }}"
       data-disabled="{% if disabled %}true{% else %}false{% endif %}"
-      data-registered="{% if registered %}true{% else %}false{% endif %}">
+      {% if single_submission %}
+        data-single-submission="true"
+        {# I18N: This message appears on a page where a student could
+           submit answers to a questionnaire.  Students may only submit
+           the questionnaire once.  This message appears when viewing
+           the page after the first subission. #}
+        data-single-submission-message="{{ gettext("Only one submission of this form is allowed.") }}"
+      {% else %}
+        data-single-submission="false"
+      {% endif %}
+      {% if registered %}
+        data-registered="true"
+      {% else %}
+        data-registered="false"
+        {# I18N: This message appears on a page where a student could
+           submit answers to a questionnaire.  The user viewing the
+           page is not a registered student, and gets a message
+           indicating the situation. #}
+        data-registered-message="{{
+          gettext("Only registered students can submit answers.") }}"
+      {% endif %}>
     {% if button_label %}
       {{ button_label }}
     {% else %}
@@ -36,4 +40,3 @@
   </div>
   {% endif %}
 </div>
-

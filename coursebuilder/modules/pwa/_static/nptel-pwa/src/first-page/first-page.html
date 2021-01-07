@@ -1,0 +1,139 @@
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/l2t-paper-slider/l2t-paper-slider.html">
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-button/paper-button.html">
+<dom-module id="first-page">
+  <template id="content">
+    <style include="slate-font-awesome"></style>
+      <style>
+      .demo-style {
+        text-align: center;
+        vertical-align: middle;
+        padding-top: 30%;
+        color: #fff;
+        height:90%;
+      }
+      .paper-slide-blue {
+        background: #2196F3
+      }
+      .paper-slide-red {
+        background: #F44336
+      }
+      .paper-slide-brown {
+        background: #795548
+      }
+      .paper-slide-green {
+        background: #009688
+      }
+      .nextButton {
+        position: absolute;
+        right: 0px;
+      }
+      .bottomtext{
+        padding-top: 10%;
+      }
+      .bottomtext > .primary {
+        font-size: 25px;
+      }
+      .bottomtext > .sec {
+        padding-top: 5px;
+      }
+      </style>
+
+
+      <l2t-paper-slider position-changed="[[positionChange]]" id="slider">
+        <paper-slide class="paper-slide-blue demo-style">
+          <svg width="200" height="200" aria-hidden="true" data-prefix="fas" data-icon="chalkboard-teacher" role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512" class="svg-inline--fa fa-chalkboard-teacher fa-w-20"><path fill="currentColor" d="M208 352c-2.39 0-4.78.35-7.06 1.09C187.98 357.3 174.35 360 160 360c-14.35 0-27.98-2.7-40.95-6.91-2.28-.74-4.66-1.09-7.05-1.09C49.94 352-.33 402.48 0 464.62.14 490.88 21.73 512 48 512h224c26.27 0 47.86-21.12 48-47.38.33-62.14-49.94-112.62-112-112.62zm-48-32c53.02 0 96-42.98 96-96s-42.98-96-96-96-96 42.98-96 96 42.98 96 96 96zM592 0H208c-26.47 0-48 22.25-48 49.59V96c23.42 0 45.1 6.78 64 17.8V64h352v288h-64v-64H384v64h-76.24c19.1 16.69 33.12 38.73 39.69 64H592c26.47 0 48-22.25 48-49.59V49.59C640 22.25 618.47 0 592 0z" class=""></path></svg>
+          <br/>
+          <div class="bottomtext">
+            <div class="primary"> Free online courses </div>
+            <div class="sec"> (4,8,12 Weeks Duration)</div>
+          </div>
+        </paper-slide>
+        <paper-slide class="paper-slide-red demo-style">
+          <svg width="200" height="200" aria-hidden="true" data-prefix="fas" data-icon="clipboard-list" role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512" class="svg-inline--fa fa-clipboard-list fa-w-12"><path fill="currentColor" d="M336 64h-80c0-35.3-28.7-64-64-64s-64 28.7-64 64H48C21.5 64 0 85.5 0 112v352c0 26.5 21.5 48 48 48h288c26.5 0 48-21.5 48-48V112c0-26.5-21.5-48-48-48zM96 424c-13.3 0-24-10.7-24-24s10.7-24 24-24 24 10.7 24 24-10.7 24-24 24zm0-96c-13.3 0-24-10.7-24-24s10.7-24 24-24 24 10.7 24 24-10.7 24-24 24zm0-96c-13.3 0-24-10.7-24-24s10.7-24 24-24 24 10.7 24 24-10.7 24-24 24zm96-192c13.3 0 24 10.7 24 24s-10.7 24-24 24-24-10.7-24-24 10.7-24 24-24zm128 368c0 4.4-3.6 8-8 8H168c-4.4 0-8-3.6-8-8v-16c0-4.4 3.6-8 8-8h144c4.4 0 8 3.6 8 8v16zm0-96c0 4.4-3.6 8-8 8H168c-4.4 0-8-3.6-8-8v-16c0-4.4 3.6-8 8-8h144c4.4 0 8 3.6 8 8v16zm0-96c0 4.4-3.6 8-8 8H168c-4.4 0-8-3.6-8-8v-16c0-4.4 3.6-8 8-8h144c4.4 0 8 3.6 8 8v16z" class=""></path></svg>
+          <br/>
+          <div class="bottomtext">
+            <div class="primary"> In-Person Proctored Exam</div>
+            <div class="sec"> (For a Fee; Choose from 100+ Cities)</div>
+          </div>
+        </paper-slide>
+        <paper-slide class="paper-slide-brown demo-style">
+          <svg width="200" height="200" aria-hidden="true" data-prefix="fas" data-icon="graduation-cap" role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512" class="svg-inline--fa fa-graduation-cap fa-w-20"><path fill="currentColor" d="M622.884 199.005l-275.817 85.1a96 96 0 0 1-54.134 0L92.398 222.232c-8.564 11.438-11.018 23.05-11.918 38.335C89.778 266.165 96 276.355 96 288c0 11.952-6.557 22.366-16.265 27.861l16.197 123.096c.63 4.786-3.1 9.043-7.932 9.043H40c-4.828 0-8.562-4.253-7.932-9.044L48.265 315.86C38.557 310.366 32 299.952 32 288c0-12.034 6.646-22.511 16.465-27.976.947-17.951 3.974-33.231 12.152-47.597l-43.502-13.422c-22.876-6.801-22.766-39.241 0-46.01l275.817-85.1a96 96 0 0 1 54.134 0l275.817 85.1c22.877 6.801 22.767 39.241.001 46.01zM356.503 314.682l-.207.064-.207.061a127.998 127.998 0 0 1-72.177 0l-.207-.061-.207-.064-150.914-46.57L120 352c0 35.346 89.543 64 200 64s200-28.654 200-64l-12.583-83.888-150.914 46.57z" class=""></path></svg>
+          <div class="bottomtext">
+            <div class="primary">Earn a Certificate</div>
+            <div class="sec"> E-verifiable at nptel.ac.in/noc</div>
+          </div>
+        </paper-slide>
+        <paper-slide class="paper-slide-green demo-style">
+          <svg width="200" height="200" aria-hidden="true" data-prefix="fas" data-icon="dna" role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512" class="svg-inline--fa fa-dna fa-w-14"><path fill="currentColor" d="M.1 494.1c-1.1 9.5 6.3 17.8 15.9 17.8l32.3.1c8.1 0 14.9-5.9 16-13.9.7-4.9 1.8-11.1 3.4-18.1H380c1.6 6.9 2.9 13.2 3.5 18.1 1.1 8 7.9 14 16 13.9l32.3-.1c9.6 0 17.1-8.3 15.9-17.8-4.6-37.9-25.6-129-118.9-207.7-17.6 12.4-37.1 24.2-58.5 35.4 6.2 4.6 11.4 9.4 17 14.2H159.7c21.3-18.1 47-35.6 78.7-51.4C410.5 199.1 442.1 65.8 447.9 17.9 449 8.4 441.6.1 432 .1L399.6 0c-8.1 0-14.9 5.9-16 13.9-.7 4.9-1.8 11.1-3.4 18.1H67.8c-1.6-7-2.7-13.1-3.4-18.1-1.1-8-7.9-14-16-13.9L16.1.1C6.5.1-1 8.4.1 17.9 5.3 60.8 31.4 171.8 160 256 31.5 340.2 5.3 451.2.1 494.1zM224 219.6c-25.1-13.7-46.4-28.4-64.3-43.6h128.5c-17.8 15.2-39.1 30-64.2 43.6zM355.1 96c-5.8 10.4-12.8 21.1-21 32H114c-8.3-10.9-15.3-21.6-21-32h262.1zM92.9 416c5.8-10.4 12.8-21.1 21-32h219.4c8.3 10.9 15.4 21.6 21.2 32H92.9z" class=""></path></svg>
+          <div class="bottomtext">
+            <div class="primary">Intoducing Our Web App</div>
+            <div class="sec">Currently in BETA</div>
+          </div>
+        </paper-slide>
+      </l2t-paper-slider>
+      <div>
+
+          <template is="dom-if" if="[[domif]]">
+            <a href="#/allcourses"><paper-button on-tap="skipNext" class="button">Skip</paper-button></a>
+            <paper-button on-tap="nextPage" class="nextButton button">Next</paper-button>
+          </template>
+          <template is="dom-if" if="[[domifone]]">
+            <a href="#/allcourses"><paper-button on-tap="skipNext" class="nextButton button">Start</paper-button></a>
+          </template>
+      </div>
+
+
+
+
+
+</template>
+
+<script>
+  /**
+   * @customElement
+   * @polymer
+   */
+  class FirstPage extends Polymer.Element {
+    static get is() { return 'first-page'; }
+    static get properties() {
+      return {
+        domif: {
+          type: Boolean,
+          value: true
+        },
+        domifone: {
+          type: Boolean,
+          value: false
+        }
+      };
+    }
+    positionChange(){
+      var slider = Polymer.dom(this.root).querySelector("#slider");
+      if (slider.position < slider.totalSlides -1)
+      {
+        this.domifone = false;
+        this.domif = true;
+      }
+      else {
+        this.domif = false;
+        this.domifone = true;
+      }
+    }
+    nextPage(){
+      Polymer.dom(this.root).querySelector("#slider").moveNext();
+    }
+    skipNext(){
+      var nptel = document.createElement('nptel-pwa-app');
+      nptel.setAttribute('online','');
+      var firstpage = Polymer.dom(this.parentElement.root).querySelector("#first");
+      Polymer.dom(this.parentElement.root).querySelector("#bod").appendChild(nptel);
+      Polymer.dom(this.parentElement.root).querySelector("#bod").removeChild(firstpage);
+    }
+    ready(){
+      super.ready();
+      this.addEventListener('change',this.positionChange);
+    }
+  }
+  window.customElements.define(FirstPage.is, FirstPage);
+</script>
+</dom-module>

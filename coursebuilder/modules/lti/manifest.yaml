@@ -1,0 +1,41 @@
+registration:
+  main_module: modules.lti.lti
+
+tests:
+  functional:
+    - tests.ext.lti.functional_tests.FieldsTest = 10
+    - tests.ext.lti.functional_tests.LTIToolTagTest = 3
+    - tests.ext.lti.functional_tests.LaunchHandlerTest = 8
+    - tests.ext.lti.functional_tests.LoginHandlerTest = 7
+    - tests.ext.lti.functional_tests.RedirectHandlerTest = 2
+    - tests.ext.lti.functional_tests.RuntimeTest = 7
+    - tests.ext.lti.functional_tests.SecurityParserTest = 9
+    - tests.ext.lti.functional_tests.SerializerTest = 2
+    - tests.ext.lti.functional_tests.ToolsParserTest = 7
+    - tests.ext.lti.functional_tests.UrljoinTest = 6
+    - tests.ext.lti.functional_tests.ValidationHandlerTest = 21
+
+files:
+  - ./modules/lti
+  - ./modules/lti/lti.py
+  - ./modules/lti/__init__.py
+  - ./modules/lti/manifest.yaml
+  - ./modules/lti/templates
+  - ./modules/lti/templates/redirect.html
+  - ./modules/lti/templates/error.html
+  - ./modules/lti/templates/launch.html
+  - ./modules/lti/templates/login.html
+  - ./modules/lti/src
+  - ./modules/lti/src/lti.py
+  - ./modules/lti/src/__init__.py
+  - ./modules/lti/src/templates
+  - ./modules/lti/src/templates/redirect.html
+  - ./modules/lti/src/templates/error.html
+  - ./modules/lti/src/templates/launch.html
+  - ./modules/lti/src/templates/login.html
+  - ./modules/lti/src/fields.py
+  - ./modules/lti/src/resources
+  - ./modules/lti/src/resources/lti-iframe.png
+  - ./modules/lti/fields.py
+  - ./modules/lti/resources
+  - ./modules/lti/resources/lti-iframe.png

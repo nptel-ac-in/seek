@@ -53,18 +53,20 @@ from models import resources_display
 from models import custom_modules
 from models import custom_units
 from models import jobs
+from models import model_caching
 from models import models
 from models import roles
 from models import transforms
-from models.config import ConfigProperty
-from models.counters import PerfCounter
+from modules.courses import settings
+from modules.courses import unit_lesson_editor
 from modules.dashboard import dashboard
-from modules.dashboard import unit_lesson_editor
+from modules.i18n_dashboard import messages
 from modules.oeditor import oeditor
 from tools import verify
 
 from google.appengine.ext import db
 
+MODULE_TITLE = 'Translations'
 RESOURCES_PATH = '/modules/i18n_dashboard/resources'
 
 TEMPLATES_DIR = os.path.join(
@@ -79,7 +81,7 @@ VERB_CURRENT = xcontent.SourceToTargetDiffMapping.VERB_CURRENT
 
 # This permission grants the user access to the i18n dashboard and console.
 ACCESS_PERMISSION = 'access_i18n_dashboard'
-ACCESS_PERMISSION_DESCRIPTION = 'Can access I18n Dashboard.'
+ACCESS_PERMISSION_DESCRIPTION = 'Can access the translation dashboard.'
 
 TYPE_HTML = 'html'
 TYPE_STRING = 'string'
@@ -98,6 +100,10 @@ TRANSLATABLE_FIELDS_FILTER = schema_fields.FieldFilter(
 # a target language for courses hosted in CB in the next few years.
 PSEUDO_LANGUAGE = 'ln'
 
+RESOURCE_BUNDLE_CACHE_NAME = 'resource_bundle'
+RESOURCE_BUNDLE_CACHE_MAX_SIZE_BYTES = 16 * 1024 * 1024
+RESOURCE_BUNDLE_CACHE_TTL_SEC = 5 * 60
+
 custom_module = None
 
 
@@ -105,12 +111,15 @@ class ResourceBundleKey(object):
     """Manages a key for a resource bundle."""
 
     def __init__(self, type_str, key, locale):
-        self._locale = locale
         self._type = type_str
         self._key = key
+        self._locale = locale
 
     def __str__(self):
         return '%s:%s:%s' % (self._type, self._key, self._locale)
+
+    def __repr__(self):
+        return '<{} {}>'.format(self.__class__.__name__, str(self))
 
     @property
     def locale(self):
@@ -136,11 +145,10 @@ class NamedJsonDAO(models.BaseJsonDao):
     ENTITY_KEY_TYPE = models.BaseJsonDao.EntityKeyTypeName
 
     @classmethod
-    def load_or_create(cls, resource_key):
+    def load_or_default(cls, resource_key):
         dto = cls.load(str(resource_key))
         if not dto:
             dto = cls.create_blank(resource_key)
-            cls.save(dto)
         return dto
 
     @classmethod
@@ -368,7 +376,8 @@ class ResourceRow(TableRow):
         resource_handler = resource.Registry.get(self._type)
         view_url = resource_handler.get_view_url(self._resource)
         if view_url:
-            view_url += '&hl=%s' % locale
+            view_url += '&' if '?' in view_url else '?'
+            view_url += 'hl=%s' % locale
         return view_url
 
     def edit_url(self, locale):
@@ -427,12 +436,12 @@ class IsTranslatableRestHandler(utils.BaseRESTHandler):
                 request, self.XSRF_TOKEN_NAME, {}):
             return
 
-        if not unit_lesson_editor.CourseOutlineRights.can_edit(self):
+        if not roles.Roles.is_course_admin(self.app_context):
             transforms.send_json_response(self, 401, 'Access denied.', {})
             return
 
         payload = request.get('payload')
-        i18n_progress_dto = I18nProgressDAO.load_or_create(
+        i18n_progress_dto = I18nProgressDAO.load_or_default(
             payload['resource_key'])
         i18n_progress_dto.is_translatable = payload['value']
         I18nProgressDAO.save(i18n_progress_dto)
@@ -459,14 +468,13 @@ class BaseDashboardExtension(object):
         def get_action(handler):
             cls(handler).render()
         dashboard.DashboardHandler.add_custom_get_action(cls.ACTION, get_action)
-        dashboard.DashboardHandler.map_action_to_permission(
-            'get_%s' % cls.ACTION, ACCESS_PERMISSION)
+        dashboard.DashboardHandler.map_get_action_to_permission(
+            cls.ACTION, dashboard.custom_module, ACCESS_PERMISSION)
 
     @classmethod
     def unregister(cls):
         dashboard.DashboardHandler.remove_custom_get_action(cls.ACTION)
-        dashboard.DashboardHandler.unmap_action_to_permission(
-            'get_%s' % cls.ACTION)
+        dashboard.DashboardHandler.unmap_get_action_to_permission(cls.ACTION)
 
     def __init__(self, handler):
         """Initialize the class with a request handler.
@@ -478,12 +486,308 @@ class BaseDashboardExtension(object):
         self.handler = handler
 
 
-class TranslationsAndLocations(object):
+class TranslationContents(object):
+    """Represents the content of translations in multiple languages.
+
+    This class and its related classes TranslationFile, TranslationMessage
+    provide a convenient in-memory abstraction that mirrors the layout of
+    a .zip of multiple .po files.  It supplies convenience functions for
+    converting between in-memory and on-disk representations, as well as
+    supporting some configurable options for layout and conversion.
+    """
+
+    # There are situations where emitting .po files for translation as
+    # multiple, smaller files makes better sense than putting all translation
+    # items into one big file.
+    #
+    # The underlying Babel library will automagically merge any phrases whose
+    # text in the base language is identical.  This is not ideal, in that if
+    # there is a short phrase that might be translated differently depending
+    # on context, we need to either: a) group together enough text into a
+    # single translatable item so that the translation is unambiguous, or b)
+    # separate items into different files so that otherwise-ambiguous items
+    # are separated, but adjacent to surrounding context items such that
+    # translators get clues about how to deal with short phrases.
+    #
+    # We have an existing case where an external translation bureau cannot
+    # cope with the make-phrases-longer solution, since making the phrases
+    # longer will require emitting HTML markup in-line in the translated text,
+    # and their parsers can't cope with that.  Therefore, we are supporting
+    # the notion of doing chunked output in reading order.  Conveniently, this
+    # same bureau also does not support input of .po files bigger than some
+    # arbitrary max, and so chunking files also ameliorates that issue.
+    #
+    SINGLE_FILE_NAME = 'messages.po'
+
+    def __init__(self, separate_files_by_type=False, max_entries_per_file=None):
+        """Constructor.
+
+        Args:
+          separate_files_by_type: Only ever set to True when exporting; this
+              is not meaningful/sensible when reading an existing .po file.
+              When set to True, a different file name will be selected
+              depending on the type of object.  E.g., all course settings will
+              be sent to one .po file, all questions to another, and so on.
+              For things that may have fairly large contents (Units, Lessons,
+              Assessments) a separate .po file is created for each individual
+              element.
+
+              NOTE: Setting this argument may add redundant elements for the
+              same phrase if it appears in multiple different places.  When
+              generating a single .po file, all chunks with the same text in
+              the base language are merged.  When writing to separate files,
+              this still happens, but merges only happen within individual
+              files.  This is a benefit for preserving elements in natural
+              reading order, but does mean some duplication of content, and
+              thus (possibly) duplication of translation effort.
+
+          max_entries_per_file: Only ever set to a positive integer when
+              exporting; this is not meaningful/sensible when reading an
+              existing .po file.  When set to a positive integer, files will
+              contain at most this many translation chunks.  This acts in
+              combination with the separate_files_by_type flag; if both are
+              set, then indvidual sub-files will be split.  This is useful if
+              the translation bureau has an upper limit on file size or number
+              of translations per file.
+
+        """
+        # _files contains a mapping from a 2-tuple of (locale, file_name) ->
+        # TranslationFile.
+        self._files = {}
+        self._separate_files_by_type = separate_files_by_type
+        self._max_entries_per_file = max_entries_per_file
+
+    def get_message(self, resource_bundle_key, message_key):
+        """Hide the separate .po files from clients that don't need to care.
+
+        Implicitly creates internal TranslationFile and TranslationMessage
+        instances as necessary.
+
+        Args:
+          resource_bundle_key: Key for course component being translated.
+          message_key: String in base language to be translated.
+        Returns:
+          TranslationMessage corresponding to keys.
+        """
+
+        file_name = self._choose_file_name(resource_bundle_key)
+        if self._max_entries_per_file:
+            base_name, extension = file_name.rsplit('.', 1)
+            part_num = 0
+            while True:
+                part_num += 1
+                possible_file_name = base_name + '_%3.3d.%s' % (
+                    part_num, extension)
+                file_key = (resource_bundle_key.locale, possible_file_name)
+
+                # pylint: disable=protected-access
+                if (file_key in self._files and
+                    self._files[file_key]._has_message(message_key)):
+                    return self._files[file_key]._get_message(message_key)
+
+                if (file_key not in self._files or
+                    self._files[file_key]._get_num_translations() <
+                    self._max_entries_per_file):
+
+                    file_name = possible_file_name
+                    break
+        # pylint: disable=protected-access
+        return self._get_file(
+            resource_bundle_key, file_name)._get_message(message_key)
+
+    def _get_file(self, resource_bundle_key, file_name):
+        locale = resource_bundle_key.locale
+        file_key = (locale, file_name)
+        if file_key not in self._files:
+            self._files[file_key] = TranslationFile(locale, file_name)
+        return self._files[file_key]
+
+    def iterfiles(self):
+        return self._files.itervalues()
+
+    def get_locales(self):
+        return set([f.locale for f in self._files.itervalues()])
+
+    def _choose_file_name(self, resource_bundle_key):
+        resource_key = resource_bundle_key.resource_key
+        if not self._separate_files_by_type:
+            file_name = self.SINGLE_FILE_NAME
+        else:
+            if resource_key.type in (resources_display.ResourceUnit.TYPE,
+                                     resources_display.ResourceAssessment.TYPE,
+                                     resources_display.ResourceLesson.TYPE):
+                file_name = '%s_%s.po' % (resource_key.type, resource_key.key)
+            else:
+                # Settings and other non-linear content go in one file
+                file_name = '%s.po' % resource_key.type
+        return file_name
+
+    def is_empty(self):
+        return all([f.is_empty() for f in self._files.itervalues()])
+
+    def write_zip_file(self, app_context, out_stream):
+
+        """Write .zip output corresponding to this instance's contents.
+
+        Args:
+          app_context: Standard Course Builder application context instance.
+          out_stream: The stream to which to write content.
+        """
+        with common_utils.ZipAwareOpen():
+            # Load metadata for 'en', which Babel uses internally.
+            localedata.load('en')
+            # Load metadata for source language for course.
+            localedata.load(app_context.default_locale)
+        zf = zipfile.ZipFile(out_stream, 'w', allowZip64=True)
+        try:
+            # pylint: disable=protected-access
+            for translation_file in self._files.itervalues():
+                cat = translation_file._build_babel_catalog(app_context)
+                filename = os.path.join(
+                    'locale', translation_file.locale, 'LC_MESSAGES',
+                    translation_file.file_name)
+                content = cStringIO.StringIO()
+                try:
+                    pofile.write_po(content, cat, include_previous=True)
+                    zf.writestr(filename, content.getvalue())
+                finally:
+                    content.close()
+        finally:
+            zf.close()
+
+    def encode_angle_to_square_brackets(self):
+        # pylint: disable=protected-access
+        for translation_file in self._files.itervalues():
+            translation_file._encode_angle_to_square_brackets()
+
+    def decode_square_to_angle_brackets(self):
+        # pylint: disable=protected-access
+        for translation_file in self._files.itervalues():
+            translation_file._decode_square_to_angle_brackets()
+
+
+class TranslationFile(object):
+    """Represents the content for a single .po file."""
+
+    def __init__(self, locale, file_name):
+        self._locale = locale
+        self._file_name = file_name
+
+        # List of TranslationLocation, keyed by content of translatable text
+        # fragment in course base language.
+        self._translations = collections.OrderedDict()
+
+    def _has_message(self, key):
+        return key in self._translations
+
+    def _get_message(self, key):
+        if key not in self._translations:
+            self._translations[key] = TranslationMessage()
+        return self._translations[key]
+
+    def _get_num_translations(self):
+        return len(self._translations)
+
+    def itermessages(self):
+        return self._translations.iteritems()
+
+    @property
+    def locale(self):
+        return self._locale
+
+    @property
+    def file_name(self):
+        return self._file_name
+
+    def is_empty(self):
+        return not bool(self._translations)
+
+    def _build_babel_catalog(self, app_context):
+        """Generate a Babel Catalog instance corresponding to file's contents.
+
+        Args:
+          app_context: Standard Course Builder application context instance.
+        Returns:
+          a Catalog instance.
+        """
+
+        # Load metadata for this file's locale.
+        with common_utils.ZipAwareOpen():
+            localedata.load(self._locale)
+
+        environ = app_context.get_environ()
+        course_title = environ['course'].get('title')
+        bugs_address = environ['course'].get('admin_user_emails')
+        organization = environ['base'].get('nav_header')
+
+        cat = catalog.Catalog(
+            locale=self._locale,
+            project='Translation for %s of %s' % (self._locale, course_title),
+            msgid_bugs_address=bugs_address,
+            copyright_holder=organization)
+        for message, message_entry in self._translations.iteritems():
+            location_strings = ['GCB-1|%s|%s|%s' % (l.name, l.type, k) for
+                                k, l in message_entry.locations.iteritems()]
+            # Babel expresses locations as a (string, line-number) 2-tuple.
+            # We don't really have line numbers, so just always pick zero.
+            locations = [(l, 0) for l in location_strings]
+            translations = iter(message_entry.translations)
+            cat.add(
+                message, translations.next(), locations=locations,
+                user_comments=message_entry.comments,
+                auto_comments=['also translated as "%s"' % t for t in
+                               translations],
+                previous_id=message_entry.previous_id)
+        return cat
+
+    def _encode_angle_to_square_brackets(self):
+        for message, message_entry in list(self.itermessages()):
+            if message in self._translations:
+                del self._translations[message]
+            # pylint: disable=protected-access
+            encoded = TranslationMessage._encode_angle_brackets(message)
+            message_entry._encode_angle_to_square_brackets()
+            self._translations[encoded] = message_entry
+
+    def _decode_square_to_angle_brackets(self):
+        for message, message_entry in list(self.itermessages()):
+            if message in self._translations:
+                del self._translations[message]
+            # pylint: disable=protected-access
+            decoded = TranslationMessage._decode_angle_brackets(message)
+            message_entry._decode_square_to_angle_brackets()
+            self._translations[decoded] = message_entry
+
+
+TranslationLocation = collections.namedtuple(
+    'TranslationLocation', ['name', 'type'])
+
+
+class TranslationMessage(object):
+
+    """Represents the translation of a natural language element in one language.
+
+    E.g., "Lesson".  This may appear as a standalone item in many locations,
+    and should be translated the same way in each.  (If this is not the case,
+    then the string should be part of a longer translatable unit which makes
+    the grammar/spelling/etc. for the translated phrase clear from context.)
+
+    One instance of this class corresponds to one full entry in a .po file.
+    (This class is used in contexts where the key (the phrase in the base
+    course language) is kept in a map, with an instance of this class as
+    a value.)
+    """
 
     def __init__(self):
         self._translations = set()
-        self._locations = []
-        self._comments = []
+
+        # Key of this field is the stringified version of a ResourceBundleKey
+        # (type, ID, language), separated by colons.  Value is a
+        # TranslationLocation instance, containing:
+        # - The section name.  (See build_sections_for_key docs)
+        # - The section type. One of TYPE_{HTML,STRING,TEXT,URL}.
+        self._locations = {}
+        self._comments = []  # Simple list of strings.  Not populated on import.
         self._previous_id = ''
 
     def add_translation(self, translation):
@@ -494,10 +798,11 @@ class TranslationsAndLocations(object):
         # If all we have so far is blank translations, and this one is
         # nonblank, throw away all the blank ones.
         if translation and not any(self._translations):
-            self._translations = [translation]
+            self._translations = set([translation])
 
-    def add_location(self, location):
-        self._locations.append(location)
+    def add_location(self, resource_bundle_key, loc_name, loc_type):
+        self._locations[str(resource_bundle_key)] = TranslationLocation(
+            loc_name, loc_type)
 
     def add_comment(self, comment):
         comment = unicode(comment)  # May be Node or NodeList.
@@ -505,6 +810,12 @@ class TranslationsAndLocations(object):
 
     def set_previous_id(self, previous_id):
         self._previous_id = previous_id
+
+    def get_any_translation(self):
+        # Any translation in the set.  Normally there will be exactly one,
+        # but in any case, we don't have any basis to prefer any particular
+        # item over any other, so just pick one.
+        return iter(self._translations).next()
 
     @property
     def locations(self):
@@ -522,36 +833,87 @@ class TranslationsAndLocations(object):
     def previous_id(self):
         return self._previous_id
 
+    def _encode_angle_to_square_brackets(self):
+        for translation in list(self._translations):
+            self._translations.remove(translation)
+            self._translations.add(self._encode_angle_brackets(translation))
+
+    def _decode_square_to_angle_brackets(self):
+        for translation in list(self._translations):
+            self._translations.remove(translation)
+            self._translations.add(self._decode_angle_brackets(translation))
+
+    @classmethod
+    def _encode_angle_brackets(cls, content):
+        content = re.sub(r'([\[\]\\])', r'\\\1', content)
+        content = content.replace('<', '[')
+        content = content.replace('>', ']')
+        return content
+
+    @classmethod
+    def _decode_angle_brackets(cls, content):
+        # This looks perhaps a bit over-done in comparison to regexes, but
+        # in truth, regexes were tried and abandoned.  (A regex will need to
+        # recognize a pattern:
+        # - (beginning-of-line or a non-backslash char)
+        # - followed by zero or more pairs of backslashes
+        # - and then a square bracket.
+        # This looks hopeful:   re.sub(r'(^|[^\\])(|(\\\\)+?)]', r'\1\2>', s)
+        # but suffers from the defect that it will not correctly operate on
+        # adjacent close-brackets.  ']]' turns into '>]', with only the first
+        # square bracket being replaced.  Experiments using the (?= ... )
+        # construct to not consume the leading context were not fruitful.
+        #
+        prev_backslash = False
+        result = []
+        for c in content:
+            if prev_backslash:
+                prev_backslash = False
+                if c in '[]\\':
+                    result.append(c)
+                else:
+                    raise ValueError('Unexpected escape for "%s" in "%s"' % (
+                        c, content))
+            else:
+                if c == '\\':
+                    prev_backslash = True
+                elif c == '[':
+                    result.append('<')
+                elif c == ']':
+                    result.append('>')
+                else:
+                    result.append(c)
+        return ''.join(result)
+
 
 class I18nDeletionHandler(BaseDashboardExtension):
     ACTION = 'i18n_delete'
 
     def render(self):
+        schema = TranslationDeletionRestHandler.schema()
         main_content = oeditor.ObjectEditor.get_html_for(
             self.handler,
-            TranslationDeletionRestHandler.schema().get_json_schema(),
-            TranslationDeletionRestHandler.schema().get_schema_dict(),
+            schema.get_json_schema(),
+            schema.get_schema_dict(),
             '',
             self.handler.canonicalize_url(TranslationDeletionRestHandler.URL),
             self.handler.get_action_url(I18nDashboardHandler.ACTION),
-            save_button_caption='Delete', auto_return=True,
-            required_modules=TranslationDeletionRestHandler.REQUIRED_MODULES,
+            additional_dirs=[TEMPLATES_DIR],
+            auto_return=True,
+            display_types=schema.get_display_types(),
             extra_js_files=['delete_translations.js'],
-            additional_dirs=[TEMPLATES_DIR])
+            save_button_caption='Delete')
         self.handler.render_page({
             'page_title': self.handler.format_title(
-                'I18n Translation Deletion'),
-            'main_content': main_content})
+                'Translation Deletion'),
+            'main_content': main_content,
+            }, in_action=I18nDashboardHandler.ACTION)
 
 
 class TranslationDeletionRestHandler(utils.BaseRESTHandler):
 
     URL = '/rest/modules/i18n_dashboard/i18n_deletion'
     XSRF_TOKEN_NAME = 'translation_deletion'
-    REQUIRED_MODULES = [
-        'inputex-string', 'inputex-select', 'inputex-hidden',
-        'inputex-checkbox', 'inputex-list', 'inputex-uneditable',
-        ]
 
     @classmethod
     def schema(cls):
@@ -621,7 +983,7 @@ class TranslationDeletionRestHandler(utils.BaseRESTHandler):
                        if l.get('checked')]
         except (TypeError, ValueError, KeyError):
             transforms.send_json_response(
-                self, 400, 'Locales specification not as expected.')
+                self, 400, 'Language specification not as expected.')
             return []
         if not locales:
             # Nice UI message when no locales selected.
@@ -674,31 +1036,29 @@ class I18nDownloadHandler(BaseDashboardExtension):
     ACTION = 'i18n_download'
 
     def render(self):
+        schema = TranslationDownloadRestHandler.schema()
         main_content = oeditor.ObjectEditor.get_html_for(
             self.handler,
-            TranslationDownloadRestHandler.schema().get_json_schema(),
-            TranslationDownloadRestHandler.schema().get_schema_dict(),
+            schema.get_json_schema(),
+            schema.get_schema_dict(),
             '',
             self.handler.canonicalize_url(TranslationDownloadRestHandler.URL),
             self.handler.get_action_url(I18nDashboardHandler.ACTION),
-            required_modules=TranslationDownloadRestHandler.REQUIRED_MODULES,
-            save_button_caption='Download',
+            additional_dirs=[TEMPLATES_DIR],
+            display_types=schema.get_display_types(),
             extra_js_files=['download_translations.js'],
-            additional_dirs=[TEMPLATES_DIR])
+            save_button_caption='Download')
         self.handler.render_page({
             'page_title': self.handler.format_title(
-                'I18n Translation Download'),
-            'main_content': main_content})
+                'Translation Download'),
+            'main_content': main_content,
+            }, in_action=I18nDashboardHandler.ACTION)
 
 
 class TranslationDownloadRestHandler(utils.BaseRESTHandler):
 
     URL = '/rest/modules/i18n_dashboard/i18n_download'
     XSRF_TOKEN_NAME = 'translation_download'
-    REQUIRED_MODULES = [
-        'inputex-string', 'inputex-select', 'inputex-hidden',
-        'inputex-checkbox', 'inputex-list', 'inputex-uneditable',
-        ]
 
     @classmethod
     def schema(cls):
@@ -730,6 +1090,18 @@ class TranslationDownloadRestHandler(utils.BaseRESTHandler):
                     'label-group label-group-list')}))
         schema.add_property(schema_fields.SchemaField(
             'file_name', 'Download as File Named', 'string'))
+        schema.add_property(schema_fields.SchemaField(
+            'separate_files', 'Separate Files', 'boolean',
+            description='When checked, the exported .zip file will contain '
+            'multiple .po files for each language; these will be separated '
+            'by type, and individual units, lessons, and assessment content.',
+            i18n=False, optional=True))
+        schema.add_property(schema_fields.SchemaField(
+            'encoded_angle_brackets', 'Encoded Angle Brackets', 'boolean',
+            description='When checked, encode angle brackets in downloaded '
+            'content as square brackets.  This can be helpful if your '
+            'translation bureau does not permit HTML markup in-line within '
+            'translated text.'))
         return schema
 
     def get(self):
@@ -753,7 +1125,7 @@ class TranslationDownloadRestHandler(utils.BaseRESTHandler):
                 self.XSRF_TOKEN_NAME))
 
     @staticmethod
-    def build_translations(course, locales, export_what):
+    def build_translations(course, locales, export_what, exporter, config=None):
         """Build up a dictionary of all translated strings -> locale.
 
         For each {original-string,locale}, keep track of the course
@@ -767,15 +1139,16 @@ class TranslationDownloadRestHandler(utils.BaseRESTHandler):
             or not, stale or not.  The value 'new' emits only things
             that have no translations, or whose translations are out-of-date
             with respect to the resource.
-        Returns:
-          Map of original-string -> locale -> TranslationsAndLocations instance.
+          exporter: An instance of a class derived from TranslationContents.
+            This is populated with all translatable items from the
+            given course, for the given locales.  (Or only items that have
+            been added/changed since the last round of translation, if
+            'export_what' is set to 'new'.
         """
 
         app_context = course.app_context
-        translations = collections.defaultdict(
-            lambda: collections.defaultdict(TranslationsAndLocations))
-        transformer = xcontent.ContentTransformer(
-            config=I18nTranslationContext.get(app_context))
+        config = config or I18nTranslationContext.get(app_context)
+        transformer = xcontent.ContentTransformer(config=config)
         resource_key_map = TranslatableResourceRegistry.get_resources_and_keys(
             course)
 
@@ -818,17 +1191,35 @@ class TranslationDownloadRestHandler(utils.BaseRESTHandler):
                     key, sections, resource_bundle_dto, i18n_progress_dto)
 
                 TranslationDownloadRestHandler._collect_section_translations(
-                    translations, sections, binding, export_what, locale, key,
-                    resource_key, rsrc)
+                    exporter, sections, binding, export_what, key, rsrc)
 
             ResourceBundleDAO.save_all(resource_bundle_dtos)
         I18nProgressDAO.save_all(i18n_progress_dtos)
-        return translations
 
     @staticmethod
-    def _collect_section_translations(translations, sections, binding,
-                                      export_what, locale, key, resource_key,
-                                      rsrc):
+    def _collect_section_translations(exporter, sections, binding,
+                                      export_what, key, rsrc):
+        """Add translations in 'sections' to collection in 'exporter'.
+
+        Args:
+          exporter: An instance of TranslationContents, into which the
+              translations in 'sections' are added for subsequent export.
+          sections: A list of zero or more dicts; see extensive docs
+              for return type of build_sections_for_key().
+          binding: A schema_fields.ValueToTypeBinding giving a mapping from
+              section name (see next return item) to a schema element describing
+              that field.
+          export_what: A string, either 'all' or 'new'.  If 'new', export only
+              sections whose string-to-be-translated is newer than the most
+              recent translation for that language.
+          key: ResourceBundleKey instance naming the item corresponding to
+              the 'sections' to be translated.
+          rsrc: Object corresponding to key.  This can be one of a very
+              broad range of types; this can be anything that contains
+              translatable content: Question, Unit, Lesson, settings, and
+              any similar item added by extension modules.
+        """
+
         # For each section in the translation, make a record of that
         # in an internal data store which is used to generate .po
         # files.
@@ -839,7 +1230,9 @@ class TranslationDownloadRestHandler(utils.BaseRESTHandler):
                 binding.find_field(section_name).description or '')
 
             for translation in section['data']:
-                message = unicode(translation['source_value'] or '')
+                message = translation['source_value'] or ''
+                if not isinstance(message, basestring):
+                    message = unicode(message)  # convert num
                 translated_message = translation['target_value'] or ''
                 is_current = translation['verb'] == VERB_CURRENT
                 old_message = translation['old_source_value']
@@ -854,18 +1247,18 @@ class TranslationDownloadRestHandler(utils.BaseRESTHandler):
                     continue
 
                 # Set source string and location.
-                t_and_l = translations[message][locale]
-                t_and_l.add_location('GCB-1|%s|%s|%s' % (
-                    section_name, section_type, str(key)))
+                message_entry = exporter.get_message(key, message)
+                message_entry.add_location(key, section_name, section_type)
 
                 # Describe the location where the item is found.
-                t_and_l.add_comment(description)
+                message_entry.add_comment(description)
 
                 try:
-                    resource_handler = resource.Registry.get(resource_key.type)
+                    resource_handler = resource.Registry.get(
+                        key.resource_key.type)
                     title = resource_handler.get_resource_title(rsrc)
                     if title:
-                        t_and_l.add_comment(title)
+                        message_entry.add_comment(title)
                 except AttributeError:
                     # Under ETL, there is no real handler and title lookup
                     # fails. In that case, we lose this data, which is non-
@@ -875,78 +1268,16 @@ class TranslationDownloadRestHandler(utils.BaseRESTHandler):
                 # Add either the current translation (if current)
                 # or the old translation as a remark (if we have one)
                 if is_current:
-                    t_and_l.add_translation(translated_message)
+                    message_entry.add_translation(translated_message)
                 else:
-                    t_and_l.add_translation('')
+                    message_entry.add_translation('')
 
                     if old_message:
-                        t_and_l.set_previous_id(old_message)
+                        message_entry.set_previous_id(old_message)
                         if translated_message:
-                            t_and_l.add_comment(
+                            message_entry.add_comment(
                                 'Previously translated as: "%s"' %
                                 translated_message)
-
-    @staticmethod
-    def build_babel_catalog_for_locale(course, translations, locale):
-        environ = course.get_environ(course.app_context)
-        course_title = environ['course'].get('title')
-        bugs_address = environ['course'].get('admin_user_emails')
-        organization = environ['base'].get('nav_header')
-        with common_utils.ZipAwareOpen():
-            # Load metadata for locale to which we are translating.
-            localedata.load(locale)
-        cat = catalog.Catalog(
-            locale=locale,
-            project='Translation for %s of %s' % (locale, course_title),
-            msgid_bugs_address=bugs_address,
-            copyright_holder=organization)
-        for tr_id in translations:
-            if locale in translations[tr_id]:
-                t_and_l = translations[tr_id][locale]
-                cat.add(
-                    tr_id, string=t_and_l.translations.pop(),
-                    locations=[(l, 0) for l in t_and_l.locations],
-                    user_comments=t_and_l.comments,
-                    auto_comments=['also translated as "%s"' % s
-                                   for s in t_and_l.translations],
-                    previous_id=t_and_l.previous_id)
-        return cat
-
-    @staticmethod
-    def build_zip_file(course, out_stream, translations, locales):
-        """Create a .zip file with one .po file for each translated language.
-
-        Args:
-          course: the Course object that we're building an export for.
-          out_stream: An open file-like which can be written and seeked.
-          translations: Map of string -> locale -> TranslationsAndLocations
-            as returned from build_translations().
-          locales: The set of locales for which we want to build .po files
-        """
-        app_context = course.app_context
-        original_locale = app_context.default_locale
-        with common_utils.ZipAwareOpen():
-            # Load metadata for 'en', which Babel uses internally.
-            localedata.load('en')
-            # Load metadata for source language for course.
-            localedata.load(original_locale)
-        zf = zipfile.ZipFile(out_stream, 'w', allowZip64=True)
-        try:
-            for locale in locales:
-                cat = (
-                    TranslationDownloadRestHandler
-                    .build_babel_catalog_for_locale(
-                        course, translations, locale))
-                filename = os.path.join(
-                    'locale', locale, 'LC_MESSAGES', 'messages.po')
-                content = cStringIO.StringIO()
-                try:
-                    pofile.write_po(content, cat, include_previous=True)
-                    zf.writestr(filename, content.getvalue())
-                finally:
-                    content.close()
-        finally:
-            zf.close()
 
     def _send_response(self, out_stream, filename):
         self.response.content_type = 'application/octet-stream'
@@ -958,50 +1289,54 @@ class TranslationDownloadRestHandler(utils.BaseRESTHandler):
         if appengine_config.PRODUCTION_MODE:
             transforms.send_json_response(
                 self, 403, 'Not available in production.')
-            return None, None, None
+            return None, None, None, None, None
 
         try:
             request = models.transforms.loads(self.request.get('request'))
         except ValueError:
             transforms.send_json_response(
                 self, 400, 'Malformed or missing "request" parameter.')
-            return None, None, None
+            return None, None, None, None, None
         try:
             payload = models.transforms.loads(request.get('payload', ''))
         except ValueError:
             transforms.send_json_response(
                 self, 400, 'Malformed or missing "payload" parameter.')
-            return None, None, None
+            return None, None, None, None, None
         if not self.assert_xsrf_token_or_fail(
             request, self.XSRF_TOKEN_NAME, {}):
-            return None, None, None
+            return None, None, None, None, None
 
         try:
             locales = [l['locale'] for l in payload.get('locales')
                        if l.get('checked') and l['locale'] != PSEUDO_LANGUAGE]
         except (TypeError, ValueError, KeyError):
             transforms.send_json_response(
-                self, 400, 'Locales specification not as expected.')
-            return None, None, None
+                self, 400, 'Language specification not as expected.')
+            return None, None, None, None, None
         if not locales:
             # Nice UI message when no locales selected.
             transforms.send_json_response(
                 self, 400, 'Please select at least one language to export.')
-            return None, None, None
+            return None, None, None, None, None
         for locale in locales:
             if not has_locale_rights(self.app_context, locale):
                 transforms.send_json_response(self, 401, 'Access denied.')
-                return None, None, None
+                return None, None, None, None, None
         export_what = payload.get('export_what', 'new')
         file_name = payload.get(
             'file_name', course.title.lower().replace(' ', '_') + '.zip')
-        return locales, export_what, file_name
+
+        separate_files = payload.get('separate_files', False)
+        encoded_brackets = payload.get('encoded_angle_brackets', False)
+
+        return locales, export_what, file_name, separate_files, encoded_brackets
 
     def put(self):
         """Verify inputs and return 200 OK to OEditor when all is well."""
 
         course = self.get_course()
-        locales, _, _ = self._validate_inputs(course)
+        locales, _, _, _, _ = self._validate_inputs(course)
         if not locales:
             return
         transforms.send_json_response(self, 200, 'Success.')
@@ -1020,16 +1355,20 @@ class TranslationDownloadRestHandler(utils.BaseRESTHandler):
         """
 
         course = self.get_course()
-        locales, export_what, file_name = self._validate_inputs(course)
+        locales, export_what, file_name, separate_files, encoded_brackets = (
+            self._validate_inputs(course))
         if not locales:
             return
 
-        translations = self.build_translations(course, locales, export_what)
+        exporter = TranslationContents(separate_files)
+        self.build_translations(course, locales, export_what, exporter)
+        if encoded_brackets:
+            exporter.encode_angle_to_square_brackets()
         out_stream = StringIO.StringIO()
         # zip assumes stream has a real fp; fake it.
         out_stream.fp = out_stream
         try:
-            self.build_zip_file(course, out_stream, translations, locales)
+            exporter.write_zip_file(course.app_context, out_stream)
             self._send_response(out_stream, file_name)
         finally:
             out_stream.close()
@@ -1046,14 +1385,16 @@ class I18nUploadHandler(BaseDashboardExtension):
             '',
             self.handler.canonicalize_url(TranslationUploadRestHandler.URL),
             self.handler.get_action_url(I18nDashboardHandler.ACTION),
-            required_modules=TranslationUploadRestHandler.REQUIRED_MODULES,
-            save_method='upload', save_button_caption='Upload',
+            additional_dirs=[TEMPLATES_DIR],
+            display_types=
+                TranslationUploadRestHandler.SCHEMA.get_display_types(),
             extra_js_files=['upload_translations.js'],
-            additional_dirs=[TEMPLATES_DIR])
+            extra_required_modules=['io-upload-iframe'],
+            save_method='upload', save_button_caption='Upload')
         self.handler.render_page({
-            'page_title': self.handler.format_title('I18n Translation Upload'),
+            'page_title': self.handler.format_title('Translation Upload'),
             'main_content': main_content,
-            })
+            }, in_action=I18nDashboardHandler.ACTION)
 
 
 def translation_upload_generate_schema():
@@ -1069,6 +1410,24 @@ def translation_upload_generate_schema():
         'translations for a single language, or a .zip file containing '
         'multiple translated languages.  The internal structure of the .zip '
         'file is unimportant; all files ending in ".po" will be considered.'))
+    schema.add_property(schema_fields.SchemaField(
+        'encoded_angle_brackets', 'Encoded Angle Brackets', 'boolean',
+        description='The file to upload has angle brackets encoded as '
+        'as square brackets.  (This can be helpful if your '
+        'translation bureau does not permit HTML markup in-line within '
+        'translated text.)'))
+    schema.add_property(schema_fields.SchemaField(
+        'warn_not_found', 'Show Untranslated', 'boolean',
+        description='When an item in course content is not found in the '
+        '.po file being uploaded, display a warning to that effect.  Note: '
+        'do not use this flag when uploading a .po file that you know will '
+        'not contain all translations for the course.',
+        i18n=False, optional=True))
+    schema.add_property(schema_fields.SchemaField(
+        'warn_not_used', 'Show Unused', 'boolean',
+        description='When an item in the uploaded .po file does not match '
+        'with any item in course content, display a warning to that effect.',
+        i18n=False, optional=True))
     return schema
 
 
@@ -1076,40 +1435,39 @@ class TranslationUploadRestHandler(utils.BaseRESTHandler):
     URL = '/rest/modules/i18n_dashboard/upload'
     XSRF_TOKEN_NAME = 'translation-upload'
     SCHEMA = translation_upload_generate_schema()
-    REQUIRED_MODULES = ['inputex-hidden', 'inputex-select', 'inputex-string',
-                        'inputex-uneditable', 'inputex-file',
-                        'io-upload-iframe']
 
     class ProtocolError(Exception):
         pass
 
     def get(self):
         transforms.send_json_response(
-            self, 200, 'Success.', payload_dict={'key': None},
+            self, 200, 'Success.', payload_dict={
+                'key': None,
+                'warn_not_used': True,
+                },
             xsrf_token=crypto.XsrfTokenManager.create_xsrf_token(
                 self.XSRF_TOKEN_NAME))
 
     @staticmethod
-    def build_translations_defaultdict():
-        # Build up set of all incoming translations as a nested dict:
-        # locale -> bundle key -> {'original text': 'translated text'}
-        return collections.defaultdict(lambda: collections.defaultdict(dict))
-
-    @staticmethod
-    def parse_po_file(translations, po_file_content):
+    def parse_po_file(importer, po_file_content):
         """Collect translations from .po file and group by bundle key."""
-
         pseudo_file = cStringIO.StringIO(po_file_content)
         the_catalog = pofile.read_po(pseudo_file)
         locale = None
         for message in the_catalog:
             for location, _ in message.locations:
-                protocol, _, _, key = location.split('|', 4)
+                protocol, loc_name, loc_type, loc_key = location.split('|', 4)
                 if protocol != 'GCB-1':
                     raise TranslationUploadRestHandler.ProtocolError(
                         'Expected location format GCB-1, but had %s' % protocol)
 
-                message_locale = ResourceBundleKey.fromstring(key).locale
+                resource_bundle_key = ResourceBundleKey.fromstring(loc_key)
+                try:
+                    resource_key = resource_bundle_key.resource_key
+                except Exception:  # pylint: disable=broad-except
+                    logging.warning('Unhandled resource: %s', loc_key)
+                    continue
+                message_locale = resource_bundle_key.locale
                 if locale is None:
                     locale = message_locale
                 elif locale != message_locale:
@@ -1117,19 +1475,31 @@ class TranslationUploadRestHandler(utils.BaseRESTHandler):
                         'File has translations for both "%s" and "%s"' % (
                             locale, message_locale))
 
-                translations[locale][key][message.id] = message.string
+                message_id = message.id
+                message_element = importer.get_message(
+                    resource_bundle_key, message_id)
+                message_element.add_translation(message.string)
+                message_element.add_location(resource_bundle_key,
+                                             loc_name, loc_type)
 
     @staticmethod
-    def update_translations(course, translations, messages):
+    def update_translations(course, importer, warn_not_found=False,
+                            warn_not_used=False, config=None):
+        translation_messages = []
         app_context = course.app_context
-        transformer = xcontent.ContentTransformer(
-            config=I18nTranslationContext.get(app_context))
+        config = config or I18nTranslationContext.get(app_context)
+        transformer = xcontent.ContentTransformer(config=config)
         i18n_progress_dtos = I18nProgressDAO.get_all()
         progress_by_key = {p.id: p for p in i18n_progress_dtos}
         resource_key_map = TranslatableResourceRegistry.get_resources_and_keys(
             course)
 
-        for locale, resource_translations in translations.iteritems():
+        # Map of sets.  Key is message key (same key you'd use to look up a
+        # message in a TranslationFile).  Values in set are string locations,
+        # same as keys in TranslationMessage.locations.
+        used_message_locations = collections.defaultdict(set)
+
+        for locale in importer.get_locales():
             used_resource_translations = set()
             num_resources = 0
             num_replacements = 0
@@ -1161,58 +1531,91 @@ class TranslationUploadRestHandler(utils.BaseRESTHandler):
                     i18n_progress_dtos.append(i18n_progress_dto)
                     progress_by_key[i18n_progress_dto.id] = i18n_progress_dto
 
-                translations = resource_translations.get(key_str)
-                if translations:
-                    used_resource_translations.add(key_str)
-                else:
-                    # Even though we don't have translations for this resource,
-                    # keep going; we want to update the progress DTO below.
-                    translations = {}
-
-                used_translations = set()
                 _, sections = (
                     TranslationConsoleRestHandler.build_sections_for_key(
                         key, course, resource_bundle_dto, transformer))
                 for section in sections:
                     for item in section['data']:
-                        source_value = item['source_value']
+                        source_value = unicode(item['source_value'] or '')
                         if not isinstance(source_value, basestring):
                             source_value = unicode(source_value)  # convert num
-                        if source_value not in translations:
-                            messages.append(
-                                'Did not find translation for "%s"' %
-                                source_value)
-                        elif translations[source_value]:
-                            item['target_value'] = translations[source_value]
+
+                        message_element = importer.get_message(key,
+                                                               source_value)
+                        if (not message_element or
+                            not key_str in message_element.locations):
+
+                            if warn_not_found:
+                                translation_messages.append(
+                                    'Did not find translation for "%s" at %s' %
+                                    (source_value, resource_key))
+                            continue
+
+                        translated_value = message_element.get_any_translation()
+                        if translated_value:
+                            item['target_value'] = translated_value
                             item['changed'] = True
-                            used_translations.add(source_value)
                             num_replacements += 1
                         else:
-                            used_translations.add(source_value)
                             num_blank_translations += 1
-
-                for unused_translation in set(translations) - used_translations:
-                    messages.append(
-                        'Translation for "%s" present but not used.' %
-                        unused_translation)
+                        used_message_locations[source_value].add(key_str)
 
                 TranslationConsoleRestHandler.update_dtos_with_section_data(
                     key, sections, resource_bundle_dto, i18n_progress_dto)
 
-            for unused in (
-                set(resource_translations) - used_resource_translations):
-
-                messages.append(
-                    ('Translation file had %d items for resource "%s", but '
-                     'course had no such resource.') % (
-                         len(resource_translations[unused]), unused))
-            messages.append(
+            translation_messages.append(
                 ('For %s, made %d total replacements in %d resources.  '
                  '%d items in the uploaded file did not have translations.') % (
                     common_locales.get_locale_display_name(locale),
                     num_replacements, num_resources, num_blank_translations))
             ResourceBundleDAO.save_all(resource_bundle_dtos)
         I18nProgressDAO.save_all(i18n_progress_dtos)
+
+        if warn_not_used:
+            # Here, we are intentionally using the API on the importer that
+            # knows about specific files and their names.  This is because we
+            # want to issue a warning noting which specific file was
+            # problematic.
+            for message_file in importer.iterfiles():
+                for message, message_element in message_file.itermessages():
+                    if message_element.translations:
+                        unused_locations = (set(message_element.locations) -
+                                            used_message_locations[message])
+                        if unused_locations:
+                            translation_messages.append(
+                                'Unused translation in file '
+                                '%s for "%s" -> "%s" for locations: %s' % (
+                                    message_file.file_name, message,
+                                    message_element.get_any_translation(),
+                                    ' '.join(unused_locations)))
+        return translation_messages
+
+    @staticmethod
+    def load_file_content(app_context, file_content, importer):
+        # Internally, babel uses the 'en' locale, and we must configure it
+        # before we make babel calls.
+        with common_utils.ZipAwareOpen():
+            localedata.load('en')
+            localedata.load(app_context.default_locale)
+
+        # Get meta-data for supported locales loaded.  Need to do this before
+        # attempting to parse .po file content.  Do this now, since we don't
+        # rely on file names to establish locale, just bundle keys.  Since
+        # bundle keys are in .po file content, and since we need locales
+        # loaded to parse file content, resolve recursion by pre-emptively
+        # just grabbing everything.
+        for locale in app_context.get_all_locales():
+            with common_utils.ZipAwareOpen():
+                localedata.load(locale)
+
+        try:
+            zf = zipfile.ZipFile(cStringIO.StringIO(file_content), 'r')
+            for item in zf.infolist():
+                if item.filename.endswith('.po'):
+                    TranslationUploadRestHandler.parse_po_file(
+                        importer, zf.read(item))
+        except zipfile.BadZipfile:
+            TranslationUploadRestHandler.parse_po_file(importer, file_content)
 
     def post(self):
         if appengine_config.PRODUCTION_MODE:
@@ -1249,52 +1652,37 @@ class TranslationUploadRestHandler(utils.BaseRESTHandler):
                 self, 400, 'The .zip or .po file must not be empty.')
             return
 
-        # Get meta-data for supported locales loaded.  Need to do this before
-        # attempting to parse .po file content.  Do this now, since we don't
-        # rely on file names to establish locale, just bundle keys.  Since
-        # bundle keys are in .po file content, and since we need locales
-        # loaded to parse file content, resolve recursion by pre-emptively
-        # just grabbing everything.
-        for locale in self.app_context.get_all_locales():
-            with common_utils.ZipAwareOpen():
-                localedata.load(locale)
-
-        # Build up set of all incoming translations as a nested dict:
-        # locale -> bundle key -> {'original text': 'translated text'}
-        translations = self.build_translations_defaultdict()
+        payload = transforms.loads(request.get('payload', '{}'))
+        warn_not_used = payload.get('warn_not_used', False)
+        warn_not_found = payload.get('warn_not_found', False)
+        importer = TranslationContents()
         try:
-            try:
-                zf = zipfile.ZipFile(cStringIO.StringIO(file_content), 'r')
-                for item in zf.infolist():
-                    if item.filename.endswith('.po'):
-                        self.parse_po_file(translations, zf.read(item))
-            except zipfile.BadZipfile:
-                try:
-                    self.parse_po_file(translations, file_content)
-                except UnicodeDecodeError:
-                    transforms.send_file_upload_response(
-                        self, 400,
-                        'Uploaded file did not parse as .zip or .po file.')
-                    return
+            self.load_file_content(self.app_context, file_content, importer)
+        except UnicodeDecodeError:
+            transforms.send_file_upload_response(
+                self, 400,
+                'Uploaded file did not parse as .zip or .po file.')
+            return
         except TranslationUploadRestHandler.ProtocolError, ex:
             transforms.send_file_upload_response(self, 400, str(ex))
             return
 
-        if not translations:
+        if importer.is_empty():
             transforms.send_file_upload_response(
                 self, 400, 'No translations found in provided file.')
             return
 
-        for locale in translations:
+        for locale in importer.get_locales():
             if not has_locale_rights(self.app_context, locale):
                 transforms.send_file_upload_response(
                     self, 401, 'Access denied.')
                 return
 
-        messages = []
-        self.update_translations(self.get_course(), translations, messages)
+        translation_messages = self.update_translations(
+            self.get_course(), importer, warn_not_used, warn_not_found)
         transforms.send_file_upload_response(
-            self, 200, 'Success.', payload_dict={'messages': messages})
+            self, 200, 'Success.',
+            payload_dict={'messages': translation_messages})
 
 
 class I18nProgressManager(caching.RequestScopedSingleton):
@@ -1306,7 +1694,12 @@ class I18nProgressManager(caching.RequestScopedSingleton):
     def _preload(self):
         self._key_to_progress = {}
         for row in I18nProgressDAO.get_all_iter():
-            self._key_to_progress[str(resource.Key.fromstring(row.id))] = row
+            try:
+                self._key_to_progress[
+                    str(resource.Key.fromstring(row.id))] = row
+            except Exception:  # pylint: disable=broad-except
+                logging.warning('Unhandled resource: %s', row.id)
+                continue
 
     def _get(self, rsrc, type_str, key):
         if self._key_to_progress is None:
@@ -1321,176 +1714,6 @@ class I18nProgressManager(caching.RequestScopedSingleton):
     def get(cls, course, rsrc, type_str, key):
         # pylint: disable=protected-access
         return cls.instance(course)._get(rsrc, type_str, key)
-
-
-# all caches must have limits
-MAX_GLOBAL_CACHE_SIZE_BYTES = 16 * 1024 * 1024
-
-# we don't track deletions; deleted item will hang around this long
-CACHE_ENTRY_TTL_SEC = 5 * 60
-
-# Global memcache controls.
-CAN_USE_RESOURCE_BUNDLE_IN_PROCESS_CACHE = ConfigProperty(
-    'gcb_can_use_resource_bundle_in_process_cache', bool, (
-        'Whether or not to cache I18N translations. For production this value '
-        'should be on to enable maximum performance. For development this '
-        'value should be off so you can see your changes to course content '
-        'instantaneously.'), default_value=True)
-
-
-class ProcessScopedResourceBundleCache(caching.ProcessScopedSingleton):
-    """This class holds in-process global cache of VFS objects."""
-
-    @classmethod
-    def get_cache_len(cls):
-        # pylint: disable=protected-access
-        return len(
-            ProcessScopedResourceBundleCache.instance()._cache.items.keys())
-
-    @classmethod
-    def get_cache_size(cls):
-        # pylint: disable=protected-access
-        return ProcessScopedResourceBundleCache.instance()._cache.total_size
-
-    def __init__(self):
-        self._cache = caching.LRUCache(
-            max_size_bytes=MAX_GLOBAL_CACHE_SIZE_BYTES)
-        self._cache.get_entry_size = self._get_entry_size
-
-    def _get_entry_size(self, key, value):
-        return sys.getsizeof(key) + sys.getsizeof(value) if value else 0
-
-    @property
-    def cache(self):
-        return self._cache
-
-
-class ResourceBundleCacheEntry(caching.AbstractCacheEntry):
-    """Cache entry representing a file."""
-
-    def __init__(self, entity):
-        self.entity = entity
-        self.created_on = datetime.datetime.utcnow()
-
-    def getsizeof(self):
-        return (
-            ResourceBundleEntity.getsizeof(self.entity) +
-            sys.getsizeof(self.created_on))
-
-    def has_expired(self):
-        age = (datetime.datetime.utcnow() - self.created_on).total_seconds()
-        return age > CACHE_ENTRY_TTL_SEC
-
-    def is_up_to_date(self, key, update):
-        if update and self.entity:
-            return update.updated_on == self.entity.updated_on
-        return not update and not self.entity
-
-    def updated_on(self):
-        if self.entity:
-            return self.entity.updated_on
-        return None
-
-    @classmethod
-    def externalize(cls, key, entry):
-        entity = entry.entity
-        if not entity:
-            return None
-        return ResourceBundleDAO.DTO(
-            entity.key().id_or_name(), transforms.loads(entity.data))
-
-    @classmethod
-    def internalize(cls, key, entity):
-        return cls(entity)
-
-
-class ResourceBundleCacheConnection(caching.AbstractCacheConnection):
-
-    PERSISTENT_ENTITY = ResourceBundleEntity
-    CACHE_ENTRY = ResourceBundleCacheEntry
-
-    @classmethod
-    def init_counters(cls):
-        super(ResourceBundleCacheConnection, cls).init_counters()
-
-        cls.CACHE_INHERITED = PerfCounter(
-            'gcb-models-ResourceBundleConnection-cache-inherited',
-            'A number of times an object was obtained from the inherited vfs.')
-
-    @classmethod
-    def is_enabled(cls):
-        return CAN_USE_RESOURCE_BUNDLE_IN_PROCESS_CACHE.value
-
-    def __init__(self, namespace):
-        super(ResourceBundleCacheConnection, self).__init__(namespace)
-        self.cache = ProcessScopedResourceBundleCache.instance().cache
-
-    def get_updates_when_empty(self):
-        """Load in all ResourceBundles when cache is empty."""
-        q = self.PERSISTENT_ENTITY.all()
-        for entity in caching.iter_all(q):
-            self.put(entity.key().name(), entity)
-            self.CACHE_UPDATE_COUNT.inc()
-
-        # we don't have any updates to apply; all items are new
-        return {}
-
-
-RB_CACHE_LEN = models.counters.PerfCounter(
-    'gcb-models-ResourceBundleCacheConnection-cache-len',
-    'A total number of items in cache.')
-RB_CACHE_SIZE_BYTES = PerfCounter(
-    'gcb-models-ResourceBundleCacheConnection-cache-bytes',
-    'A total size of items in cache in bytes.')
-
-RB_CACHE_LEN.poll_value = ProcessScopedResourceBundleCache.get_cache_len
-RB_CACHE_SIZE_BYTES.poll_value = (
-    ProcessScopedResourceBundleCache.get_cache_size)
-
-
-ResourceBundleCacheConnection.init_counters()
-
-
-class I18nResourceBundleManager(caching.RequestScopedSingleton):
-    """Class that provides access to in-process ResourceBundle cache.
-
-    This class only supports get() and does not intercept put() or delete()
-    and is unaware of changes to ResourceBundles made in this very process.
-    When ResourceBundles change, the changes will be picked up when new instance
-    of this class is created. If you are watching perfomance counters, you will
-    see EVICT and EXPIRE being incremented, but not DELETE or PUT.
-    """
-
-    def __init__(self, namespace):
-        self._conn = ResourceBundleCacheConnection.new_connection(namespace)
-
-    def _get(self, key):
-        found, stream = self._conn.get(key)
-        if found and stream:
-            return stream
-        entity = ResourceBundleDAO.ENTITY_KEY_TYPE.get_entity_by_key(
-            ResourceBundleEntity, str(key))
-        if entity:
-            self._conn.put(key, entity)
-            return ResourceBundleDAO.DTO(
-                entity.key().id_or_name(), transforms.loads(entity.data))
-        self._conn.CACHE_NOT_FOUND.inc()
-        self._conn.put(key, None)
-        return None
-
-    def _get_multi(self, keys):
-        return [self._get(key) for key in keys]
-
-    @classmethod
-    def get(cls, app_context, key):
-        # pylint: disable=protected-access
-        return cls.instance(app_context.get_namespace_name())._get(key)
-
-    @classmethod
-    def get_multi(cls, app_context, keys):
-        # pylint: disable=protected-access
-        return cls.instance(
-            app_context.get_namespace_name())._get_multi(keys)
 
 
 class I18nTranslationContext(caching.RequestScopedSingleton):
@@ -1592,8 +1815,7 @@ class I18nReverseCaseHandler(BaseDashboardExtension):
         """
 
         cls._add_reverse_case_locale(course)
-        po_file_content = cls._build_reverse_case_translations(course)
-        cls._set_reverse_case_translations(course, po_file_content)
+        cls._apply_reverse_case_translations(course)
 
     @staticmethod
     def _add_reverse_case_locale(course):
@@ -1609,38 +1831,15 @@ class I18nReverseCaseHandler(BaseDashboardExtension):
             course.save_settings(environ)
 
     @staticmethod
-    def _build_reverse_case_translations(course):
-        original_locale = course.app_context.default_locale
-        with common_utils.ZipAwareOpen():
-            # Load metadata for 'en', which Babel uses internally.
-            localedata.load('en')
-            # Load metadata for base course language.
-            localedata.load(original_locale)
-
-        translations = TranslationDownloadRestHandler.build_translations(
-            course, [PSEUDO_LANGUAGE], 'all')
-        cat = TranslationDownloadRestHandler.build_babel_catalog_for_locale(
-            course, translations, PSEUDO_LANGUAGE)
-        for message in cat:
-            message.string = swapcase(message.id)
-        try:
-            content = cStringIO.StringIO()
-            pofile.write_po(content, cat)
-            return content.getvalue()
-        finally:
-            content.close()
-
-    @staticmethod
-    def _set_reverse_case_translations(course, po_file_content):
-        translations = (
-            TranslationUploadRestHandler.build_translations_defaultdict())
-        TranslationUploadRestHandler.parse_po_file(
-            translations, po_file_content)
-        messages = []
-        TranslationUploadRestHandler.update_translations(course, translations,
-                                                         messages)
-        for message in messages:
-            logging.warning(message)
+    def _apply_reverse_case_translations(course):
+        contents = TranslationContents()
+        TranslationDownloadRestHandler.build_translations(
+            course, [PSEUDO_LANGUAGE], 'all', contents)
+        for translation_file in contents.iterfiles():
+            for message, message_entry in translation_file.itermessages():
+                message_entry.translations.clear()
+                message_entry.add_translation(swapcase(message))
+        TranslationUploadRestHandler.update_translations(course, contents)
 
     def render(self):
         course = self.handler.get_course()
@@ -1653,15 +1852,103 @@ class AbstractTranslatableResourceType(object):
 
     @classmethod
     def get_ordering(cls):
+        """Return an ORDERING_{FIRST,MIDDLE...} definition enum value.
+
+        This specifies where, in the list of translatable resource types,
+        this resource type should appear.
+        """
         raise NotImplementedError('Derived classes must implement this.')
 
     @classmethod
     def get_title(cls):
+        """Provide a section title describing items of this type."""
+        raise NotImplementedError('Derived classes must implement this.')
+
+    @classmethod
+    def get_i18n_title(cls, resource_key):
+        """Provide an I18N'd title for a resource.
+
+        The current course and current language are implied; use common
+        methods in controllers.sites to get the context for the current
+        request and from that, the current locale.
+
+        Args:
+          resource_key: common.resource.Key instance naming the entity
+              for which we want a title.
+        Returns:
+          I18N'd version of the title for the entity corresponding to the
+          locale in the key.
+        """
         raise NotImplementedError('Derived classes must implement this.')
 
     @classmethod
     def get_resources_and_keys(cls, course):
+        """Return an iterable of ordered resources for this type.
+
+        This function must return an iterable of 2-tuples representing all
+        translatable sub-items for this resource type.  Each tuple must
+        consist of a resource and a resource key (in that order).  These
+        tuples must be stable as to their order.  If the resource being
+        represented is linear in nature (e.g., a course's content, as opposed
+        to settings, which are mutually independent), then the tuples returned
+        should be in logical reading order to facilitate ease of translation
+        as human translators move from one item to the next.
+
+        The resource should be a normal DTO.  This DTO's class should supply
+        POST_LOAD_HOOKS and POST_SAVE_HOOKS methods to cope with translation
+        changes.  The DTO must conform to the schema defined by your
+        implementation of resource.AbstractResourceHandler.
+
+        The resource key an instance of common.resource.Key that refers to the
+        resource DTO.  This key is used to look up a resource handler from
+        common.resource.Registry.get() based on the resource_key.type.
+
+        The resource is used with the resource-handler (obtained above based
+        on the key), and is passed to resource_handler.get_resource_title(rsrc)
+        This is used to name the resource in .po files and user interface
+        elements.
+
+        Args:
+          course: Standard Course Builder course object (models.courses.Course)
+        Returns:
+          Iterable of 2-tuples as detailed above.
+        """
         raise NotImplementedError('Derived classes must implement this.')
+
+    @classmethod
+    def get_resource_types(cls):
+        """Give the type strings for resource keys.
+
+        When get_resources_and_keys() is called, the keys will all have a type
+        member which corresponds to the TYPE field of a class derived from
+        common.resource.AbstractResourceHandler.  Derived classes should
+        return the type strings that may appear in keys so that this
+        translatable resource handler can be looked up by type.
+
+        Note that this implies that only one TranslatableResourceType class
+        can operate on resources of a given type.
+        """
+        raise NotImplementedError('Derived classes must implement this.')
+
+    @classmethod
+    def notify_translations_changed(cls, key):
+        """Notify a derived TranslatableResourceType that translations changed.
+
+        This is called when a set of translations for a language corresponding
+        to the object identified by 'key' has changed.
+
+        Normally, this is not necessary, because pre- and post-load hooks in
+        DTOs take care of automagically overwriting the contents of DTOs to
+        replace the nominal content with translated versions when that is
+        appropriate.  However, there are some cases where translatable
+        resources are not implemented using DTOs.  In this situation, we rely
+        on an explicit callback so that the TranslatableResourceType can do
+        the appropriate things when a translated version has changed.  (E.g.,
+        purge cached translations.)  This is generally appropriate only for
+        legacy code, and you should strongly prefer to use the
+        POST_{LOAD,SAVE}_HOOKS paradigm when possible.
+        """
+        pass  # Implementation of this function is optional.
 
 
 class TranslatableResourceRegistry(object):
@@ -1674,6 +1961,7 @@ class TranslatableResourceRegistry(object):
 
     _RESOURCE_TYPES = []
     _RESOURCE_TITLES = set()
+    _RESOURCE_HANDLERS_BY_TYPE = {}
 
     @classmethod
     def register(cls, translatable_resource):
@@ -1682,8 +1970,27 @@ class TranslatableResourceRegistry(object):
             raise ValueError(
                 'Title "%s" is already registered as a translatable resource.' %
                 title)
+        types = translatable_resource.get_resource_types()
+        for type_str in types:
+            if type_str in cls._RESOURCE_HANDLERS_BY_TYPE:
+                raise ValueError(
+                    'A TranslatableResource for "%s" is already registred.' %
+                    type_str)
         cls._RESOURCE_TITLES.add(title)
         cls._RESOURCE_TYPES.append(translatable_resource)
+        for type_str in types:
+            cls._RESOURCE_HANDLERS_BY_TYPE[type_str] = translatable_resource
+
+    @classmethod
+    def unregister(cls, translatable_resource):
+        title = translatable_resource.get_title()
+        if title in cls._RESOURCE_TITLES:
+            cls._RESOURCE_TITLES.remove(title)
+        if translatable_resource in cls._RESOURCE_TYPES:
+            cls._RESOURCE_TYPES.remove(translatable_resource)
+        for type_str in translatable_resource.get_resource_types():
+            if type_str in cls._RESOURCE_HANDLERS_BY_TYPE:
+                del cls._RESOURCE_HANDLERS_BY_TYPE[type_str]
 
     @classmethod
     def get_all(cls):
@@ -1697,6 +2004,16 @@ class TranslatableResourceRegistry(object):
             ret += resource_type.get_resources_and_keys(course)
         return ret
 
+    @classmethod
+    def get_by_type(cls, type_str):
+        return cls._RESOURCE_HANDLERS_BY_TYPE.get(type_str)
+
+
+def has_translatable_fields(schema):
+    index = schema_fields.FieldRegistryIndex(schema)
+    index.rebuild()
+    return bool(TRANSLATABLE_FIELDS_FILTER.filter_field_registry_index(index))
+
 
 class TranslatableResourceCourseSettings(AbstractTranslatableResourceType):
 
@@ -1706,19 +2023,41 @@ class TranslatableResourceCourseSettings(AbstractTranslatableResourceType):
 
     @classmethod
     def get_title(cls):
-        return 'Course Settings'
+        return 'Settings'
+
+    @classmethod
+    def get_i18n_title(cls, resource_key):
+        """Return the name of the setting as the "translated" title.
+
+        Course settings aren't student visible, and so their names don't
+        get translated.  Return just the name of the setting, since that
+        makes as much sense as anything else.
+
+        Args:
+          resource_key: common.resource.Key instance naming the entity
+              for which we want a title.
+        Returns:
+          Setting name
+        """
+        return resource_key.key
 
     @classmethod
     def get_resources_and_keys(cls, course):
         ret = []
         for section_name in sorted(courses.Course.get_schema_sections()):
-            ret.append((
-                resources_display.ResourceCourseSettings.get_resource(
-                    course, section_name),
-                resource.Key(resources_display.ResourceCourseSettings.TYPE,
-                    section_name, course),
-                ))
+            schema = resources_display.ResourceCourseSettings.get_resource(
+                course, section_name)
+            if has_translatable_fields(schema):
+                ret.append((
+                    schema,
+                    resource.Key(resources_display.ResourceCourseSettings.TYPE,
+                        section_name, course),
+                    ))
         return ret
+
+    @classmethod
+    def get_resource_types(cls):
+        return [resources_display.ResourceCourseSettings.TYPE]
 
 
 class TranslatableResourceCourseComponents(AbstractTranslatableResourceType):
@@ -1729,7 +2068,21 @@ class TranslatableResourceCourseComponents(AbstractTranslatableResourceType):
 
     @classmethod
     def get_title(cls):
-        return 'Course Outline'
+        return 'Create > Outline'
+
+    @classmethod
+    def get_i18n_title(cls, resource_key):
+        # This will pick up from the Course instance for the current request,
+        # so very low overhead here.
+        app_context = sites.get_course_for_current_request()
+        if not app_context:
+            return None
+        course = courses.Course.get(app_context)
+        if resource_key.type == resources_display.ResourceLesson.TYPE:
+            item = course.find_lesson_by_id(None, resource_key.key)
+        else:
+            item = course.find_unit_by_id(resource_key.key)
+        return item.title if item else None
 
     @classmethod
     def get_resources_and_keys(cls, course):
@@ -1769,6 +2122,15 @@ class TranslatableResourceCourseComponents(AbstractTranslatableResourceType):
                                  unit.post_assessment, course)))
         return ret
 
+    @classmethod
+    def get_resource_types(cls):
+        return [
+            resources_display.ResourceUnit.TYPE,
+            resources_display.ResourceAssessment.TYPE,
+            resources_display.ResourceLink.TYPE,
+            resources_display.ResourceLesson.TYPE,
+        ]
+
 
 class TranslatableResourceQuestions(AbstractTranslatableResourceType):
 
@@ -1781,6 +2143,14 @@ class TranslatableResourceQuestions(AbstractTranslatableResourceType):
         return 'Questions'
 
     @classmethod
+    def get_i18n_title(cls, resource_key):
+        # I18N is done by POST_LOAD_HOOKS automatically.  Since QuestionEntity
+        # are in the DAO/DTO/Entity paradigm, they're automatically memcached,
+        # as are the translation bundles that will be applied.
+        question = models.QuestionDAO.load(resource_key.key)
+        return question.description if question else None
+
+    @classmethod
     def get_resources_and_keys(cls, course):
         ret = []
         for qu in models.QuestionDAO.get_all():
@@ -1788,6 +2158,13 @@ class TranslatableResourceQuestions(AbstractTranslatableResourceType):
                 resources_display.ResourceQuestionBase.get_question_key_type(
                     qu), qu.id, course)))
         return ret
+
+    @classmethod
+    def get_resource_types(cls):
+        return [
+            resources_display.ResourceSAQuestion.TYPE,
+            resources_display.ResourceMCQuestion.TYPE,
+        ]
 
 
 class TranslatableResourceQuestionGroups(AbstractTranslatableResourceType):
@@ -1801,12 +2178,25 @@ class TranslatableResourceQuestionGroups(AbstractTranslatableResourceType):
         return 'Question Groups'
 
     @classmethod
+    def get_i18n_title(cls, resource_key):
+        # I18N is done by POST_LOAD_HOOKS automatically.  Since
+        # QuestionGroupEntityEntity are in the DAO/DTO/Entity paradigm,
+        # they're automatically memcached, as are the translation bundles that
+        # will be applied.
+        question_group = models.QuestionGroupDAO.load(resource_key.key)
+        return question_group.description if question_group else None
+
+    @classmethod
     def get_resources_and_keys(cls, course):
         ret = []
         for qg in models.QuestionGroupDAO.get_all():
             ret.append((qg, resource.Key(
                 resources_display.ResourceQuestionGroup.TYPE, qg.id, course)))
         return ret
+
+    @classmethod
+    def get_resource_types(cls):
+        return [resources_display.ResourceQuestionGroup.TYPE]
 
 
 class TranslatableResourceHtmlHooks(AbstractTranslatableResourceType):
@@ -1820,11 +2210,34 @@ class TranslatableResourceHtmlHooks(AbstractTranslatableResourceType):
         return 'HTML Hooks'
 
     @classmethod
+    def get_i18n_title(cls, resource_key):
+        """Return the name of the hook as the "translated" title.
+
+        HTML hook entities aren't student visible, and so their names don't
+        get translated.  Return just the name of the setting, since that
+        makes as much sense as anything else.  (Yes, the _contents_ of
+        hooks are student-visible, and are i18n'd, but it doesn't make sense
+        to return what may well be fragmentary HTML gibberish as a concise
+        title.)
+
+        Args:
+          resource_key: common.resource.Key instance naming the entity
+              for which we want a title.
+        Returns:
+          Hook name
+        """
+        return resource_key.key
+
+    @classmethod
     def get_resources_and_keys(cls, course):
         ret = [(v, k)
                for k, v in utils.ResourceHtmlHook.get_all(course).iteritems()]
         ret.sort(key=lambda row: row[0][utils.ResourceHtmlHook.NAME])
         return ret
+
+    @classmethod
+    def get_resource_types(cls):
+        return [utils.ResourceHtmlHook.TYPE]
 
 
 class I18nDashboardHandler(BaseDashboardExtension):
@@ -1839,18 +2252,8 @@ class I18nDashboardHandler(BaseDashboardExtension):
         self.main_locale = all_locales[0]
         self.extra_locales = all_locales[1:]
 
-    def _make_table_section(self, data_rows, section_title):
-        rows = []
-        rows.append(EmptyRow(name='', class_name='blank-row'))
-        rows.append(SectionRow(section_title))
-        if data_rows:
-            rows += data_rows
-        else:
-            rows.append(EmptyRow())
-        return rows
-
     def render(self):
-        rows = []
+        tables = []
 
         for resource_handler in TranslatableResourceRegistry.get_all():
             data_rows = []
@@ -1858,11 +2261,10 @@ class I18nDashboardHandler(BaseDashboardExtension):
                 self.course):
                 data_rows.append(I18nProgressManager.get(
                     self.course, rsrc, key.type, key.key))
-            rows += self._make_table_section(
-                data_rows, resource_handler.get_title())
-
-        if not [row for row in rows if type(row) is ResourceRow]:
-            rows = [EmptyRow(name='No course content')]
+            tables.append({
+                'section_title': resource_handler.get_title(),
+                'rows': data_rows,
+            })
 
         permitted_locales = []
         for locale in self.extra_locales:
@@ -1874,7 +2276,7 @@ class I18nDashboardHandler(BaseDashboardExtension):
 
         template_values = {
             'extra_locales': permitted_locales,
-            'rows': rows,
+            'tables': tables,
             'num_columns': len(permitted_locales) + 1,
             'is_readonly': self.is_readonly(self.course),
         }
@@ -1888,72 +2290,49 @@ class I18nDashboardHandler(BaseDashboardExtension):
 
         main_content = self.handler.get_template(
             'i18n_dashboard.html', [TEMPLATES_DIR]).render(template_values)
-        edit_actions = [
-            {
-                'id': 'delete_translation',
-                'caption': 'Delete Translations',
-                'href': self.handler.get_action_url(
-                    I18nDeletionHandler.ACTION),
-                },
-            {
-                'id': 'upload_translation_files',
-                'caption': 'Upload Translation Files',
-                'href': self.handler.get_action_url(
-                    I18nUploadHandler.ACTION),
-                },
-            {
-                'id': 'download_translation_files',
-                'caption': 'Download Translation Files',
-                'href': self.handler.get_action_url(
-                    I18nDownloadHandler.ACTION),
-                },
-            ]
-
-        translate_actions = [
-            {
-                'id': 'translate_to_reverse_case',
-                'caption': '"Translate" to rEVERSED cAPS',
-                'href': self.handler.get_action_url(
-                    I18nReverseCaseHandler.ACTION),
-                },
-            ]
         actions = []
         if not self.is_readonly(self.course):
-            actions += translate_actions
             if len(self.course.all_locales) > 1:
-                actions += edit_actions
-        if appengine_config.PRODUCTION_MODE:
-            message = (
-                'This operation takes a substantial amount of time, and '
-                'is very likely to time out when executed from a web '
-                'browser talking to a production server.  Alternatives '
-                'are to work with a development server or use the ETL '
-                'scripts to do translation upload/download.  See the '
-                'file .../scripts/etl.sh in your Course Builder download for '
-                'complete instructions on usage. ')
-            disabled_alert = 'javascript: alert("%s")' % message
-            for action in actions:
-                del action['href']
-                action['action'] = disabled_alert
-
-        actions += [
-            {
-                'id': 'edit_18n_settings',
-                'caption': 'Edit I18N Settings',
-                'href': self.handler.get_action_url(
-                    'settings', extra_args={
-                        'tab': 'i18n',
-                        'exit_url': 'dashboard?action=i18n_dashboard',
+                actions.append({
+                    'id': 'delete_translation',
+                    'caption': 'Delete Translations',
+                    'href': self.handler.get_action_url(
+                        I18nDeletionHandler.ACTION),
                     })
-                },
-            ]
+            if (not appengine_config.PRODUCTION_MODE and
+                len(self.course.all_locales) > 1):
+                actions.append({
+                    'id': 'upload_translation_files',
+                    'caption': 'Upload Translation Files',
+                    'href': self.handler.get_action_url(
+                        I18nUploadHandler.ACTION),
+                    })
+                actions.append({
+                    'id': 'download_translation_files',
+                    'caption': 'Download Translation Files',
+                    'href': self.handler.get_action_url(
+                    I18nDownloadHandler.ACTION),
+                    })
+            if not appengine_config.PRODUCTION_MODE:
+                actions.append({
+                    'id': 'translate_to_reverse_case',
+                    'caption': '"Translate" to rEVERSED cAPS',
+                    'href': self.handler.get_action_url(
+                        I18nReverseCaseHandler.ACTION),
+                    })
+        if self.handler.can_view('settings_i18n'):
+            actions.append({
+                'id': 'edit_18n_settings',
+                'caption': 'Settings',
+                'href': self.handler.get_action_url(
+                    'settings_i18n', extra_args={
+                        'exit_url': 'dashboard?action=' + self.ACTION,
+                        })
+                })
         self.handler.render_page({
-            'page_title': self.handler.format_title('I18n Workflow'),
+            'page_title': self.handler.format_title('Translation workflow'),
             'main_content': jinja2.utils.Markup(main_content),
             'sections': [{
-                    'title': 'Internationalization%s' % (
-                        ' (readonly)' if self.is_readonly(
-                            self.course) else ''),
                     'actions': actions,
                     'pre': ' ',
                     }]
@@ -1970,25 +2349,28 @@ class TranslationConsole(BaseDashboardExtension):
             'key': key})
 
     def render(self):
-        main_content = oeditor.ObjectEditor.get_html_for(
-            self.handler,
-            TranslationConsoleRestHandler.SCHEMA.get_json_schema(),
-            TranslationConsoleRestHandler.SCHEMA.get_schema_dict(),
-            self.handler.request.get('key'),
-            self.handler.canonicalize_url(TranslationConsoleRestHandler.URL),
-            self.handler.get_action_url(I18nDashboardHandler.ACTION),
-            auto_return=False,
-            required_modules=TranslationConsoleRestHandler.REQUIRED_MODULES,
-            extra_css_files=['translation_console.css'],
-            extra_js_files=['translation_console.js'],
-            additional_dirs=[TEMPLATES_DIR])
-
         if self.is_readonly(self.handler.get_course()):
             main_content = self.format_readonly_message()
+        else:
+            main_content = oeditor.ObjectEditor.get_html_for(
+                self.handler,
+                TranslationConsoleRestHandler.SCHEMA.get_json_schema(),
+                TranslationConsoleRestHandler.SCHEMA.get_schema_dict(),
+                self.handler.request.get('key'),
+                self.handler.canonicalize_url(
+                    TranslationConsoleRestHandler.URL),
+                self.handler.get_action_url(I18nDashboardHandler.ACTION),
+                additional_dirs=[TEMPLATES_DIR],
+                auto_return=False,
+                display_types=
+                    TranslationConsoleRestHandler.SCHEMA.get_display_types(),
+                extra_css_files=['translation_console.css'],
+                extra_js_files=['translation_console.js'])
 
         self.handler.render_page({
-            'page_title': self.handler.format_title('I18n Workflow'),
-            'main_content': main_content})
+            'page_title': self.handler.format_title('Translation workflow'),
+            'main_content': main_content,
+            }, in_action=I18nDashboardHandler.ACTION)
 
 
 def tc_generate_schema():
@@ -2049,10 +2431,6 @@ class TranslationConsoleRestHandler(utils.BaseRESTHandler):
 
     SCHEMA = tc_generate_schema()
 
-    REQUIRED_MODULES = [
-        'inputex-hidden', 'inputex-list', 'inputex-string', 'inputex-textarea',
-        'inputex-uneditable']
-
     def get(self):
 
         def cmp_sections(section1, section2):
@@ -2085,8 +2463,8 @@ class TranslationConsoleRestHandler(utils.BaseRESTHandler):
                 self, 401, 'Access denied.', {'key': str(key)})
             return
 
-        resource_bundle_dto = I18nResourceBundleManager.get(
-            self.app_context, str(key))
+        resource_bundle_dto = model_caching.CacheFactory.get_manager_class(
+            RESOURCE_BUNDLE_CACHE_NAME).get(str(key), self.app_context)
         transformer = xcontent.ContentTransformer(
             config=I18nTranslationContext.get(self.app_context))
         course = self.get_course()
@@ -2114,7 +2492,6 @@ class TranslationConsoleRestHandler(utils.BaseRESTHandler):
         request = transforms.loads(self.request.get('request'))
         key = ResourceBundleKey.fromstring(request['key'])
         validate = request.get('validate', False)
-
         if not self.assert_xsrf_token_or_fail(
                 request, self.XSRF_TOKEN_NAME, {'key': str(key)}):
             return
@@ -2124,13 +2501,13 @@ class TranslationConsoleRestHandler(utils.BaseRESTHandler):
                 self, 401, 'Access denied.', {'key': str(key)})
             return
 
-        payload = transforms.loads(request['payload'])
+        payload = transforms.loads(request.get('payload', ''))
         payload_dict = transforms.json_to_dict(
             payload, self.SCHEMA.get_json_schema_dict())
 
         # Update the resource bundle
-        resource_bundle_dto = ResourceBundleDAO.load_or_create(key)
-        i18n_progress_dto = I18nProgressDAO.load_or_create(key.resource_key)
+        resource_bundle_dto = ResourceBundleDAO.load_or_default(key)
+        i18n_progress_dto = I18nProgressDAO.load_or_default(key.resource_key)
         self.update_dtos_with_section_data(
             key, payload_dict['sections'], resource_bundle_dto,
             i18n_progress_dto)
@@ -2180,12 +2557,13 @@ class TranslationConsoleRestHandler(utils.BaseRESTHandler):
         if not resource_bundle_dto:
             resource_bundle_dto = ResourceBundleDTO(key, {})
 
+        any_changed = False
         for section in sections:
             changed = False
             data = []
             for item in section['data']:
                 if item['changed']:
-                    changed = True
+                    any_changed = changed = True
                     data.append({
                         'source_value': item['source_value'],
                         'target_value': item['target_value']})
@@ -2243,10 +2621,56 @@ class TranslationConsoleRestHandler(utils.BaseRESTHandler):
         else:
             progress = I18nProgressDTO.NOT_STARTED
         i18n_progress_dto.set_progress(key.locale, progress)
+        if any_changed:
+            resource_class = TranslatableResourceRegistry.get_by_type(
+                key.resource_key.type)
+            resource_class.notify_translations_changed(key)
 
     @staticmethod
     def build_sections_for_key(
         key, course, resource_bundle_dto, transformer):
+        """Given a ResourceBundleKey, produce list of translatable items.
+
+        Args:
+          key: A ResourceBundleKey naming the locale and translatable item
+              (config section, unit, lesson, etc.)
+          course: A standard models.courses.Course instance.
+          resource_bundle_dto: data object holding saved translation strings.
+          transformer: An xcontent.ContentTransformer for chunking a single
+              HTML string into translatable sub-strings based on configurable
+              parameters about what tags and attributes may be included inside
+              translated strings.
+        Returns: a 2-tuple, consisting of
+          binding: A schema_fields.ValueToTypeBinding giving a mapping from
+              section name (see next return item) to a schema element describing
+              that field.
+          sections: A list of zero or more dicts, with fields as follows.
+              Corresponds to 'section' schema; see tc_generate_schema() in this
+              file.
+              'name': Short name for the translatable item.  E.g.,
+                   assessment:title, content, institution:logo:url
+              'label': Label for the item for UI display.  E.g.,
+                   'Title', 'Lesson Body', 'Site Logo'
+              'type': One of: TYPE_{HTML,STRING,TEXT,URL}; the type of
+                  translatable string contained in 'source_value'.
+              'source_value': Text to be translated, in base language.
+              'data': A dict with elements describing the text, translated
+                  text, and status of the translation.  Corresponds to
+                  the schema 'item' - see tc_generate_schema() in this file.
+                  'source_value': Text to be translated, in base language, but
+                      with modifications to shorten HTML markup and exclude
+                      HTML attributes that are not translatable.  A shortened
+                      version intended to minimize opportunities for human
+                      error by translators.
+                  'target_value': Translated version of text, in same markup
+                      format as 'source_value'.
+                  'old_source_value': Previous version of 'source_value' text.
+                      This is useful when 'target_value' is out-of-date;
+                      translators can see how old_source_value matches
+                      target_value, and use this to craft a new translation to
+                      match a changed version of 'source_value'.
+                  'verb': One of VERB_{NEW,CHANGED,CURRENT} defined above.
+        """
 
         def add_known_translations_as_defaults(locale, sections):
             try:
@@ -2456,7 +2880,7 @@ class I18nProgressDeferredUpdater(jobs.DurableJob):
             sites.unset_path_info()
 
     def _update_progress_for_resource(self, resource_key):
-        i18n_progress_dto = I18nProgressDAO.load_or_create(str(resource_key))
+        i18n_progress_dto = I18nProgressDAO.load_or_default(str(resource_key))
         for locale in self._app_context.get_all_locales():
             if locale != self._app_context.default_locale:
                 key = ResourceBundleKey.from_resource_key(resource_key, locale)
@@ -2635,9 +3059,8 @@ def set_attribute(course, key, thing, attribute_name, translation_dict):
         course.app_context, key, source_value, translation_dict))
 
 
-def is_translation_required():
+def is_translation_required(app_context):
     """Returns True if current locale is different from the course default."""
-    app_context = sites.get_course_for_current_request()
     if not app_context:
         return False
     default_locale = app_context.default_locale
@@ -2654,8 +3077,8 @@ def translate_lessons(course, locale):
         str(ResourceBundleKey(
             resources_display.ResourceLesson.TYPE, lesson.lesson_id, locale))
         for lesson in lesson_list]
-    bundle_list = I18nResourceBundleManager.get_multi(
-        course.app_context, key_list)
+    bundle_list = model_caching.CacheFactory.get_manager_class(
+        RESOURCE_BUNDLE_CACHE_NAME).get_multi(key_list, course.app_context, )
 
     for key, lesson, bundle in zip(key_list, lesson_list, bundle_list):
         if bundle is not None:
@@ -2670,8 +3093,9 @@ def translate_units(course, locale):
     for unit in unit_list:
         key = resources_display.ResourceUnitBase.key_for_unit(unit, course)
         key_list.append(ResourceBundleKey(key.type, key.key, locale))
-    bundle_list = I18nResourceBundleManager.get_multi(
-        course.app_context, key_list)
+    bundle_list = model_caching.CacheFactory.get_manager_class(
+        RESOURCE_BUNDLE_CACHE_NAME).get_multi(
+            key_list, course.app_context)
     unit_tools = resources_display.UnitTools(course)
 
     for key, unit, bundle in zip(key_list, unit_list, bundle_list):
@@ -2693,18 +3117,18 @@ def translate_units(course, locale):
 
 
 @appengine_config.timeandlog('translate_html_hooks', duration_only=True)
-def translate_html_hooks(html_hooks_dict):
-    if not is_translation_required():
+def translate_html_hooks(html_hooks_dict, app_context):
+    if not is_translation_required(app_context):
         return
 
-    app_context = sites.get_course_for_current_request()
     course = courses.Course(None, app_context=app_context)
     locale = app_context.get_current_locale()
 
     key_list = [
         ResourceBundleKey(utils.ResourceHtmlHook.TYPE, name, locale) for
         name in html_hooks_dict.iterkeys()]
-    bundle_list = I18nResourceBundleManager.get_multi(app_context, key_list)
+    bundle_list = model_caching.CacheFactory.get_manager_class(
+        RESOURCE_BUNDLE_CACHE_NAME).get_multi(key_list, app_context)
     for key, bundle in zip(key_list, bundle_list):
         if bundle is None:
             continue
@@ -2721,28 +3145,27 @@ def translate_html_hooks(html_hooks_dict):
         html_hooks_dict[hook_name] = values[utils.ResourceHtmlHook.CONTENT]
 
 @appengine_config.timeandlog('translate_course', duration_only=True)
-def translate_course(course):
-    if not is_translation_required():
+def translate_course(course, app_context):
+    if not is_translation_required(app_context):
         return
     models.MemcacheManager.begin_readonly()
     try:
-        app_context = sites.get_course_for_current_request()
         translate_units(course, app_context.get_current_locale())
         translate_lessons(course, app_context.get_current_locale())
     finally:
         models.MemcacheManager.end_readonly()
 
 
-def translate_course_env(env):
-    if not is_translation_required():
+def translate_course_env(env, app_context):
+    if not is_translation_required(app_context):
         return
-    app_context = sites.get_course_for_current_request()
     locale = app_context.get_current_locale()
     key_list = [
         ResourceBundleKey(
             resources_display.ResourceCourseSettings.TYPE, key, locale)
         for key in courses.Course.get_schema_sections()]
-    bundle_list = I18nResourceBundleManager.get_multi(app_context, key_list)
+    bundle_list = model_caching.CacheFactory.get_manager_class(
+        RESOURCE_BUNDLE_CACHE_NAME).get_multi(key_list, app_context)
 
     course = courses.Course.get(app_context)
     for key, bundle in zip(key_list, bundle_list):
@@ -2754,22 +3177,26 @@ def translate_course_env(env):
             env, schema)
 
         for name, translation_dict in bundle.dict.items():
-            field = binding.name_to_value[name]
-            source_value = field.value
-            field.value = LazyTranslator(
-                app_context, key, source_value, translation_dict)
+            field = binding.name_to_value.get(name)
+            if field:
+                source_value = field.value
+                field.value = LazyTranslator(
+                    app_context, key, source_value, translation_dict)
+            else:
+                logging.warning("Translations exist for non-existent field %s",
+                    name)
 
 
-def translate_dto_list(course, dto_list, resource_key_list):
-    if not is_translation_required():
+def translate_dto_list(course, app_context, dto_list, resource_key_list):
+    if not is_translation_required(app_context):
         return
 
-    app_context = sites.get_course_for_current_request()
     locale = app_context.get_current_locale()
     key_list = [
         ResourceBundleKey(key.type, key.key, locale)
         for key in resource_key_list]
-    bundle_list = I18nResourceBundleManager.get_multi(app_context, key_list)
+    bundle_list = model_caching.CacheFactory.get_manager_class(
+        RESOURCE_BUNDLE_CACHE_NAME).get_multi(key_list, app_context)
 
     for key, dto, bundle in zip(key_list, dto_list, bundle_list):
         if bundle is None:
@@ -2784,29 +3211,29 @@ def translate_dto_list(course, dto_list, resource_key_list):
 
 
 def translate_question_dto(dto_list):
-    if not is_translation_required():
+    app_context = sites.get_course_for_current_request()
+    if not is_translation_required(app_context):
         return
 
     key_list = []
-    app_context = sites.get_course_for_current_request()
     course = courses.Course.get(app_context)
     for dto in dto_list:
         qu_type = resources_display.ResourceQuestionBase.get_question_key_type(
             dto)
         key_list.append(resource.Key(qu_type, dto.id))
-    translate_dto_list(course, dto_list, key_list)
+    translate_dto_list(course, app_context, dto_list, key_list)
 
 
 def translate_question_group_dto(dto_list):
-    if not is_translation_required():
+    app_context = sites.get_course_for_current_request()
+    if not is_translation_required(app_context):
         return
 
-    app_context = sites.get_course_for_current_request()
     course = courses.Course.get(app_context)
     key_list = [
         resource.Key(resources_display.ResourceQuestionGroup.TYPE, dto.id)
         for dto in dto_list]
-    translate_dto_list(course, dto_list, key_list)
+    translate_dto_list(course, app_context, dto_list, key_list)
 
 
 def has_locale_rights(app_context, locale):
@@ -2851,15 +3278,24 @@ def denormalize(s):
 
 
 def notify_module_enabled():
+    model_caching.CacheFactory.build(
+        RESOURCE_BUNDLE_CACHE_NAME, 'Cache Translations',
+        messages.SITE_SETTINGS_CACHE_TRANSLATIONS,
+        RESOURCE_BUNDLE_CACHE_MAX_SIZE_BYTES,
+        RESOURCE_BUNDLE_CACHE_TTL_SEC,
+        ResourceBundleDAO)
+
     TranslatableResourceRegistry.register(TranslatableResourceCourseSettings)
     TranslatableResourceRegistry.register(TranslatableResourceCourseComponents)
     TranslatableResourceRegistry.register(TranslatableResourceQuestions)
     TranslatableResourceRegistry.register(TranslatableResourceQuestionGroups)
     TranslatableResourceRegistry.register(TranslatableResourceHtmlHooks)
 
-    dashboard.DashboardHandler.add_nav_mapping(
-        I18nDashboardHandler.ACTION, 'I18N')
-    dashboard.DashboardHandler.add_external_permission(
+    dashboard.DashboardHandler.add_sub_nav_mapping(
+        'publish', 'translations', MODULE_TITLE,
+        action=I18nDashboardHandler.ACTION, placement=2000)
+
+    dashboard.DashboardHandler.deprecated_add_external_permission(
         ACCESS_PERMISSION, ACCESS_PERMISSION_DESCRIPTION)
     roles.Roles.register_permissions(
         custom_module, permissions_callback)
@@ -2890,6 +3326,7 @@ def notify_module_enabled():
         I18nProgressDeferredUpdater.on_question_groups_changed)
     courses.Course.COURSE_ENV_POST_SAVE_HOOKS.append(
         I18nProgressDeferredUpdater.on_course_settings_changed)
+    settings.CourseSettingsHandler.register_settings_section('i18n')
 
     # Implementation in Babel 0.9.6 is buggy; replace with corrected version.
     pofile.denormalize = denormalize

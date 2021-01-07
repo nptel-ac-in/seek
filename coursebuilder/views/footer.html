@@ -1,0 +1,104 @@
+<div class='invisiblePopupDiv' id='termsDiv'>
+       <div class='gcb-pull-right'>
+       <a class='closeXButton' onClick='hidePopupDiv("termsDiv"); return false;'>X</a>
+       </div>
+       <iframe src='/modules/nptel/assets/html/terms.html' class='popupIframe'></iframe>
+      </div>
+    <div class='invisiblePopupDiv' id='honorDiv'>
+       <div class='gcb-pull-right'>
+       <a class='closeXButton' onClick='hidePopupDiv("honorDiv"); return false;'>X</a>
+       </div>
+       <iframe src='/modules/nptel/assets/html/honor_code.html' class='popupIframe'></iframe>
+      </div>
+    <div class='invisiblePopupDiv' id='faqDiv'>
+       <div class='gcb-pull-right'>
+       <a class='closeXButton' onClick='hidePopupDiv("faqDiv"); return false;'>X</a>
+       </div>
+       <iframe src='/modules/nptel/assets/html/faq.html' class='popupIframe'></iframe>
+    </div>
+</div>
+
+
+<div class="gcb-footer" id="gcb-footer">
+      <div class="gcb-aux">
+      <style>
+.gcb-terms-block2 {
+        margin: auto;
+  max-width: 500px;
+        text-align: center;
+}
+      </style>
+      <div id="gcb-terms"  class="gcb-terms-block2">
+        <p>&copy; 2014 NPTEL -
+          <a onclick='showPopupDiv("termsDiv"); return false;'>
+            {# I18N: Link at the bottom of each page to the privacy and 'Terms and Conditions' pages. #}
+            {{ gettext('Privacy & Terms') }}
+          </a> -
+          <a onclick='showPopupDiv("honorDiv"); return false;'>
+            {# I18N: Link at the bottom of each page to the privacy and 'Terms and Conditions' pages. #}
+            {{ gettext('Honor Code') }}
+          </a> -
+          <a onclick='showPopupDiv("faqDiv"); return false;'>
+            {# I18N: Link at the bottom of each page to the privacy and 'Terms and Conditions' pages. #}
+            {{ gettext('FAQs') }}
+          </a>
+          {% if course_info and course_info.base.show_gplus_button %}
+            <script type="text/javascript">
+            (function() {
+             var po = document.createElement('script'); po.type = 'text/javascript'; po.async = true;
+             po.src = 'https://apis.google.com/js/plusone.js?onload=onLoadCallback';
+             var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(po, s);
+             })();
+            </script>
+            - <span class="plusone-button" id="plusone-3" style="height: 20px; width: 70px; display: inline-block; text-indent: 0px; margin: 0px; padding: 0px; background-color: transparent; border-style: none; float: none; line-height: normal; font-size: 1px; vertical-align: top; background-position: initial initial; background-repeat: initial initial; ">
+              <g:plusone size="medium"></g:plusone>
+            </span>
+          {% endif %}
+        </p>
+      </div>
+      </div>
+    <div id="gcb-footer-global" role="contentinfo">
+      <div class="gcb-aux">
+        <div class="footer-logo-block">
+          <section>
+            <h3>A project of</h3>
+                <a href="http://nptel.iitm.ac.in" target="_blank">
+                <img src="/modules/nptel/assets/img/footer-logo-nptel.png"/>
+                </a>
+          </section>
+        </div>
+        <div class="footer-logo-block">
+          <section>
+            <h3>In association with</h3>
+                <a href="http://www.nasscom.in" target="_blank">
+                <img src="/modules/nptel/assets/img/footer-logo-nasscom.png"/>
+                </a>
+          </section>
+        </div>
+        <div class="footer-logo-block">
+          <section>
+            <h3>Funded by</h3>
+                <a href="http://mhrd.gov.in" target="_blank">
+                <img src="/modules/nptel/assets/img/footer-mhrd.png"/>
+                </a>
+          </section>
+        </div>
+        <div class="footer-logo-block">
+          <section>
+            <h3>Powered by</h3>
+                <a href="http://www.google.com" target="_blank">
+                <img src="/modules/nptel/assets/img/footer-logo-google.png"/>
+                </a>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+     (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+     m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+     })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+    ga('create', 'UA-46447969-1', 'nptel.ac.in');
+    ga('send', 'pageview');
+  </script>

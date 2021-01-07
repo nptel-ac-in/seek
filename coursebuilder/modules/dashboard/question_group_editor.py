@@ -16,6 +16,8 @@
 
 __author__ = 'John Orr (jorr@google.com)'
 
+from common import tags
+from models import courses
 from models import transforms
 from models import models
 from models import resources_display
@@ -31,15 +33,17 @@ class QuestionGroupManagerAndEditor(dto_editor.BaseDatastoreAssetEditor):
         template_values['page_title'] = self.format_title('Edit Question Group')
         template_values['main_content'] = self.get_form(
             QuestionGroupRESTHandler, key,
-            dashboard_utils.build_assets_url('questions'))
+            dashboard_utils.build_assets_url('edit_question_groups'))
         return template_values
 
     def get_add_question_group(self):
-        self.render_page(self.qgmae_prepare_template(''), 'assets', 'questions')
+        self.render_page(
+            self.qgmae_prepare_template(''), in_action='edit_question_groups')
 
     def get_edit_question_group(self):
-        self.render_page(self.qgmae_prepare_template(self.request.get('key')),
-                         'assets', 'questions')
+        self.render_page(
+            self.qgmae_prepare_template(self.request.get('key')),
+            in_action='edit_question_groups')
 
     def post_add_to_question_group(self):
         try:
@@ -66,7 +70,7 @@ class QuestionGroupManagerAndEditor(dto_editor.BaseDatastoreAssetEditor):
             )
             return
 
-        weight = self.request.get('weight')
+        weight = self.request.get('weight', '1')
         try:
             float(weight)
         except ValueError:
@@ -91,15 +95,22 @@ class QuestionGroupManagerAndEditor(dto_editor.BaseDatastoreAssetEditor):
         )
         return
 
+    def get_question_group_preview(self):
+        # Enable check answers in question preview
+        self.template_value['check_answers'] = True
+
+        template_values = {}
+        template_values['gcb_course_base'] = self.get_base_href(self)
+        template_values['question'] = tags.html_to_safe_dom(
+            '<question-group qgid="{}">'.format(self.request.get('qgid')), self)
+        self.response.write(self.get_template(
+            'question_preview.html').render(template_values))
+
 
 class QuestionGroupRESTHandler(dto_editor.BaseDatastoreRestHandler):
     """REST handler for editing question_groups."""
 
     URI = '/rest/question_group'
-
-    REQUIRED_MODULES = [
-        'gcb-rte', 'inputex-hidden', 'inputex-select', 'inputex-string',
-        'inputex-list']
 
     EXTRA_CSS_FILES = ['question_group_editor.css']
     EXTRA_JS_FILES = ['question_group_editor.js']
@@ -117,6 +128,11 @@ class QuestionGroupRESTHandler(dto_editor.BaseDatastoreRestHandler):
 
     def get_default_content(self):
         return {'version': self.SCHEMA_VERSIONS[0]}
+
+    def sanitize_input_dict(self, json_dict):
+        for item in json_dict['items']:
+            if len(str(item['weight']).strip()) == 0:
+                item['weight'] = '1'
 
     def validate(self, question_group_dict, key, schema_version, errors):
         """Validate the question group data sent from the form."""
@@ -139,3 +155,22 @@ class QuestionGroupRESTHandler(dto_editor.BaseDatastoreRestHandler):
             except ValueError:
                 errors.append(
                     'Item %s must have a numeric weight.' % (index + 1))
+
+        if key is None or key == "":
+            pass
+        else: 
+            #this is only for updates
+            course = courses.Course.get(self.app_context);
+            location_maps = course.get_component_locations()
+            (qulocations_map, qglocations_map) = location_maps
+
+            qglocations = qglocations_map.get(int(key), None)
+            assessments = qglocations['assessments'] if qglocations and qglocations.has_key('assessments') else {}
+
+            for assessment, value in assessments.iteritems():
+                if assessment.is_locked:
+                    error_msg = "You can't edit this question group as its part of locked Assessment - %s" % (assessment.title)
+                    print error_msg
+                    errors.append(error_msg)
+                else:
+                    pass

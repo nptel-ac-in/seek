@@ -15,13 +15,12 @@
 """Course staff module."""
 
 __author__ = 'Abhinav Khandelwal (abhinavk@google.com)'
-
+import logging
 from models import custom_modules
 from modules.course_staff import base
 from modules.course_staff import evaluate
 from modules.course_staff import manage
 from modules.dashboard import dashboard
-from modules.dashboard import tabs
 
 custom_module = None
 
@@ -30,17 +29,6 @@ def register_module():
     course_staff_handlers = [
         ('/course_staff', evaluate.EvaluationHandler)
     ]
-
-    tabs.Registry.register(
-        base.CourseStaffBase.DASHBOARD_NAV,
-        base.CourseStaffBase.DASHBOARD_SHOW_LIST_TAB,
-        base.CourseStaffBase.NAME,
-        manage.CourseStaffDashboardHandler)
-
-    import logging
-
-    dashboard.DashboardHandler.add_custom_get_action(
-        base.CourseStaffBase.DASHBOARD_NAV, None)
 
     dashboard.DashboardHandler.add_custom_post_action(
         base.CourseStaffBase.DASHBOARD_ADD_COURSE_STAFF,
@@ -62,6 +50,14 @@ def register_module():
     dashboard.DashboardHandler.add_custom_post_action(
         base.CourseStaffBase.DASHBOARD_COURSE_STAFF_CAN_NOT_OVERRIDE,
         manage.CourseStaffDashboardHandler.course_staff_can_not_override)
+
+    # Place it under manage
+    dashboard.DashboardHandler.add_sub_nav_mapping(
+        "analytics", base.CourseStaffBase.DASHBOARD_SHOW_LIST_TAB,
+        base.CourseStaffBase.NAME,
+        action=base.CourseStaffBase.DASHBOARD_NAV,
+        contents=manage.CourseStaffDashboardHandler.display_html)
+
 
 
     dashboard.DashboardHandler.add_nav_mapping(

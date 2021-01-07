@@ -1,0 +1,133 @@
+
+<dom-module id="extra-page">
+  <template>
+    <style include="nptel-pwa-css"></style>
+      <app-route
+          route="{{route}}"
+          pattern="/:name"
+          data="{{extraType}}"
+          tail="{{extraData}}"
+          >
+      </app-route>
+        <paper-spinner-lite class="spinner" active alt="Loading content.."></paper-spinner-lite>
+        <div class="matCard">
+          <div id="extra">
+        </div>
+    </template>
+    <script>
+      /**
+       * @customElement
+       * @polymer
+       */
+      class ExtraPage extends Polymer.Element {
+        static get is() { return 'extra-page'; }
+        static get properties() {
+          return {
+            header :{
+              type : String,
+              value:"Extra Title",
+              notify : true
+            },
+            route : {
+              observer : '_isExtraSelected'
+            },
+            enrolled : {
+              type : String,
+              value : false,
+              notify : true
+            },
+          };
+        }
+        processResponse(obj){
+         if (obj)
+         {
+           Polymer.dom(this.root).querySelector("#extra").innerHTML = obj;
+           switch (this.extraType.name) {
+             case "terms":
+               this.header = "Terms"
+               break;
+             case "honor_code":
+               this.header = "Honor Code"
+               break;
+             case "join":
+              this.header = "Register"
+              break;
+             case "assignment":
+              this.header = "Assignments"
+              break;
+             }
+             Polymer.dom(this.root).querySelector(".matCard").style.display = "block";
+          }
+        }
+        validateResponse(response) {
+          var spinner = Polymer.dom(this.root).querySelector('paper-spinner-lite');
+          if(response.ok)
+            {
+              spinner.active = false;
+              spinner.style.display = "none";
+              response.text().then(obj => {
+                return this.processResponse(obj);
+              });
+
+            }
+          else {
+              spinner.active = false;
+              spinner.style.display = "none";
+              console.log(response);
+            }
+        }
+        _isExtraSelected()
+        {
+          if(this.extraType)
+          {
+            if (Polymer.dom(this.parentElement).node.selected == 'extra')
+            {
+              this.enrolled = false;
+              var spinner = Polymer.dom(this.root).querySelector('paper-spinner-lite');
+              var ExtraType = this.extraType.name;
+              if (ExtraType == 'join' || ExtraType == 'assignment')
+              {
+                spinner.active = false;
+                spinner.style.display = "none";
+                var obj;
+                if (ExtraType == 'join')
+                {
+                  var params = (new URL(document.location)).searchParams;
+                  var namespace = params.get("namespace");
+                  obj = "Currently, you cannot join a course from the mobile website, we're working on that :) " +
+                    "<br/><br/>Till then you can access the desktop version by clicking " +
+                    "<a class='highlighted-link' href='/" + namespace + "/register?force=desktop' target='_blank'>here</a>."
+                }
+                else if (ExtraType == 'assignment')
+                {
+
+                  var params = (new URL(document.location)).searchParams;
+                  var namespace = params.get("namespace");
+                  obj = "Currently, you cannot take assignments from the mobile website (This does not mean that there are no assignments), we're working on that :) " +
+                    "<br/><br/>Till then you can access the desktop version by following" +
+                    "<a class='highlighted-link' href='https://youtu.be/QERUVpn3oY8' target='_blank'> this</a>."
+                }
+                this.processResponse(obj);
+              }
+              else
+              {
+                var main=this; // to access "this" context in the anonymous function
+                spinner.active = true;
+                spinner.style.display = "block";
+                fetch('/modules/nptel/assets/html/'+ExtraType+'.html',{
+                  method: 'GET',
+                })
+                .then( obj => {
+                  this.validateResponse(obj);
+                })
+                .catch( obj =>{
+                  logError(obj);
+                });
+              }
+            }
+          }
+        }
+      }
+      window.customElements.define(ExtraPage.is, ExtraPage);
+    </script>
+</dom-module>

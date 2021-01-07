@@ -28,17 +28,20 @@ from google.appengine.ext import db
 from models import roles
 from models import transforms
 from models import models
-from models import student_work
 from modules.course_staff import course_staff
 from modules.manual_review import base
 from modules.manual_review import staff
 from modules.manual_review import manage
+from modules.student_list import base as student_list_base
 
-STUDENT_LIST_ENABLED = False
+# STUDENT_LIST_ENABLED = False
+STUDENT_LIST_ENABLED = True
 
-if 'modules.student_list.register' in os.environ['GCB_REGISTERED_MODULES']:
-    from modules.student_list import base as student_list_base
-    STUDENT_LIST_ENABLED = True
+# TODO(rthakker) Find a better way to see if the module is registered.
+# This does not work in v10.5
+# if 'modules.student_list.register' in os.environ['GCB_REGISTERED_MODULES']:
+#     from modules.student_list import base as student_list_base
+#     STUDENT_LIST_ENABLED = True
 
 class ManualReviewDashboardHandler(base.ManualReviewBase):
     """Handler for Manual Review"""
@@ -107,7 +110,8 @@ class ManualReviewDashboardHandler(base.ManualReviewBase):
         if key:
             cs = course_staff.CourseStaff.get_by_key_name(key)
         if not cs:
-            handler.redirect(handler.get_action_url(cls.DASHBOARD_NAV))
+            handler.redirect(handler.get_action_url(
+                cls.DASHBOARD_CATEGORY + '_' + cls.DASHBOARD_NAV))
             return
 
         template_value = dict()
@@ -124,7 +128,7 @@ class ManualReviewDashboardHandler(base.ManualReviewBase):
         template_value['view_by_assessment_action'] = handler.get_action_url(
             cls.ASSESSMENT_VIEW_ACTION)
         template_value['dashboard_home_action'] = handler.get_action_url(
-            cls.DASHBOARD_NAV)
+            cls.DASHBOARD_CATEGORY + '_' + cls.DASHBOARD_NAV)
 
         content = jinja2.utils.Markup(
             handler.get_template(
@@ -134,8 +138,7 @@ class ManualReviewDashboardHandler(base.ManualReviewBase):
             {
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': content},
-            in_action=cls.DASHBOARD_NAV,
-            in_tab=cls.DASHBOARD_TAB)
+            in_action=cls.DASHBOARD_NAV)
 
     @classmethod
     def view_manual_review_by_assessment(cls, handler):
@@ -155,7 +158,8 @@ class ManualReviewDashboardHandler(base.ManualReviewBase):
         if key:
             unit = course.find_unit_by_id(key)
         if not unit:
-            handler.redirect(handler.get_action_url(cls.DASHBOARD_NAV))
+            handler.redirect(handler.get_action_url(
+                cls.DASHBOARD_CATEGORY + '_' + cls.DASHBOARD_NAV))
             return
 
         template_value = dict()
@@ -210,13 +214,6 @@ class ManualReviewDashboardHandler(base.ManualReviewBase):
             assigned_student_key_names + unassigned_student_key_names +
             removed_student_key_names))
 
-        required_students = models.StudentProfileDAO.bulk_get_student_by_email(
-            required_student_key_names)
-        student_additional_fields = dict(
-            (student.user_id, transforms.nested_lists_as_string_to_dict(
-                student.additional_fields)) for student in required_students)
-        template_value['student_additional_fields'] = student_additional_fields
-
         assigned_ids = [step.evaluator for step in assigned_reviews]
         evaluator_profiles = (
             models.StudentProfileDAO.bulk_get_student_profile_by_id(
@@ -228,7 +225,7 @@ class ManualReviewDashboardHandler(base.ManualReviewBase):
                 removed_ids))
 
         all_evaluator_profiles_dict = dict((e.user_id, e) for e in (
-            evaluator_profiles + removed_evaluator_profiles))
+            evaluator_profiles + removed_evaluator_profiles) if e)
 
 
         template_value['assigned_reviews'] = assigned_reviews
@@ -255,7 +252,7 @@ class ManualReviewDashboardHandler(base.ManualReviewBase):
         template_value['assign_action'] = handler.get_action_url(
             cls.ASSIGN_ACTION)
         template_value['dashboard_home_action'] = handler.get_action_url(
-            cls.DASHBOARD_NAV)
+            cls.DASHBOARD_CATEGORY + '_' + cls.DASHBOARD_NAV)
 
         if STUDENT_LIST_ENABLED:
             template_value['student_details_action'] = handler.get_action_url(
@@ -270,8 +267,7 @@ class ManualReviewDashboardHandler(base.ManualReviewBase):
             {
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': content},
-            in_action=cls.DASHBOARD_NAV,
-            in_tab=cls.DASHBOARD_TAB)
+            in_action=cls.DASHBOARD_NAV)
 
     @classmethod
     def assign_manual_review(cls, handler):
@@ -300,8 +296,8 @@ class ManualReviewDashboardHandler(base.ManualReviewBase):
 
         if not evaluator_id:
             if evaluator_email:
-                evaluator_student = models.Student.get_by_email(
-                    evaluator_email)
+                evaluator_student, is_unique = (
+                    models.Student.get_first_by_email(evaluator_email))
                 evaluator_id = evaluator_student.user_id
 
         course = handler.get_course()

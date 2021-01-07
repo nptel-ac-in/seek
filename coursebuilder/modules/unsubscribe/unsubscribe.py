@@ -22,12 +22,13 @@ import urlparse
 
 import appengine_config
 from common import crypto
+from common import users
 from controllers import utils
 from models import custom_modules
+from models import data_removal
 from models import entities
 from models import services
 
-from google.appengine.api import users
 from google.appengine.ext import db
 
 
@@ -148,6 +149,12 @@ class UnsubscribeHandler(utils.BaseHandler):
         self.template_value['navbar'] = {}
         self.template_value['email'] = email
 
+        # Suppress use of Google Analytics on sub/unsub pages; URL may
+        # contain unencrypted user email.  We want to prevent GA from
+        # indadvertently collecting personally identifiable information
+        # as part of its usual trawling through URL parameters.
+        self.template_value['suppress_analytics'] = 'True'
+
         template = self.get_template(template_file, [TEMPLATES_DIR])
         self.response.out.write(template.render(self.template_value))
 
@@ -173,7 +180,13 @@ class SubscriptionStateEntity(entities.BaseEntity):
 
     @classmethod
     def safe_key(cls, db_key, transform_fn):
-        return db.Key(cls.kind(), transform_fn(db_key.name()))
+        return db.Key.from_path(cls.kind(), transform_fn(db_key.name()))
+
+    @classmethod
+    def delete_by_email_if_subscribed(cls, email_address):
+        entity = cls.get_by_key_name(email_address)
+        if entity and entity.is_subscribed:
+            entity.delete()
 
 
 custom_module = None
@@ -185,11 +198,15 @@ def register_module():
     namespaced_routes = [
         (UnsubscribeHandler.URL, UnsubscribeHandler)]
 
+    def notify_module_enabled():
+        data_removal.Registry.register_indexed_by_email_remover(
+            SubscriptionStateEntity.delete_by_email_if_subscribed)
+
     global custom_module  # pylint: disable=global-statement
     custom_module = custom_modules.Module(
         'Unsubscribe Module',
         'A module to enable unsubscription from emails.',
-        [], namespaced_routes)
+        [], namespaced_routes, notify_module_enabled=notify_module_enabled)
 
     class Service(services.Unsubscribe):
 

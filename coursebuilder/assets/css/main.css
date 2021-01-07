@@ -66,7 +66,7 @@ form label, form p, form input, form textarea, form select {
   margin: 0 0 5px;
 }
 
-th, td {
+th, td, .th, .td {
   border: 1px solid #ebebeb;
   padding: 4px 12px;
   vertical-align: top;
@@ -90,9 +90,9 @@ th, td {
 }
 
 #gcb-nav-y ul ul {
-  border-top: 1px solid #e0e0e0;
-  margin: 8px 0 -8px;
   list-style: none;
+  margin: 0;
+  padding-left: 2em;
 }
 
 #gcb-nav-y li a, #gcb-nav-y li.active li a {
@@ -127,11 +127,6 @@ th, td {
   /* This rule intentionally left blank. */
 }
 
-.gcb-aux {
-  margin: auto;
-  max-width: 978px;
-}
-
 #gcb-header, #gcb-footer {
   margin: 0 -15px;
 }
@@ -144,7 +139,7 @@ th, td {
   filter: "progid:DXImageTransform.Microsoft.gradient(startColorStr=#fafafa,EndColorStr=#f5f5f5)";
   background-image: linear-gradient(top,#fafafa,#f5f5f5);
   border-bottom: 1px solid #ebebeb;
-  color: #91959c;
+  color: #777;
   padding: 17px 15px 5px;
 }
 
@@ -156,7 +151,7 @@ th, td {
 }
 
 #gcb-header a {
-  color: #91959c;
+  color: inherit;
   text-decoration: none;
 }
 
@@ -376,6 +371,19 @@ a.gcb-button-action, button.gcb-button-action {
   margin-left: 8px;
 }
 
+.gcb-edit-resource-button.icon,
+.gcb-edit-resource-button.icon:visited {
+  color: #ccc;
+  font-size: 20px;
+  background: inherit;
+  border: none;
+  text-decoration: none;
+}
+
+.gcb-edit-resource-button.icon:hover {
+  color: #555;
+}
+
 .gcb-button-author {
   background-color: #40DA9D;
   background-image: -moz-linear-gradient(top,#40DA9D,#40DA9D);
@@ -443,11 +451,6 @@ a.gcb-button-action, button.gcb-button-action {
 #gcb-nav-x li {
   margin: 0 15px 0 0;
   text-shadow: none;
-}
-
-.gcb-cols {
-  margin: 0 -1.53374233129%;
-  width: 103.067484663%;
 }
 
 .gcb-cols:after, #gcb-nav-x:after {
@@ -695,7 +698,6 @@ a.gcb-button-action, button.gcb-button-action {
 }
 
 .gcb-lesson-content {
-  margin-left: 10px;
   text-align: left;
 }
 
@@ -971,8 +973,8 @@ html.hide-controls body > .is-wrapper > .gcb-aux,
 html.hide-controls body > .is-wrapper > .gcb-aux > #gcb-main,
 html.hide-controls body > .is-wrapper > .gcb-aux > #gcb-main > #gcb-main-article,
 html.hide-controls body > .is-wrapper > .gcb-aux > #gcb-main > #gcb-main-article > .gcb-aside {
-  height: 100%;
-  width: 100%;
+  height: auto;
+  width: auto;
 }
 
 html.hide-controls .gcb-aux {
@@ -1000,11 +1002,21 @@ html.hide-controls #gcb-breadcrumb,
 html.hide-controls #gcb-edit-unit-button,
 html.hide-controls #gcb-unit-header,
 html.hide-controls #gcb-nav-button-box,
-html.hide-controls #gcb-edit-lesson-button,
+html.hide-controls .gcb-edit-lesson-button,
 html.hide-controls #base-after-main-content-ends,
 html.hide-controls #gcb-signature,
 html.hide-controls #gcb-footer,
 html.hide-controls #base-before-body-tag-ends,
 html.hide-lesson-title #lesson-title {
   display: none;
+}
+
+html.hide-controls .gcb-assessment-contents .gcb-border-box {
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
+#peer-review-score-div {
+  padding-bottom: 10px;
 }

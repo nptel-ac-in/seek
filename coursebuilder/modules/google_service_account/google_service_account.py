@@ -175,6 +175,14 @@ class GoogleServiceManager(object):
         return memcache.get(cls._MEMCACHE_KEY, namespace=namespace)
 
     @classmethod
+    def get_credentials(cls, namespace=appengine_config.DEFAULT_NAMESPACE_NAME):
+        credentials = cls._get_credentials_from_memcache(namespace)
+        if not credentials:
+            # Try initializing again
+            credentials = cls.initialize_credentials(namespace=namespace)
+        return credentials
+
+    @classmethod
     def initialize_credentials(cls, service_account_settings=None,
             namespace=appengine_config.DEFAULT_NAMESPACE_NAME):
         """Builds a decorator for using oauth2 with webapp2.RequestHandlers."""
@@ -229,13 +237,9 @@ class GoogleServiceManager(object):
         """Calls the authorize function of credentials"""
         if not http_obj:
             http_obj = httplib2.Http(timeout=timeout)
-        credentials = cls._get_credentials_from_memcache(namespace)
+        credentials = cls.get_credentials()
         if not credentials:
-            # Try initializing again
-            credentials = cls.initialize_credentials(namespace=namespace)
-            if not credentials:
-                # Initialization failed.
-                return None
+            return None
         return credentials.authorize(
             http_obj, *args, **kwargs)
 

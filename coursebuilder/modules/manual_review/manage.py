@@ -36,7 +36,7 @@ from modules.review import peer
 from google.appengine.ext import db
 from modules.subjective_assignments import question
 from modules.subjective_assignments import drive_service
-from modules.nptel import utils
+from modules.nptel import utils as nptel_utils
 
 import staff
 
@@ -351,6 +351,10 @@ class Manager(object):
         `method` can be one of 'average', 'min', 'max'
         """
         scores = [step.score for step in steps]
+
+        if len(scores) == 1:
+            return scores[0]
+
         final_score = None
         if method == 'average':
             final_score = sum(scores)/len(scores)
@@ -405,17 +409,16 @@ class Manager(object):
     @classmethod
     def get_submission_contents_dict(cls, submission_key):
         """Returns a dict of the submission contents form the submission key"""
-        submission = student_work.Submission.get(submission_key)
-        if submission:
-            submission_contents = transforms.loads(submission.contents)
+        submission_contents = student_work.Submission.get_contents_by_key(
+            submission_key)
+        if submission_contents:
 
             # The submission_cointents seems to have gone through
             # transforms.dumps twice.. Hence using transforms.loads on it twice
             # in case.
             # TODO(rthakker) This is bad, make sure it gets transforms.dumped
             # only once.
-            if (isinstance(submission_contents, str) or
-                    isinstance(submission_contents, unicode)):
+            if isinstance(submission_contents, basestring):
                 submission_contents = transforms.loads(submission_contents)
             return submission_contents
 

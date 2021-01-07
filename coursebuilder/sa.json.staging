@@ -1,0 +1,12 @@
+{
+  "type": "service_account",
+  "project_id": "iitmpod-staging",
+  "private_key_id": "04dc738dbf14f4ea269326c73c4ec6e92abae1d7",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCpqn6UHSQNWOb/\ndjyx9NoRk3qfeWiANOG+lpgceSyWAhqHVnc2lJ+WD/KU+yTclmD8BL9+w9QC/UuA\n4smlNrs8eSE5zSYddZRgGwBFMO0n9tSrLpk06w/J/nou2TilcjBhsMxpUSHMTS4g\nZjTLJYVilHdLNisLRCy1rshCkZqHj+8IJXToty/TWCry2cOhvR4rR90vNiHEXwVs\n/jYu1/3NZZlDCQGjtU55gQSeuRFuFDSZj8hobYF0/WMkWidWToMy7c0AH0Hgx2xv\nYsYFQWpRUjyVl5CSHjIMCSn526mOc5rcK1xYAfb2F0xF9+zNgpa8CIAxpSagiMs3\nFysJ9BALAgMBAAECggEAC5ImlshT/JsLCfIQ2pwVwSwbKUQY5eF1Yc+YaRy0dziG\ngaNadvz000GcLB/imC6jR5y1SJpnW5rVquEMmnlclJe4Nd5xUoIBz/oXbyCSk+6n\n+1KuvSaoyYBS6d4DmHjspsTtc+NGGE5NLoV55T7WVW5Fonn7voV0PSHB45RVgxgn\nsQu3Kd8S9YvZC6Gu+zktdK1y5tQICMozZ8bT9gkePnZ2Zq02jANFJBRQkd7ska1a\nTjwugak0J+XxNS29MeOz+Sp96IXY23hOgFq5rEMc9Wl/SHw6ARZXZqk0usJbf/rk\nmuX2aKw38rugDUi4xx9pX//KPy/Iydtg2IIbcSZwWQKBgQDsQn5OHRpR05p9hy6S\nEOYB99xgslbBZIVaH3efb0vmAyVGDdfkqlEju7mmN35N5Wg5+88eFBvlkzc1FeEM\nLdUwQbiN6ZVD0wnKkWDax0r+7W2yb3s9j/lzCxNg7EC8ukatPdYwNW40PjjdkzAf\n4blHIedi3W591+aThoXqEb7DswKBgQC315YDgfgtNNG4GpvHlHCLlaB94A08EitH\nIGDFuSgDibd/ckV2XuzoQFDamRbwv5ONIEJbAnUwQJ6RFOt3kT1VhvYCHaBzrsQT\n3jk/PVhDyBn/I2sGCeKBfO4lKB6XH3juFrJYOw5MTPT7uENt9up5egtzIaLUGxMS\nCVl/VF+2SQKBgGW4x1roiuF6QwUTBAkdv3pPdpInltTTa9r+u2lo6PvSlOTRpwes\nER1agTdAo1/0iuiUM3vW2qAAv39auTeeMDEDyutHC95U6d1OtK3dqruSDG4MM7qw\n140h0qkjb0gSx8VlX2gISTezJpa3/btsW3J19YMKpb0HDR6th9Dc7Q6jAoGBAJ8l\nPJLKxylzKP1j42jxIkBjheyRsUNIQziuWbewYmg1pqjoJiOjZxhi3NtvXUGJxlSM\nEYUxansb5WiYoIIANAU+8OXB+e1K5CiC3jHVi/wZVA/e/D3c/ryzhoCZ62lNcGVD\nNp5UeTsp/4WM7Kpb7ny8Xv8KpidRTL/3Ygds5fIpAoGAa9pJyAQ2vFV6g48DDCZZ\nucpWAZGHZkhbuW+fDFvRHYBSohlhESTdlFyD9Ps9Ogr7NaiG/j8fZ81jUz+FNKmL\nfQh5p0cQBYk/i9cWvXCOPn32GxwW1woMNBrwIfwrQcCxGYejfZJxuSTflNaj8jZT\nlhtTmxE69bJ7liqqaXs0DDk=\n-----END PRIVATE KEY-----\n",
+  "client_email": "commandlinetools@iitmpod-staging.iam.gserviceaccount.com",
+  "client_id": "103882424705365132000",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/commandlinetools%40iitmpod-staging.iam.gserviceaccount.com"
+}

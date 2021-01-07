@@ -108,7 +108,7 @@ def process_notification(notification, now, stats):
         db.put(notification)
         deferred.defer(
             notifications.Manager._transactional_send_mail_task,
-            notification_key, payload_key,
+            notification_key, payload_key, queue_id='default',
             _retry_options=notifications.Manager._get_retry_options()
             )
         stats.reenqueued += 1

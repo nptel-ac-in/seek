@@ -23,6 +23,7 @@ import os
 import sys
 
 from google.appengine.api import users
+from common import manifests
 
 # configure Appstats
 appstats_MAX_STACK = 20
@@ -32,7 +33,12 @@ PRODUCTION_MODE = not os.environ.get(
     'SERVER_SOFTWARE', 'Development').startswith('Development')
 
 # Set this flag to true to enable bulk downloads of Javascript/CSS files in lib
-BUNDLE_LIB_FILES = True
+BUNDLE_LIB_FILES = not os.environ.get(
+    'GCB_STATIC_SERV_ENABLED', 'false').upper() == 'TRUE'
+
+# Set this flag to true if you can generate flattened polymer import files
+USE_FLATTENED_HTML_IMPORTS = os.environ.get(
+    'GCB_STATIC_SERV_ENABLED', 'false').upper() == 'TRUE'
 
 # this is the official location of this app for computing of all relative paths
 BUNDLE_ROOT = os.path.dirname(__file__)
@@ -44,6 +50,27 @@ CODE_ROOT = BUNDLE_ROOT
 # Default namespace name is '' and not None.
 DEFAULT_NAMESPACE_NAME = ''
 
+# Flag to indicate whether module importation is in progress.  Some modules
+# and core items may wish to be a little flexible about warnings and
+# exceptions due to some, but not all, modules being imported yet at module
+# registration time.
+MODULE_REGISTRATION_IN_PROGRESS = False
+
+# Name for the core module.  We don't actually have any code in modules/core,
+# since having a core module is pretty well a contradiction in terms.  However,
+# there are a few things that want module and module-like-things to register
+# themselves by name, and so here we provide a name for the un-module that is
+# the immutable core functionality.
+CORE_MODULE_NAME = 'core'
+
+# Email which will be used as a sender for announcements.
+ANNOUNCEMENT_SENDER_EMAIL = 'onlinecourses@nptel.iitm.ac.in'
+
+
+# CDN PATHS for static file
+STATIC_CDN_PATH=''
+if PRODUCTION_MODE:
+    STATIC_CDN_PATH='https://storage.googleapis.com/static-prod-v11'
 
 class _Library(object):
     """DDO that represents a Python library contained in a .zip file."""
@@ -68,6 +95,7 @@ class _Library(object):
 
 # Google-produced library zip files.
 GOOGLE_LIBS = [
+    _Library('google-api-python-client-1.4.0.zip'),
     _Library('GoogleAppEngineCloudStorageClient-1.9.15.0.zip',
              relative_path='GoogleAppEngineCloudStorageClient-1.9.15.0'),
     _Library('GoogleAppEnginePipeline-1.9.17.0.zip',
@@ -81,13 +109,22 @@ THIRD_PARTY_LIBS = [
     _Library('httplib2-0.8.zip', relative_path='httplib2-0.8/python2'),
     _Library('gaepytz-2011h.zip'),
     _Library('Graphy-1.0.0.zip', relative_path='Graphy-1.0.0'),
-    _Library(
-        'google-api-python-client-1.1.zip',
-        relative_path='google-api-python-client-1.1'),
     _Library('appengine-mapreduce-0.8.2.zip',
              relative_path='appengine-mapreduce-0.8.2/python/src'),
+    _Library('babel-0.9.6.zip'),
+    _Library('decorator-3.4.0.zip', relative_path='src'),
+    _Library('gaepytz-2011h.zip'),
+    _Library('Graphy-1.0.0.zip', relative_path='Graphy-1.0.0'),
+    _Library('appengine-mapreduce-0.8.2.zip',
+             relative_path='appengine-mapreduce-0.8.2/python/src'),
+    _Library('graphene-0.7.3.zip'),
+    _Library('graphql-core-0.4.12.1.zip'),
+    _Library('graphql-relay-0.3.3.zip'),
+    _Library('html5lib-0.95.zip'),
+    _Library('identity-toolkit-python-client-0.1.6.zip'),
     _Library('markdown-2.5.zip', relative_path='Markdown-2.5'),
     _Library('mrs-mapreduce-0.9.zip', relative_path='mrs-mapreduce-0.9'),
+    _Library('networkx-1.9.1.zip', relative_path='networkx-1.9.1'),
     _Library('python-gflags-2.0.zip', relative_path='python-gflags-2.0'),
     _Library('oauth-1.0.1.zip', relative_path='oauth'),
     _Library('pyparsing-1.5.7.zip'),
@@ -96,9 +133,18 @@ THIRD_PARTY_LIBS = [
     _Library('decorator-3.4.0.zip', relative_path='src'),
     _Library('reportlab-3.1.8.zip'),
     _Library('phonenumbers.zip'),
+    _Library('reportlab-3.1.8.zip'),
     _Library('simplejson-3.7.1.zip', relative_path='simplejson-3.7.1'),
+    _Library('six-1.10.0.zip'),
+
+    # rdflib and deps
+    _Library('isodate-0.5.5.zip', relative_path='src'),
+    _Library('rdflib-4.2.2-dev.zip', relative_path='rdflib'),
     _Library('python-http-client-2.1.1.zip', relative_path='python-http-client-2.1.1'),
-    _Library('sendgrid-python-3.1.10.zip', relative_path='sendgrid-python-3.1.10'),
+    _Library('sendgrid-python-3.6.3.zip', relative_path='sendgrid-python-3.6.3'),
+    _Library('firebase_files'),
+    _Library('beautifulsoup4-4.6.1.zip',relative_path='beautifulsoup4-4.6.1'),
+    # _Library('firebase_files.zip'),
 ]
 
 ALL_LIBS = GOOGLE_LIBS + THIRD_PARTY_LIBS
@@ -127,17 +173,27 @@ def _third_party_libs_from_env():
 
 def gcb_init_third_party():
     """Add all third party libraries to system path."""
+    # Enable protobuf
+    protobuf_dir = os.path.join(os.getcwd(), 'lib')
+    import google
+    google.__path__ = [os.path.join(protobuf_dir, 'google')] + google.__path__
+    sys.path.insert(0, protobuf_dir)
+
     for lib in ALL_LIBS + _third_party_libs_from_env():
         if not os.path.exists(lib.file_path):
             raise Exception('Library does not exist: %s' % lib.file_path)
         sys.path.insert(0, lib.full_path)
-    protobuf = _Library('google-protobuf.zip', relative_path='google')
-    import google
-    google.__path__.append(protobuf.full_path)
+
+    from requests_toolbelt.adapters import appengine
+    appengine.monkeypatch()
 
 
 def gcb_appstats_enabled():
     return 'True' == os.environ.get('GCB_APPSTATS_ENABLED')
+
+
+def gcb_test_mode():
+    return  os.environ.get('GCB_TEST_MODE', 'false').upper() == 'TRUE'
 
 
 def webapp_add_wsgi_middleware(app):
@@ -150,27 +206,47 @@ def webapp_add_wsgi_middleware(app):
 
 def _import_and_enable_modules(env_var, reraise=False):
     for module_name in os.environ.get(env_var, '').split():
-        option = 'enabled'
+        enabled = True
         if module_name.count('='):
             module_name, option = module_name.split('=', 1)
-        try:
-            operation = 'importing'
-            module = importlib.import_module(module_name)
-            operation = 'registering'
-            custom_module = module.register_module()
-            if option is 'enabled':
-                operation = 'enabling'
-                custom_module.enable()
-        except Exception, ex:  # pylint: disable=broad-except
-            logging.exception('Problem %s module "%s"', operation, module_name)
-            if reraise:
-                raise ex
+            enabled = (option.lower() == 'enabled')
+        _import_module_by_name(module_name, enabled, reraise=reraise)
+
+
+def _import_module_by_name(module_name, enabled, reraise=False):
+    try:
+        operation = 'importing'
+        module = importlib.import_module(module_name)
+        operation = 'registering'
+        custom_module = module.register_module()
+        if enabled:
+            operation = 'enabling'
+            custom_module.enable()
+    except Exception, ex:  # pylint: disable=broad-except
+        logging.exception('Problem %s module "%s"', operation, module_name)
+        if reraise:
+            raise ex
+
+
+def _import_and_enable_modules_by_manifest():
+    modules = manifests.ModulesRepo(BUNDLE_ROOT)
+    for module_name, manifest in sorted(modules.module_to_manifest.iteritems()):
+        registration = manifest.get_registration()
+        if registration.main_module:
+            enabled = (
+                registration.enabled or
+                (registration.enabled_for_tests and gcb_test_mode()))
+            _import_module_by_name(registration.main_module, enabled)
 
 
 def import_and_enable_modules():
-    _import_and_enable_modules('GCB_REGISTERED_MODULES')
+    global MODULE_REGISTRATION_IN_PROGRESS  # pylint: disable=global-statement
+    MODULE_REGISTRATION_IN_PROGRESS = True
+    _import_and_enable_modules('GCB_PRELOADED_MODULES')
     _import_and_enable_modules('GCB_REGISTERED_MODULES_CUSTOM')
     _import_and_enable_modules('GCB_THIRD_PARTY_MODULES')
+    _import_and_enable_modules_by_manifest()
+    MODULE_REGISTRATION_IN_PROGRESS = False
 
 
 def time_delta_to_millis(delta):
@@ -227,6 +303,8 @@ def log_appstats_event(label, data=None):
 gcb_init_third_party()
 
 def gae_mini_profiler_should_profile_production():
+    if users.is_current_user_admin():
+        return True
     user = users.get_current_user()
     if user and user.email().endswith('@google.com'):
         return True

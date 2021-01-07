@@ -1,19 +1,3 @@
-/**
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 var ARROW_DOWN_CLASS = 'md-keyboard-arrow-down';
 var ARROW_UP_CLASS = 'md-keyboard-arrow-up';
 var HIGHLIGHTED_CARD_CLASS = 'highlighted';
@@ -35,7 +19,7 @@ SkillPanel.prototype = {
       type: 'open',
       isOpened: isOpened
     };
-    gcbAudit(gcbCanPostEvents, data, 'skill-panel', true)
+    gcbAudit(gcbCanRecordStudentEvents, data, 'skill-panel', true)
   },
 
   emitSkillHoverEvent: function(skillId) {
@@ -43,7 +27,7 @@ SkillPanel.prototype = {
       type: 'skill-hover',
       skillId: skillId
     };
-    gcbAudit(gcbCanPostEvents, data, 'skill-panel', true)
+    gcbAudit(gcbCanRecordStudentEvents, data, 'skill-panel', true)
   },
 
   bindOpenButton: function() {
@@ -128,7 +112,9 @@ SkillPanel.prototype = {
       content: function() {
         var description = $(this).data('skillDescription').trim();
         if (description) {
-          return ('<b>' + $(this).text().trim() + '</b>: ' + description);
+          var boldElement = $('<b>').text($(this).text().trim());
+          var textElement = document.createTextNode(': ' + description);
+          return $('<span>').append(boldElement).append(textElement);
         } else {
           return null;
         }
@@ -144,8 +130,10 @@ SkillPanel.prototype = {
       content: function() {
         var content = $(this).find('.content').text().trim();
         if (content) {
-          return (
-              '<b>' + $(this).find('.name').text().trim() + '</b>: ' + content);
+          var name = $(this).find('.name').text().trim();
+          var boldElement = $('<b>').text(name);
+          var textElement = document.createTextNode(': ' + content);
+          return $('<span>').append(boldElement).append(textElement);
         } else {
           return null;
         }

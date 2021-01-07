@@ -19,11 +19,11 @@ __author__ = 'Mike Gainer (mgainer@google.com)'
 import re
 
 from common import crypto
+from common import users
 from common.utils import Namespace
-from controllers import utils
-from models import config
 from models import courses
 from models import models
+from modules.analytics import analytics
 from tests.functional import actions
 
 COURSE_NAME = 'percent_completion'
@@ -45,42 +45,47 @@ class ProgressPercent(actions.TestBase):
 
         self.unit = self.course.add_unit()
         self.unit.title = 'No Lessons'
-        self.unit.now_available = True
+        self.unit.availability = courses.AVAILABILITY_AVAILABLE
 
         self.lesson_one = self.course.add_lesson(self.unit)
         self.lesson_one.title = 'Lesson One'
         self.lesson_one.objectives = 'body of lesson'
-        self.lesson_one.now_available = True
+        self.lesson_one.availability = courses.AVAILABILITY_AVAILABLE
 
         self.lesson_two = self.course.add_lesson(self.unit)
         self.lesson_two.title = 'Lesson Two'
         self.lesson_two.objectives = 'body of lesson'
-        self.lesson_two.now_available = True
+        self.lesson_two.availability = courses.AVAILABILITY_AVAILABLE
 
         self.lesson_three = self.course.add_lesson(self.unit)
         self.lesson_three.title = 'Lesson Three'
         self.lesson_three.objectives = 'body of lesson'
-        self.lesson_three.now_available = True
+        self.lesson_three.availability = courses.AVAILABILITY_AVAILABLE
 
         self.assessment_one = self.course.add_assessment()
         self.assessment_one.title = 'Assessment One'
         self.assessment_one.html_content = 'assessment one content'
-        self.assessment_one.now_available = True
+        self.assessment_one.availability = courses.AVAILABILITY_AVAILABLE
 
         self.assessment_two = self.course.add_assessment()
         self.assessment_two.title = 'Assessment Two'
         self.assessment_two.html_content = 'assessment two content'
-        self.assessment_two.now_available = True
+        self.assessment_two.availability = courses.AVAILABILITY_AVAILABLE
 
         self.course.save()
         actions.login(STUDENT_EMAIL)
         actions.register(self, STUDENT_EMAIL, COURSE_NAME)
-        config.Registry.test_overrides[
-            utils.CAN_PERSIST_ACTIVITY_EVENTS.name] = True
+        self.overridden_environment = actions.OverriddenEnvironment(
+            {'course': {analytics.CAN_RECORD_STUDENT_EVENTS: 'true'}})
+        self.overridden_environment.__enter__()
 
         self.tracker = self.course.get_progress_tracker()
         with Namespace(NAMESPACE):
-            self.student = models.Student.get_by_email(STUDENT_EMAIL)
+            self.student = models.Student.get_by_user(users.get_current_user())
+
+    def tearDown(self):
+        self.overridden_environment.__exit__()
+        super(ProgressPercent, self).tearDown()
 
     def _get_unit_page(self, unit):
         return self.get(BASE_URL + '/unit?unit=' + str(unit.unit_id))
@@ -110,18 +115,21 @@ class ProgressPercent(actions.TestBase):
 
         # Progress is counted when navigating _on to_ lesson.
         response = self._get_unit_page(self.unit)
+        self.tracker._progress_by_user_id.clear()
         with Namespace(NAMESPACE):
             self.assertEquals(0.333, self.tracker.get_unit_percent_complete(
                 self.student)[self.unit.unit_id])
 
         # Navigate to next lesson.  Verify rounding to 3 decimal places.
         response = self._click_next_button(response)
+        self.tracker._progress_by_user_id.clear()
         with Namespace(NAMESPACE):
             self.assertEquals(0.667, self.tracker.get_unit_percent_complete(
                 self.student)[self.unit.unit_id])
 
         # Navigate to next lesson.
         response = self._click_next_button(response)
+        self.tracker._progress_by_user_id.clear()
         with Namespace(NAMESPACE):
             self.assertEquals(1.000, self.tracker.get_unit_percent_complete(
                 self.student)[self.unit.unit_id])
@@ -132,36 +140,42 @@ class ProgressPercent(actions.TestBase):
         self.course.save()
 
         # Zero progress when no unit actions taken.
+        self.tracker._progress_by_user_id.clear()
         with Namespace(NAMESPACE):
             self.assertEquals(0.0, self.tracker.get_unit_percent_complete(
                 self.student)[self.unit.unit_id])
 
         # Zero progress when navigate to pre-assessment
         response = self._get_unit_page(self.unit)
+        self.tracker._progress_by_user_id.clear()
         with Namespace(NAMESPACE):
             self.assertEquals(0.000, self.tracker.get_unit_percent_complete(
                 self.student)[self.unit.unit_id])
 
         # Progress is counted when navigating _on to_ lesson.
         response = self._click_next_button(response)
+        self.tracker._progress_by_user_id.clear()
         with Namespace(NAMESPACE):
             self.assertEquals(0.333, self.tracker.get_unit_percent_complete(
                 self.student)[self.unit.unit_id])
 
         # Navigate to next lesson.  Verify rounding to 3 decimal places.
         response = self._click_next_button(response)
+        self.tracker._progress_by_user_id.clear()
         with Namespace(NAMESPACE):
             self.assertEquals(0.667, self.tracker.get_unit_percent_complete(
                 self.student)[self.unit.unit_id])
 
         # Navigate to next lesson.
         response = self._click_next_button(response)
+        self.tracker._progress_by_user_id.clear()
         with Namespace(NAMESPACE):
             self.assertEquals(1.000, self.tracker.get_unit_percent_complete(
                 self.student)[self.unit.unit_id])
 
         # Navigate to post-assessment does not change completion
         response = self._click_next_button(response)
+        self.tracker._progress_by_user_id.clear()
         with Namespace(NAMESPACE):
             self.assertEquals(1.000, self.tracker.get_unit_percent_complete(
                 self.student)[self.unit.unit_id])
@@ -176,21 +190,24 @@ class ProgressPercent(actions.TestBase):
 
         # Reload student; assessment scores are cached in student.
         with Namespace(NAMESPACE):
-            self.student = models.Student.get_by_email(STUDENT_EMAIL)
+            self.student = models.Student.get_by_user(users.get_current_user())
 
         # Zero progress because posting the assessment did not score 100%.
+        self.tracker._progress_by_user_id.clear()
         with Namespace(NAMESPACE):
             self.assertEquals(0.000, self.tracker.get_unit_percent_complete(
                 self.student)[self.unit.unit_id])
 
         # Still zero progress when take redirect to assessment confirmation.
         response = response.follow()
+        self.tracker._progress_by_user_id.clear()
         with Namespace(NAMESPACE):
             self.assertEquals(0.000, self.tracker.get_unit_percent_complete(
                 self.student)[self.unit.unit_id])
 
         # But have 33% progress when following the link to the 1st lesson
         response = self._click_next_button(response)
+        self.tracker._progress_by_user_id.clear()
         with Namespace(NAMESPACE):
             self.assertEquals(0.333, self.tracker.get_unit_percent_complete(
                 self.student)[self.unit.unit_id])
@@ -205,7 +222,7 @@ class ProgressPercent(actions.TestBase):
 
         # Reload student; assessment scores are cached in student.
         with Namespace(NAMESPACE):
-            self.student = models.Student.get_by_email(STUDENT_EMAIL)
+            self.student = models.Student.get_by_user(users.get_current_user())
 
         # 100% progress because pre-assessment was 100% correct.
         with Namespace(NAMESPACE):

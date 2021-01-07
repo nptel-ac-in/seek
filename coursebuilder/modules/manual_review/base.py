@@ -25,6 +25,7 @@ class ManualReviewBase(object):
     NAME = 'Manual Review'
     DASHBOARD_NAV = 'manual_review'
     DASHBOARD_TAB = 'manual_review'
+    DASHBOARD_CATEGORY = 'analytics'
     COURSE_STAFF_VIEW_ACTION = 'manual_review_course_staff'
     ASSESSMENT_VIEW_ACTION = 'manual_review_assessment'
     DELETE_ACTION = 'delete_manual_review'

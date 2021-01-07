@@ -89,7 +89,8 @@ class _AbstractDbTableRestDataSource(base_types._AbstractRestDataSource):
                 if not rows:
                     page_number = sought_page_number - 1
                     log.warning('Fewer pages available than requested.  '
-                                'Stopping at last page %d' % page_number)
+                                'Stopping at last page, which is %d' %
+                                max(page_number, 0))
                     query = cls._build_query(source_context, schema,
                                              page_number, log)
                     rows = cls._fetch_page(source_context, query,
@@ -109,7 +110,7 @@ class _AbstractDbTableRestDataSource(base_types._AbstractRestDataSource):
         else:
             entities = [row.for_export(transform_fn) for row in rows]
         dicts = [transforms.entity_to_dict(entity) for entity in entities]
-        return [transforms.dict_to_json(d, schema) for d in dicts]
+        return [transforms.dict_to_json(d) for d in dicts]
 
     @classmethod
     def _build_query(cls, source_context, schema, page_number, log):
@@ -142,9 +143,12 @@ class _AbstractDbTableRestDataSource(base_types._AbstractRestDataSource):
                     'calls for field "%s" ' % name +
                     'which is not in the schema for '
                     'type "%s"' % cls.get_entity_class().__name__)
-            converted_value = transforms.json_to_dict(
-                {name: value},
-                {'properties': {name: schema[name]}})[name]
+            if value == '':
+                converted_value = None
+            else:
+                converted_value = transforms.json_to_dict(
+                    {name: value},
+                    {'properties': {name: schema[name]}})[name]
             query.filter('%s %s' % (name, op), converted_value)
 
     @classmethod
@@ -168,6 +172,9 @@ class _AbstractDbTableRestDataSource(base_types._AbstractRestDataSource):
         limit = None
         if (str(page_number + 1)) not in source_context.cursors:
             limit = source_context.chunk_size
+            if not limit:
+                limit = (base_types._AbstractRestDataSource.
+                         RECOMMENDED_MAX_DATA_ITEMS)
             log.info('fetch page %d using limit %d' % (page_number, limit))
         results = query.fetch(limit=limit, read_policy=db.EVENTUAL_CONSISTENCY)
         if (str(page_number + 1)) not in source_context.cursors:
@@ -242,6 +249,10 @@ class _DbTableContext(base_types._AbstractContextManager):
               orderings: List of strings of form <field>.{asc|desc}
               cursors: List of opaque AppEngine DB cursor strings, one per page
               pii_secret: Session-specific encryption key for PII data.
+              send_uncensored_pii_data: Whether we want to send un-censored
+                PII data (if any) when pumping this object.  Unless you have
+                a separate, concrete, intentional UI gesture or command-line
+                flag from the user, this should never be set.
             """
             self.version = version
             self.chunk_size = chunk_size
@@ -252,14 +263,14 @@ class _DbTableContext(base_types._AbstractContextManager):
 
             # This field is present, but normally never set.  In one-off
             # requests from the Data Pump, where the administrator has checked
-            # a checkbox, un-denylisted data is available.  Note that setting
+            # a checkbox, un-blacklisted data is available.  Note that setting
             # this flag will also almost certainly change the reported schema.
-            self.send_uncensored_pii_data = False
+            self.send_uncensored_pii_data = send_uncensored_pii_data
 
     @classmethod
     def build_from_web_request(cls, params, default_chunk_size):
         chunk_size = params.get('chunk_size')
-        filters = params.get_all('filter')
+        filters = params.get_all('filters')
         orderings = params.get_all('ordering')
         if not chunk_size and not filters and not orderings:
             return None

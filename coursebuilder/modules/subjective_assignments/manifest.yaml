@@ -1,0 +1,16 @@
+registration:
+  main_module: modules.subjective_assignments.assignment
+
+files:
+  - modules/subjective_assignments/__init__.py
+  - modules/subjective_assignments/assignment.py
+  - modules/subjective_assignments/essay.html
+  - modules/subjective_assignments/manifest.yaml
+  - modules/subjective_assignments/question.py
+  - modules/subjective_assignments/snapshot.html
+  - modules/subjective_assignments/lib/ckeditor.zip
+  - modules/subjective_assignments/course_staff.py
+  - modules/subjective_assignments/file_picker.html
+  - modules/subjective_assignments/drive_service.py
+  - modules/subjective_assignments/templates/course_staff/evaluations.html
+  - modules/subjective_assignments/templates/course_staff/evaluate.html

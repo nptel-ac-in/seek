@@ -163,7 +163,7 @@ class OfflineAssignmentRESTHandler(BaseRESTHandler,
         'inputex-checkbox', 'inputex-list', 'inputex-number']
 
     @classmethod
-    def get_schema_annotations_dict(cls, course):
+    def get_schema(cls, course):
         unit_list = []
         for unit in course.get_units():
             if unit.type == 'U':
@@ -172,8 +172,9 @@ class OfflineAssignmentRESTHandler(BaseRESTHandler,
                      cgi.escape('Unit %s - %s' % (unit.index, unit.title))))
         extra_select_options = dict()
         extra_select_options['parent_unit'] = unit_list
-        return  cls.REG.get_schema_dict(
+        cls.REG.get_schema_dict(
             extra_select_options=extra_select_options)
+        return cls.REG
 
 
     def unit_to_dict(self, course, unit):

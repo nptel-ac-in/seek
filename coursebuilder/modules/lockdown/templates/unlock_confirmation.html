@@ -1,0 +1,12 @@
+<p>
+{{ unit.title }}
+{% if is_super_admin %}
+	{% if unlock_status %}
+		{{ gettext('- Has been unlocked.') }}
+	{% else %}
+		{{ gettext('- Could not unlock. May be unit is public. Try after making it private') }}
+	{% endif %}
+{% else %}
+	{{ gettext('Only super admin can unlock.') }}
+{% endif %}
+</p>

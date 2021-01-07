@@ -24,21 +24,27 @@ import re
 from xml.etree import cElementTree
 
 import html5lib
-import lxml.html
 import safe_dom
 import webapp2
 
 import appengine_config
+
+from common import messages
 from common import schema_fields
 from models import config
 
+_LXML_AVAILABLE = False
+try:
+    import lxml.html
+    _LXML_AVAILABLE = True
+except ImportError:
+    if appengine_config.PRODUCTION_MODE:
+        raise
+
 
 CAN_USE_DYNAMIC_TAGS = config.ConfigProperty(
-    'gcb_can_use_dynamic_tags', bool, safe_dom.Text(
-        'Whether lesson content can make use of custom HTML tags such as '
-        '<gcb-youtube videoid="...">. If this is enabled some legacy content '
-        'may be rendered differently. '),
-    default_value=True)
+    'gcb_can_use_dynamic_tags', bool, messages.SITE_SETTINGS_DYNAMIC_TAGS,
+    default_value=True, label='Dynamic Tags')
 
 
 DUPLICATE_INSTANCE_ID_MESSAGE = (
@@ -165,7 +171,7 @@ SPB+uxAAAAAElFTkSuQmCC
             schema_fields.SchemaField(
                 'unused_id', '', 'string', optional=True,
                 editable=False, extra_schema_dict_values={
-                    'value': message,
+                    'value': str(message),
                     'visu': {
                         'visuType': 'funcName',
                         'funcName': 'disableSave'}}))
@@ -250,14 +256,42 @@ class ResourcesHandler(webapp2.RequestHandler):
 
         try:
             self.response.status = 200
-            self.response.headers['Content-Type'] = mimetype
             self.response.cache_control.no_cache = None
             self.response.cache_control.public = 'public'
             self.response.cache_control.max_age = 600
             stream = open(resource_file)
-            self.response.write(self.transform_resource(stream.read()))
+            content = self.transform_resource(stream.read())
+            self.response.headers['Content-Type'] = mimetype
+            self.response.write(content)
         except IOError:
             self.error(404)
+
+
+class DeprecatedResourcesHandler(ResourcesHandler):
+    """Points "resources" urls at the new "_static" directory."""
+    URL_PATTERN = re.compile(
+        r'^/modules/(?P<module_name>[^/]*)/resources/(?P<asset>.*)$')
+    PATH_TEMPLATE = '/modules/{module_name}/_static/{prefix}{asset}'
+    WARNING_TEMPLATE = ('This URL is deprecated: %s.  Please use the new URL '
+        'instead: %s')
+    PREFIX = ''
+
+    def rebase_path(self, path):
+        match = self.URL_PATTERN.match(path)
+        assert match
+        new_path = self.PATH_TEMPLATE.format(
+            module_name=match.group('module_name'),
+            asset=match.group('asset'),
+            prefix=self.PREFIX)
+        logging.warning(self.WARNING_TEMPLATE, path, new_path)
+        return new_path
+
+
+def make_deprecated_resources_handler(prefix):
+    class CustomDeprecatedResourcesHandler(DeprecatedResourcesHandler):
+        PREFIX = prefix
+
+    return CustomDeprecatedResourcesHandler
 
 
 class JQueryHandler(ResourcesHandler):
@@ -276,7 +310,7 @@ class IifeHandler(ResourcesHandler):
         return '(function() {%s})();' % resource_str
 
 
-class EditorDenylists(object):
+class EditorBlacklists(object):
     """Lists tags which should not be supported by various editors."""
 
     COURSE_SCOPE = set()
@@ -318,17 +352,33 @@ def get_tag_bindings():
     return dict(Registry.get_all_tags().items())
 
 
-def html_string_to_element_tree(html_string):
+def html_string_to_element_tree(html_string, is_fragment=True):
     parser = html5lib.HTMLParser(
         tree=html5lib.treebuilders.getTreeBuilder('etree', cElementTree),
         namespaceHTMLElements=False)
-    return parser.parseFragment('<div>%s</div>' % html_string)[0]
+    if is_fragment:
+        # This returns the <div> element we wrap around the content.
+        return parser.parseFragment('<div>%s</div>' % html_string)[0]
+    else:
+        # This returns the <html> element.
+        return parser.parse(html_string)
 
 
-def html_to_safe_dom(html_string, handler, render_custom_tags=True):
+def html_to_safe_dom(html_string, handler, render_custom_tags=True,
+                     tags_filter=None):
     """Render HTML text as a tree of safe_dom elements."""
 
     tag_bindings = get_tag_bindings()
+    if tags_filter:
+
+        class SuppressedTag(BaseTag):
+
+            def render(self, node, context):
+                return cElementTree.XML('<div style="display:none;"></div>')
+
+        for name, cls in tag_bindings.iteritems():
+            if not tags_filter(name, cls):
+                tag_bindings[name] = SuppressedTag
 
     node_list = safe_dom.NodeList()
     if not html_string:
@@ -432,7 +482,7 @@ def html_to_safe_dom(html_string, handler, render_custom_tags=True):
     return node_list
 
 
-def get_components_from_html(html):
+def get_components_from_html(html, use_lxml=_LXML_AVAILABLE):
     """Returns a list of dicts representing the components in a lesson.
 
     Args:
@@ -445,6 +495,30 @@ def get_components_from_html(html):
         - instanceid: the instance id of the component
         - cpt_name: the name of the component tag (e.g. gcb-googlegroup)
     """
+    if use_lxml and _LXML_AVAILABLE:
+        return get_components_using_lxml(html)
+    else:
+        return get_components_using_html5lib(html)
+
+
+def get_components_using_html5lib(html):
+    """Find lesson components using the pure python html5lib library."""
+
+    parser = html5lib.HTMLParser(
+        tree=html5lib.treebuilders.getTreeBuilder('etree', cElementTree),
+        namespaceHTMLElements=False)
+    content = parser.parseFragment('<div>%s</div>' % html)[0]
+    components = []
+    for component in content.findall('.//*[@instanceid]'):
+        component_dict = {'cpt_name': component.tag}
+        component_dict.update(component.attrib)
+        components.append(component_dict)
+    return components
+
+
+def get_components_using_lxml(html):
+    """Find lesson components using the fast C-binding lxml library."""
+
     content = lxml.html.fromstring('<div>%s</div>' % html)
     components = []
     for component in content.xpath('.//*[@instanceid]'):

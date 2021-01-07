@@ -1,0 +1,155 @@
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/polymer/polymer-element.html">
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-spinner/paper-spinner-lite.html">
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/app-route/app-route.html">
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/app-route/app-location.html">
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/iron-pages/iron-pages.html">
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-toast/paper-toast.html">
+<link rel="import" href="../../assets/css/nptel-pwa-css.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/app-layout/app-scroll-effects/app-scroll-effects.html">
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/iron-scroll-target-behavior/iron-scroll-target-behavior.html">
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/app-layout/app-drawer/app-drawer.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/app-layout/app-header-layout/app-header-layout.html">
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/app-layout/app-drawer-layout/app-drawer-layout.html">
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/app-layout/app-header/app-header.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/iron-icons/iron-icons.html"  >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-icon-button/paper-icon-button.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-button/paper-button.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/iron-flex-layout/iron-flex-layout.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-item/paper-icon-item.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/app-layout/app-toolbar/app-toolbar.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/iron-list/iron-list.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-item/paper-item.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-drawer/paper-drawer-title.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-drawer/paper-drawer-subheader.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-drawer/paper-drawer-item.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-drawer/paper-drawer-icon-item.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-drawer/paper-drawer-divider.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/google-youtube/google-youtube.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-listbox/paper-listbox.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-input/paper-input.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-dropdown-menu/paper-dropdown-menu.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-card/paper-card.html" async >
+<link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/paper-search/paper-search-panel.html" async >
+<link rel="import" href="../drawer-page/drawer-page.html" async>
+<link rel="import" href="../header-page/header-page.html" async>
+<link rel="import" href="../course-page/course-page.html" async >
+<link rel="import" href="../course-outline/course-outline.html" async >
+<link rel="import" href="../lesson-page/lesson-page.html" async >
+<link rel="import" href="../all-courses/all-courses.html" async >
+<link rel="import" href="../my-courses/my-courses.html" async >
+<link rel="import" href="../profile-page/profile-page.html" async >
+<link rel="import" href="../progress-page/progress-page.html" async >
+<link rel="import" href="../extra-page/extra-page.html" async >
+<link rel="import" href="../faq-page/faq-page.html" async >
+<link rel="import" href="../search-page/search-page.html" async >
+<link rel="import" href="../category-course/category-course.html" async >
+<link rel="import" href="../announcement-page/announcement-page.html" async >
+
+
+<dom-module id="nptel-pwa-app">
+  <template>
+    <style>
+    app-drawer-layout:-webkit-full-screen-ancestor app-header,
+    app-drawer-layout:-webkit-full-screen-ancestor app-drawer {
+      z-index: -1 !important;
+    }
+    </style>
+    <style include="nptel-pwa-css"></style>
+    <app-location route="{{route}}" use-hash-as-path></app-location>
+    <app-route
+        route="{{route}}"
+        pattern="/:page"
+        data="{{routeData}}"
+        tail="{{subroute}}"
+        >
+    </app-route>
+    <app-drawer-layout>
+      <app-drawer id="drawer" swipe-open="" slot="drawer">
+        <div style="height:100%;overflow:auto;">
+          <drawer-page id="drawer-page-box" route={{subroute}} enrolled={{userEnrolled}} login="{{loggedIn}}"></drawer-page>
+        </div>
+      </app-drawer>
+      <header-page title="{{headerTitle}}">
+      </header-page>
+      <div class="server-error"></div>
+    <iron-pages id="pages"
+      selected="[[routeData.page]]"
+      selected-attribute=[[selected]]
+      attr-for-selected="name"
+      fallback-selection="allcourses">
+      <course-page name="course" route={{subroute}} header={{headerTitle}} enrolled={{userEnrolled}}>
+      </course-page>
+      <course-outline name="courseoutline" route={{subroute}} header={{headerTitle}} enrolled={{userEnrolled}}>
+      </course-outline>
+      <lesson-page name="lesson" route={{subroute}} header={{headerTitle}} enrolled={{userEnrolled}}>
+      </lesson-page>
+      <progress-page name="progress" route={{subroute}} header={{headerTitle}} enrolled={{userEnrolled}}></progress-page>
+      <all-courses name="allcourses" route={{subroute}} header={{headerTitle}} enrolled={{userEnrolled}}>
+      </all-courses>
+      <category-course name="category" route={{subroute}} header={{headerTitle}}></category-course>
+      <announcement-page name="announcement" route={{subroute}} header={{headerTitle}} enrolled={{userEnrolled}}></announcement-page>
+      <my-courses name="mycourses" route={{subroute}} header={{headerTitle}} enrolled={{userEnrolled}} login={{loggedIn}}>
+      </my-courses>
+      <profile-page name="profile" route={{subroute}} header={{headerTitle}} enrolled={{userEnrolled}} login={{loggedIn}}></profile-page>
+      <extra-page name="extra" route={{subroute}} header={{headerTitle}} enrolled={{userEnrolled}}></extra-page>
+      <faq-page name="faq" route={{subroute}} header={{headerTitle}} enrolled={{userEnrolled}}></faq-page>
+      <search-page name="search" route={{subroute}} header={{headerTitle}} enrolled={{userEnrolled}}></search-page>
+    </iron-pages>
+    <paper-toast id="toast" text="Ohh! :( Seems you're offline! you can still access some content" duration="0" alwaysOnTop></paper-toast>
+    <paper-toast id="toast1" text="We're back On! B) "></paper-toast>
+    </app-drawer-layout>
+  </template>
+  <script src="../../assets/js/main.js"></script>
+  <script>
+    /**
+     * @customElement
+     * @polymer
+     */
+    class NptelPwaApp extends Polymer.Element {
+      static get is() { return 'nptel-pwa-app'; }
+      static get properties() {
+        return {
+          subroute : Object,
+          route : {
+            type: Object
+          },
+          routeData : Object,
+          online : {
+            type : Boolean,
+            observer : 'handleToast'
+          },
+          loggedIn :
+          {
+            type : Boolean,
+            notify : true,
+            observer : 'statusChange',
+          }
+        };
+      }
+      handleToast(){
+        if (this.online)
+        {
+          this.$.toast.close();
+          this.$.toast1.open();
+        }
+        else
+          this.$.toast.open();
+      }
+      statusChange(){
+        localStorage.setItem('login',this.loggedIn);
+        if (this.loggedIn) {
+          registerNewPushToken(function() {
+            document.getElementsByTagName("nptel-pwa-app")[0].$['drawer-page-box'].$['login-refresh'].click();
+          });
+        }
+      }
+      ready()
+      {
+        super.ready();
+        if (localStorage.getItem('login'))
+          this.loggedIn = (localStorage.getItem('login') === 'true');
+      }
+    }
+    window.customElements.define(NptelPwaApp.is, NptelPwaApp);
+  </script>
+</dom-module>

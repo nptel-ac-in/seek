@@ -1,0 +1,143 @@
+
+<dom-module id="course-page">
+  <template>
+    <style include="nptel-pwa-css"></style>
+      <app-route
+          route="{{route}}"
+          pattern="/:id"
+          data="{{courseID}}"
+          tail="{{courseData}}"
+          >
+      </app-route>
+        <paper-spinner-lite class="spinner" active alt="Loading content.."></paper-spinner-lite>
+        <dom-if>
+          <template>
+          <a href="[[registerButtonUrl]]"><paper-button class="footer">[[registerButtonText]]</paper-button></a>
+          </template>
+        </dom-if>
+        <google-youtube video-id="[[videoId]]">
+        </google-youtube>
+        <div class="matCard">
+          <div id="courseIntro">
+          </div>
+          <div id="instructorDetails">
+          </div>
+          <div id="courseLayout">
+          </div>
+        </div>
+    </template>
+    <script>
+      /**
+       * @customElement
+       * @polymer
+       */
+      class CoursePage extends Polymer.Element {
+        static get is() { return 'course-page'; }
+        static get properties() {
+          return {
+            videoId :{
+              type : String
+            },
+            header :{
+              type : String,
+              value:"Course Title",
+              notify : true
+            },
+            route : {
+              observer : '_isCourseSelected'
+            },
+            registerButtonText : {
+              type: String,
+              value: 'Register'
+            },
+            registerButtonUrl: {
+              type : String,
+              value : ''
+            },
+            enrolled : {
+              type : String,
+              value : false,
+              notify : true,
+            }
+          };
+        }
+        processResponse(payload){
+          if (payload)
+          {
+            var youtube = Polymer.dom(this.root).querySelector('google-youtube');
+            if (payload.video_id)
+            {
+              youtube.style.display = "block"
+              this.videoId = payload.video_id;
+            }
+            else
+              youtube.style.display = "none";
+
+            if (payload.course_info)
+            {
+              this.header = payload.course_info.course.title;
+              var courseIntro =Polymer.dom(this.root).querySelector("#courseIntro");
+              var instDetails = Polymer.dom(this.root).querySelector("#instructorDetails");
+              var courseLayout = Polymer.dom(this.root).querySelector("#courseLayout");
+
+              courseIntro.innerHTML = payload.course_info.course.blurb ? payload.course_info.course.blurb : "";
+              instDetails.innerHTML = payload.course_info.course.instructor_details ? payload.course_info.course.instructor_details : "";
+              courseLayout.innerHTML = payload.course_info.course.extra_info ? payload.course_info.course.extra_info : "";
+              if (courseLayout.innerHTML !="" || instDetails.innerHTML !="" || courseLayout.innerHTML !="")
+                Polymer.dom(this.root).querySelector(".matCard").style.display = "block";
+            }
+            if (Polymer.dom(this.root).querySelector(".sticky-container"))
+            Polymer.dom(this.root).querySelector(".sticky-container").hidden = true;
+
+            var showbutton = Polymer.dom(this.root).querySelector('dom-if');
+            if (payload.can_register || payload.is_enrolled)
+            {
+              showbutton.if = true;
+              if(payload.is_enrolled)
+              {
+                this.enrolled = true;
+                this.registerButtonText = "Go To Course";
+                this.registerButtonUrl = "#/courseoutline/"+this.courseID.id;
+              }
+              else {
+                this.enrolled = false;
+                this.registerButtonText = "Join";
+                this.registerButtonUrl = "?namespace=" + this.courseID.id + "#/extra/join";
+              }
+            }
+            else {
+              showbutton.if = false;
+              this.enrolled = false;
+            }
+            forum_url = payload.course_info.course.forum_url;// sets forum_url in main.js
+          }
+        }
+        _isCourseSelected()
+        {
+
+          if (Polymer.dom(this.parentElement).node.selected == 'course')
+          {
+            if(this.courseID && this.courseID.id)
+            {
+              showSpinnerHideError(this);
+              var main=this; // to access "this" context in the anonymous function
+              fetch('/'+this.courseID.id+'/m/course',{
+                method: 'GET',
+                credentials: 'include'
+              })
+              .then( obj => {
+                validateResponse(main,obj);
+              })
+              .catch( obj =>{
+                logError(obj);
+              });
+            }
+            else {
+              showErrorHideSpinner(this,"Course ID is missing in the url");
+            }
+          }
+        }
+      }
+      window.customElements.define(CoursePage.is, CoursePage);
+    </script>
+</dom-module>

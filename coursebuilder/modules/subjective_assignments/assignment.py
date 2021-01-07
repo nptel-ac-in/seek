@@ -101,6 +101,20 @@ class SubjectiveAssignmentHandler(BaseHandler,
         return (transforms.loads(submitted_contents)
                 if submitted_contents else None)
 
+    @classmethod
+    def get_submission(cls, unit, student):
+        if student.is_transient:
+            return None
+        return student_work.Submission.get(unit.unit_id, student.get_key())
+
+    @classmethod
+    def get_contents_from_submission(cls, submission):
+        if submission and submission.contents:
+            raw = transforms.loads(submission.contents)
+            if raw:
+                return transforms.loads(raw)
+
+
     def has_deadline_passed(self, unit):
         submission_due_date = unit.workflow.get_submission_due_date()
         if submission_due_date:
@@ -124,13 +138,15 @@ class SubjectiveAssignmentHandler(BaseHandler,
             return
 
         content = self.get_content(course, unit)
-        blob_dict = content[self.BLOB]
+        blob_dict = content.get(self.BLOB, {})
         max_file_limit = blob_dict.get(self.OPT_MAX_FILE_LIMIT)
         if not max_file_limit:
             max_file_limit = 1
         readonly_view = False
         due_date_exceeded = False
-        assignment = {}
+        assignment = {
+            'success': None
+        }
 
         submission_due_date = unit.workflow.get_submission_due_date()
         if submission_due_date:
@@ -146,7 +162,14 @@ class SubjectiveAssignmentHandler(BaseHandler,
         assignment['due_date_exceeded'] = due_date_exceeded
         submit_only_once = unit.workflow.submit_only_once()
         self.template_value['submit_only_once'] = submit_only_once
-        submitted_contents = self.get_student_answer(unit, student)
+        submission = self.get_submission(unit, student)
+        submitted_contents = self.get_contents_from_submission(submission)
+        if submission:
+            assignment['updated_on'] = submission.updated_on.replace(
+                tzinfo=timezones.UTC).astimezone(timezones.IST).strftime(
+                HUMAN_READABLE_DATETIME_FORMAT)
+        else:
+            assignment['updated_on'] = None
 
         already_submitted = False
         if submitted_contents and submitted_contents['submitted']:
@@ -162,7 +185,7 @@ class SubjectiveAssignmentHandler(BaseHandler,
             if score is not None:
                 assignment['score'] = '%s' % (float(score))
         if len(content) > 0:
-            assignment['question'] = content['question']
+            assignment['question'] = content.get('question')
         if roles.Roles.is_course_admin(self.app_context):
             assignment['edit_action'] = self.get_edit_url(self.assignment_name)
         if not due_date_exceeded:
@@ -172,18 +195,19 @@ class SubjectiveAssignmentHandler(BaseHandler,
             assignment['save_draft_xsrf_token'] = self.create_xsrf_token(
                 'save_draft')
 
-        if self.ESSAY == content[self.OPT_QUESTION_TYPE]:
+        if self.ESSAY == content.get(self.OPT_QUESTION_TYPE):
             template_file = 'essay.html'
             if submitted_contents and 'essay' in submitted_contents.keys():
+                assignment['success'] = self.request.get('success')
                 assignment['previous_submission'] = submitted_contents['essay']
         else:
             template_file = 'snapshot.html'
             assignment['failed'] = self.request.get('failed')
-            assignment['success'] = self.request.get('success')
             if not assignment['failed'] and submitted_contents:
+                assignment['success'] = self.request.get('success')
                 orig_file_list = None
                 if 'student_file_list' in submitted_contents.keys():
-		    orig_file_list = submitted_contents['student_file_list']
+                    orig_file_list = submitted_contents['student_file_list']
                 elif 'student_file' in submitted_contents.keys():
                     # for backword compatibility
                     orig_file_list = [submitted_contents['student_file']]
@@ -193,7 +217,7 @@ class SubjectiveAssignmentHandler(BaseHandler,
                     assignment['orig_file_list_str'] = json.dumps(orig_file_list)
 
                 if 'copied_file' in submitted_contents.keys():
-		    copied_file = submitted_contents['copied_file']
+                    copied_file = submitted_contents['copied_file']
                     if isinstance(copied_file, dict):
                         assignment['copied_file'] = [copied_file]
                     else:
@@ -252,6 +276,7 @@ class SubjectiveAssignmentHandler(BaseHandler,
         self.submit_essay_answer(unit, student, submitted, essay)
         course.get_progress_tracker().put_custom_unit_in_progress(
             student, unit.unit_id)
+        transforms.send_json_response(self, 200, 'Saved.')
 
     @classmethod
     def create_student_submission_folder(cls, student, dir_id, errors):
@@ -310,7 +335,7 @@ class SubjectiveAssignmentHandler(BaseHandler,
             self.error(404)
             return
         content = self.get_content(course, unit)
-        if self.ESSAY == content[self.OPT_QUESTION_TYPE]:
+        if self.ESSAY == content.get(self.OPT_QUESTION_TYPE):
             essay = self.request.get('essay')
             self.submit_essay_answer(unit, student, True, essay)
         else:
@@ -326,7 +351,7 @@ class SubjectiveAssignmentHandler(BaseHandler,
                 return
 
             errors = []
-            blob_dict = content[self.BLOB]
+            blob_dict = content.get(self.BLOB, {})
             drive_folder_id = blob_dict[self.OPT_DRIVE_DIR_ID]
             max_file_limit = blob_dict.get(self.OPT_MAX_FILE_LIMIT)
             if not max_file_limit:

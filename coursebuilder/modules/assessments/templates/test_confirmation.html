@@ -1,0 +1,48 @@
+{% extends 'base_course.html' %}
+
+{% block gcb_page_info %}
+  if ('gcbSetPageInfo' in window) {
+    gcbSetPageInfo({
+      'page_type': 'test_confirmation',
+      'unit_id': '{{ unit_id }}',
+    });
+  }
+{% endblock %}
+
+{% block top_content %}
+{% endblock %}
+
+{% block main_content %}
+
+<div class="gcb-cols">
+  <div class="gcb-col-1">
+  </div>
+  <div class="gcb-col-7 gcb-aside gcb-button-box">
+
+    {% if error %}
+      {{ gettext('You have already submitted this assignment.')}}
+      <br/>
+      <br/>
+      <p>
+        <a class="gcb-button"
+           href="unit?unit={{ parent_unit_id }}&assessment={{ unit_id }}">
+          {# I18N: Shown after the student has submitted an assessment in a unit that contains assessments and where all unit contents are shown on a single HTML page.  This button allows the student to navigate back to the unit main page. #}
+          {{ gettext('Return to Assignment') }}
+        </a>
+      </p>
+      <br/>
+    {% else %}
+      {% include 'test_confirmation_content.html' %}
+    {% endif %}
+
+    <p>
+      <a class="gcb-button" href="course">
+        {# I18N: Shown after the student has submitted an assessment. This button allows the student to navigate back to the main course page. #}
+        {{ gettext('Back to Course page') }}
+      </a>
+    </p>
+
+  </div>
+</div>
+
+{% endblock %}

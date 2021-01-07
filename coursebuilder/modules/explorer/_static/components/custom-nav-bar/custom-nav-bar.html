@@ -1,0 +1,39 @@
+<dom-module id='custom-nav-bar'>
+  <template>
+    <style>
+      /*TODO (rthakker) shift this into nptel.css*/
+      #gcb-nav-x {
+        background-image: none;
+        background-color: #f6f6f6;
+        margin: 0px 0 8px -15px;
+      }
+    </style>
+    <div class="gcb-nav gcb-complex nptel-explorer-nav" id="gcb-nav-x">
+      <div style='margin-left: 10px' class="gcb-aux">
+        <ul class="clearfix">
+          <template is="dom-repeat" items={{navbar_links.left}}>
+            <li class='active'>
+              <a target='{{item.target}}' href='{{item.href}}'>{{item.title}}</a>
+            </li>
+          </template>
+          <template is="dom-repeat" items={{navbar_links.right}}>
+            <li class='active gcb-pull-right'>
+              <a target='{{item.target}}' href='{{item.href}}'>{{item.title}}</a>
+            </li>
+          </template>
+        </ul>
+      </div>
+    </div>
+  </template>
+
+  <script>
+    Polymer({
+      is: 'custom-nav-bar',
+      properties: {
+        navbar_links: {
+          type: Object,
+        },
+      }
+    })
+  </script>
+</dom-module>

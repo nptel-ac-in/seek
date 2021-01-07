@@ -29,6 +29,7 @@ import threading
 import time
 
 import entities
+import messages
 import transforms
 
 import appengine_config
@@ -57,7 +58,8 @@ class ConfigProperty(object):
     def __init__(
         self, name, value_type, doc_string,
         default_value=None, multiline=False, validator=None,
-        after_change=None):
+        after_change=None, label=None, deprecated=False,
+        show_in_site_settings=True):
         """Create a new global config property.
 
         These properties are persisted as ConfigPropertyEntity in the default
@@ -84,6 +86,11 @@ class ConfigProperty(object):
               (It is not called when the underlying ConfigPropertyEntity is
               directly modified).  This function takes two one parameters:
               the ConfigProperty instance, and the previous value.
+          label: A friendly display name.
+          deprecated: True/False.  When a property is logically removed,
+              it should be marked as deprecated.  This will leave the name
+              known to the system so that we do not issue spurious warnings
+              about unknown properties (once per minute, on property refresh)
         """
 
         if value_type not in ALLOWED_TYPES:
@@ -92,10 +99,13 @@ class ConfigProperty(object):
         self._validator = validator
         self._multiline = multiline
         self._name = name
+        self._label = label
         self._type = value_type
         self._doc_string = doc_string
         self._default_value = value_type(default_value)
         self._after_change = after_change
+        self._deprecated = deprecated
+        self._show_in_site_settings = show_in_site_settings
 
         errors = []
         if self._validator and self._default_value:
@@ -126,6 +136,10 @@ class ConfigProperty(object):
     @property
     def name(self):
         return self._name
+
+    @property
+    def label(self):
+        return self._label or self._name
 
     @property
     def value_type(self):
@@ -185,6 +199,14 @@ class ConfigProperty(object):
     def value(self):
         return self.get_value(db_overrides=Registry.get_overrides())
 
+    @property
+    def deprecated(self):
+        return self._deprecated
+
+    @property
+    def show_in_site_settings(self):
+        return self._show_in_site_settings and not self._deprecated
+
 
 class ValidateLength(object):
 
@@ -198,6 +220,81 @@ class ValidateLength(object):
                 'but the value "%s" is of length %d.' % (value, len(value)))
 
 
+class ValidateIntegerRange(object):
+
+    def __init__(self,
+                 lower_bound_inclusive=None,
+                 upper_bound_inclusive=None,
+                 lower_bound_exclusive=None,
+                 upper_bound_exclusive=None):
+        if (lower_bound_exclusive is not None and
+            lower_bound_inclusive is not None):
+            raise ValueError('Please specify only one lower bound.')
+        if (upper_bound_exclusive is not None and
+            upper_bound_inclusive is not None):
+            raise ValueError('Please specify only one upper bound.')
+        if (lower_bound_inclusive is None and
+            lower_bound_exclusive is None and
+            upper_bound_inclusive is None and
+            upper_bound_exclusive is None):
+            raise ValueError('Please specify at least one bound.')
+
+        # Convert to integers before checking ranges for sanity.
+        self._lower_bound_inclusive = None
+        self._lower_bound_exclusive = None
+        self._upper_bound_inclusive = None
+        self._upper_bound_exclusive = None
+        if lower_bound_inclusive != None:
+            self._lower_bound_inclusive = int(lower_bound_inclusive)
+        if lower_bound_exclusive != None:
+            self._lower_bound_exclusive = int(lower_bound_exclusive)
+        if upper_bound_inclusive != None:
+            self._upper_bound_inclusive = int(upper_bound_inclusive)
+        if upper_bound_exclusive != None:
+            self._upper_bound_exclusive = int(upper_bound_exclusive)
+
+        if (lower_bound_exclusive is not None and
+            upper_bound_exclusive is not None and
+            lower_bound_exclusive + 1 >= upper_bound_exclusive):
+            raise ValueError('Bounds do not permit any valid values.')
+        if (lower_bound_inclusive is not None and
+            upper_bound_exclusive is not None and
+            lower_bound_inclusive >= upper_bound_exclusive):
+            raise ValueError('Bounds do not permit any valid values.')
+        if (lower_bound_exclusive is not None and
+            upper_bound_inclusive is not None and
+            lower_bound_exclusive >= upper_bound_inclusive):
+            raise ValueError('Bounds do not permit any valid values.')
+        if (lower_bound_inclusive is not None and
+            upper_bound_inclusive is not None and
+            lower_bound_inclusive > upper_bound_inclusive):
+            raise ValueError('Bounds do not permit any valid values.')
+
+    def validate(self, value, errors):
+        try:
+            value = int(value)
+        except ValueError:
+            errors.append('"%s" is not an integer' % value)
+            return
+
+        if (self._lower_bound_inclusive is not None and
+            value < self._lower_bound_inclusive):
+            errors.append('This value must be greater than or equal to %d' %
+                          self._lower_bound_inclusive)
+        if (self._lower_bound_exclusive is not None and
+            value <= self._lower_bound_exclusive):
+            errors.append('This value must be greater than %d' %
+                          self._lower_bound_exclusive)
+        if (self._upper_bound_inclusive is not None and
+            value > self._upper_bound_inclusive):
+            errors.append('This value must be less than or equal to %d' %
+                          self._upper_bound_inclusive)
+        if (self._upper_bound_exclusive is not None and
+            value >= self._upper_bound_exclusive):
+            errors.append('This value must be less than %d' %
+                          self._upper_bound_exclusive)
+
+
 class Registry(object):
     """Holds all registered properties and their various overrides."""
     registered = {}
@@ -209,6 +306,7 @@ class Registry(object):
     update_index = 0
     threadlocal = threading.local()
     REENTRY_ATTR_NAME = 'busy'
+    UNREGISTERED_PROPERTY_LOGGING_LEVEL = logging.WARNING
 
     @classmethod
     def get_overrides(cls, force_update=False):
@@ -272,8 +370,12 @@ class Registry(object):
         name = item.key().name()
         target = cls.registered.get(name, None)
         if not target:
-            logging.warning(
-                'Property is not registered (skipped): %s', name)
+            if appengine_config.MODULE_REGISTRATION_IN_PROGRESS:
+                log_level = logging.INFO
+            else:
+                log_level = cls.UNREGISTERED_PROPERTY_LOGGING_LEVEL
+            logging.log(log_level, 'Property is not registered (skipped): %s',
+                        name)
             return
 
         if item.is_draft:
@@ -364,24 +466,13 @@ def run_all_unit_tests():
     assert int_prop.value == int_prop.default_value
 
 
-def validate_update_interval(value, errors):
-    value = int(value)
-    if value <= 0 or value >= MAX_UPDATE_INTERVAL_SEC:
-        errors.append(
-            'Expected a value between 0 and %s, exclusive.' % (
-                MAX_UPDATE_INTERVAL_SEC))
-
-
 UPDATE_INTERVAL_SEC = ConfigProperty(
-    'gcb_config_update_interval_sec', int, (
-        'An update interval (in seconds) for reloading runtime properties '
-        'from a datastore. Using this editor, you can set this value to an '
-        'integer between 1 and %s, inclusive. To completely disable reloading '
-        'properties from a datastore, you must set the value to 0. However, '
-        'you can only set the value to 0 by directly modifying the app.yaml '
-        'file.' % MAX_UPDATE_INTERVAL_SEC),
-    default_value=DEFAULT_UPDATE_INTERVAL_SEC,
-    validator=validate_update_interval)
+    'gcb_config_update_interval_sec', int,
+    messages.SITE_SETTINGS_REFRESH_INTERVAL_TEMPLATE % MAX_UPDATE_INTERVAL_SEC,
+    default_value=DEFAULT_UPDATE_INTERVAL_SEC, label='Refresh Interval',
+    validator=ValidateIntegerRange(
+        lower_bound_inclusive=0,
+        upper_bound_inclusive=MAX_UPDATE_INTERVAL_SEC).validate)
 
 if __name__ == '__main__':
     run_all_unit_tests()

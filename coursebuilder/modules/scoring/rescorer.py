@@ -16,15 +16,15 @@
 
 __author__ = 'Thejesh GN (tgn@google.com)'
 
+import logging
+
 from mapreduce import context
 
 from controllers import sites
-from controllers.utils import BaseHandler
 from models import courses
 from models import jobs
 from models import models
 from models import student_work
-from models import transforms
 from models import utils
 from modules.scoring import base
 from modules.scoring import scorer
@@ -50,36 +50,42 @@ class RescorerSubmission(jobs.MapReduceJob, base.ScoringBase):
 
     @staticmethod
     def map(entity):
-        mapper_params = context.get().mapreduce_spec.mapper.params
-        namespace = mapper_params['course']
-        unit_id = mapper_params['unit_id']
-        ignore_order = mapper_params['ignore_order']
+        try:
+            mapper_params = context.get().mapreduce_spec.mapper.params
+            namespace = mapper_params['course']
+            unit_id = mapper_params['unit_id']
+            ignore_order = mapper_params['ignore_order']
 
-        app_context = sites.get_app_context_for_namespace(namespace)
-        course = courses.Course(None, app_context=app_context)
-        unit = course.find_unit_by_id(str(unit_id))
+            app_context = sites.get_app_context_for_namespace(namespace)
+            course = courses.Course(None, app_context=app_context)
+            unit = course.find_unit_by_id(str(unit_id))
 
-        if verify.UNIT_TYPE_ASSESSMENT == unit.type:
-            grader = unit.workflow.get_grader()
-            if grader == courses.AUTO_GRADER:
-                pass
+            if verify.UNIT_TYPE_ASSESSMENT == unit.type:
+                grader = unit.workflow.get_grader()
+                if grader == courses.AUTO_GRADER:
+                    pass
+                else:
+                    return
             else:
                 return
-        else:
-            return
-        enable_negative_marking = unit.enable_negative_marking
+            enable_negative_marking = unit.enable_negative_marking
 
-        submission = student_work.Submission.get_contents(
-                unit.unit_id, entity.get_key())
+            submission = student_work.Submission.get_contents(
+                    unit.unit_id, entity.get_key())
 
-        if not submission:
-            return
+            if not submission:
+                return
 
-        old_score = course.get_score(entity, unit.unit_id)
-        new_score = scorer.score_assessment(submission, unit.html_content, enable_negative_marking, ignore_order=ignore_order)
-        utils.set_score(entity, unit.unit_id, new_score)
-        entity.put()
-        yield (str(old_score), new_score)
+            old_score = course.get_score(entity, unit.unit_id)
+            new_score = scorer.score_assessment(submission, unit.html_content, enable_negative_marking, ignore_order=ignore_order)
+            utils.set_score(entity, unit.unit_id, new_score)
+            entity.put()
+            yield (str(old_score), new_score)
+        except Exception as e:
+            from modules.nptel import utils as nptel_utils
+            logging.error('Error while running Rescore Objective Assessments:')
+            nptel_utils.print_exception_with_line_number(e)
+            raise e
 
     def build_additional_mapper_params(self, app_context):
         course = courses.Course(None, app_context=app_context)

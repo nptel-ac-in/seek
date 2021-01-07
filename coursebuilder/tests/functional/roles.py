@@ -37,6 +37,7 @@ DUMMY_EMAIL = 'dummy@foo.com'
 ROLE = 'test_role'
 PERMISSION_MODULE = Module('test_module', '', [], [])
 PERMISSION = 'can_test'
+PERMISSION_READ = 'can_test_read'
 PERMISSION_DESCRIPTION = 'Can perform tests.'
 
 
@@ -191,6 +192,13 @@ class RolesTest(actions.TestBase):
             'permissions': {PERMISSION_MODULE.name: [PERMISSION]}
         })
         models.RoleDAO.save(role_dto)
+        role_dto = models.RoleDTO(None, {
+            'name': ROLE,
+            'users': [STUDENT_EMAIL],
+            'permissions': {PERMISSION_MODULE.name: [PERMISSION_READ]}
+        })
+        models.RoleDAO.save(role_dto)
+        roles.Roles.load_permissions_map(self._get_course())
 
     @classmethod
     def _permissions_callback(cls):
@@ -232,7 +240,7 @@ class RolesTest(actions.TestBase):
         self.assertIn(
             PERMISSION, mem_map[STUDENT_EMAIL][PERMISSION_MODULE.name])
 
-    # --------------------------- Allowlisting tests:
-    # See tests/functional/allowlist.py, which covers both the actual
+    # --------------------------- Whitelisting tests:
+    # See tests/functional/whitelist.py, which covers both the actual
     # role behavior as well as more-abstract can-you-see-the-resource
     # operations.

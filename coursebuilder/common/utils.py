@@ -33,6 +33,16 @@ BACKWARD_COMPATIBLE_SPLITTER = re.compile(r'[\[\] ,\t\n]+', flags=re.M)
 SPLITTER = re.compile(r'[ ,\t\n]+', flags=re.M)
 ALPHANUM = string.ascii_letters + string.digits
 
+YOUTUBE_RECOGNIZERS = [re.compile(p) for p in (
+    r'https?://(?:www\.)?youtu\.be/([A-Za-z0-9_-]{11,})',
+    r'https?://(?:www\.)?youtube\.com/watch\?v=([A-Za-z0-9_-]{11,})',
+    r'https?://(?:www\.)?youtube\.com/watch/([A-Za-z0-9_-]{11,})',
+    r'https?://(?:www\.)?youtube\.com/embed/([A-Za-z0-9_-]{11,})',
+    r'https?://(?:www\.)?youtube\.com/v/([A-Za-z0-9_-]{11,})',
+    r'https?://(?:www\.)?youtube\.com/attribution_link.*' +
+        r'u=/watch%3Fv%3D([A-Za-z0-9_-]{11,})',
+    r'^([A-Za-z0-9_-]{11,})$',
+)]
 
 def text_to_list(text, splitter=SPLITTER, to_lower=False):
     if not text:
@@ -124,6 +134,50 @@ class Namespace(object):
         return False  # Don't suppress exceptions
 
 
+DEFAULT_NS_NAME_FOR_LOGGING = "''"
+
+def get_ns_name_for_logging(app_context=None, course=None):
+    """Obtains a namespace name string suitable for logging.
+
+    NOTE: Do not use the namespace name string returned by this function for
+    purposes other than generating log messages. If the namespace name string
+    retrieved via any of the methods described in "Returns:" below represents
+    the default namespace (e.g. the empty "" string, or None), a string
+    containing exactly two single quotes, i.e. "''", (which also does not
+    accidentally match the valid ^[0-9A-Za-z._-]{0,%s}$ namespace name regexp)
+    is returned instead, making it more easily distinguished in log messages.
+
+    Args:
+        app_context: (optional) get_namespace_name() is called on this if
+            supplied by caller.
+        course: (optional) used to obtain an app_context if supplied by caller
+            but app_context was not (and then get_namespace_name() is called
+            on that course.app_context).
+
+    Returns:
+        0) DEFAULT_NS_NAME_FOR_LOGGING, "''", if return value would be empty
+           or None for any reason, otherwise:
+        1) app_context.get_namespace_name() if app_context was supplied.
+        2) course.app_context.get_namespace_name() if course was supplied but
+           app_context was not.
+        3) namespace_manager.get_namespace() if an app_context cannot be
+           determined from any supplied optional parameters.
+    """
+    if not app_context:
+        app_context = None if not course else course.app_context
+
+    if app_context:
+        logged_ns = app_context.get_namespace_name()
+    else:
+        logged_ns = namespace_manager.get_namespace()
+
+    if not logged_ns:
+        # Make the "default" namespace (an empty string) visible in logs.
+        logged_ns = DEFAULT_NS_NAME_FOR_LOGGING
+
+    return logged_ns
+
+
 def log_exception_origin():
     """Log the traceback of the origin of an exception as a critical error.
 
@@ -210,7 +264,8 @@ class ZipAwareOpen(object):
 
                     # Possibly extend simple path to .zip file with relative
                     # path inside .zip file to meaningful contents.
-		    name = name.replace(path, ZipAwareOpen.LIB_PATHS[path])
+                    name = name.replace(
+                        path, ZipAwareOpen.LIB_PATHS[path])
 
                     # Strip off on-disk path to .zip file.  This leaves
                     # us with the absolute path within the .zip file.
@@ -237,12 +292,62 @@ class ZipAwareOpen(object):
         return False  # Don't suppress exceptions.
 
 
-def parse_timedelta_string(timedelta_string):
+def _parse_timedelta_string(timedelta_string):
     keys = ['weeks', 'days', 'hours', 'minutes', 'seconds']
-    regex = r'\s*,?\s*'.join([r'((?P<%s>\d+)\s*%s(%s)?s?)?' %
-                        (k, k[0], k[1:-1]) for k in keys])
     kwargs = {}
-    for k, v in re.match(regex,
-                         timedelta_string).groupdict(default='0').items():
-        kwargs[k] = int(v)
-    return datetime.timedelta(**kwargs)
+    for key in keys:
+        # Expect exact match to 'weeks', 'week', or 'w' (for all unit type
+        # names, not just "weeks") and then either a separator, a number, or
+        # end-of-string.  This prevents 'months' from being recognized as
+        # valid, when actually 'm' -> 'minutes'.
+        pattern = r'([0-9]+)\s*(%s|%s|%s)(\s|,|$|[0-9])' % (
+            key, key[:-1], key[0])  # 'weeks', 'week', 'w'
+        matches = re.search(pattern, timedelta_string, re.IGNORECASE)
+        if matches:
+            quantity = int(matches.group(1))
+            if quantity:
+                kwargs[key] = quantity
+    return kwargs
+
+
+def parse_timedelta_string(timedelta_string):
+    return datetime.timedelta(**_parse_timedelta_string(timedelta_string))
+
+
+class ValidateTimedelta(object):
+
+    @classmethod
+    def validate(cls, value, errors):
+        if value is None or value == '':
+            return  # Blank is OK.
+        value = value.strip()
+        kwargs = _parse_timedelta_string(value)
+        if not kwargs:
+            errors.append(
+                'The string "%s" ' % value + 'has some problems. '
+                'Supported units are: '
+                '"weeks", "days", "hours", "minutes", "seconds".  Units may '
+                'be specified as their first letter, singular, or plural.  '
+                'Spaces and commas may be used or omitted.  E.g., both of '
+                'the following are equivalent: "3w1d7h", '
+                '"3 weeks, 1 day, 7 hours"')
+        return datetime.timedelta(**kwargs).total_seconds()
+
+YOUTUBE_RECOGNIZERS = [re.compile(p) for p in (
+    r'https?://(?:www\.)?youtu\.be/([A-Za-z0-9_-]{11,})',
+    r'https?://(?:www\.)?youtube\.[a-z]+/watch\?v=([A-Za-z0-9_-]{11,})',
+    r'https?://(?:www\.)?youtube\.[a-z]+/watch/([A-Za-z0-9_-]{11,})',
+    r'https?://(?:www\.)?youtube\.[a-z]+/embed/([A-Za-z0-9_-]{11,})',
+    r'https?://(?:www\.)?youtube\.[a-z]+/v/([A-Za-z0-9_-]{11,})',
+    r'https?://(?:www\.)?youtube\.[a-z]+/attribution_link.*' +
+        r'u=/watch%3Fv%3D([A-Za-z0-9_-]{11,})',
+    r'^([A-Za-z0-9_-]{11,})$',
+)]
+
+
+def find_youtube_video_id(text):
+    for recognizer in YOUTUBE_RECOGNIZERS:
+        match = recognizer.search(text)
+        if match:
+            return match.group(1)
+    return None

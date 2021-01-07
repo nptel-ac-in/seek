@@ -84,8 +84,7 @@ class ProgAssignmentDashboardHandler(base.ProgAssignment):
             {
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': content},
-            in_action=scoring_base.ScoringBase.DASHBOARD_NAV,
-            in_tab=cls.DASHBOARD_REEVALUATION_TAB)
+            in_action=scoring_base.ScoringBase.DASHBOARD_NAV)
 
     @classmethod
     def reevalaute_assignment(cls, handler):
@@ -113,8 +112,7 @@ class ProgAssignmentDashboardHandler(base.ProgAssignment):
             {
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': content},
-            in_action=scoring_base.ScoringBase.DASHBOARD_NAV,
-            in_tab=cls.DASHBOARD_REEVALUATION_TAB)
+            in_action=scoring_base.ScoringBase.DASHBOARD_NAV)
 
 
 class ProgAssignmentDownloadDashboardHandler(base.ProgAssignment):
@@ -152,7 +150,7 @@ class ProgAssignmentDownloadDashboardHandler(base.ProgAssignment):
         if 'Cancel' == handler.request.get('submit'):
             handler.redirect(
                 handler.get_action_url(
-                    cls.DASHBOARD_NAV,
+                    cls.DASHBOARD_DOWNLOAD_TAB,
                     extra_args={'tab': cls.DASHBOARD_DOWNLOAD_TAB}))
             return
 
@@ -204,11 +202,7 @@ class ProgAssignmentTestRunHandler(base.ProgAssignment):
         try:
             pa_id = int(pa_id)
         except ValueError:
-            # TODO(rthakker) return bad request
-            handler.render_page({
-                'page_title': 'qwe',
-                'main_content': 'Bad Request'
-            }, in_action='mentor', in_tab='download')
+            handler.redirect('/dashboard?action=' + base.ProgAssignment.DASHBOARD_TEST_RUN_TAB)
             return
 
         programming_assignment = course.find_unit_by_id(pa_id)
@@ -217,7 +211,7 @@ class ProgAssignmentTestRunHandler(base.ProgAssignment):
             handler.render_page({
                 'page_title': 'qwe',
                 'main_content': '404'
-            }, in_action='mentor', in_tab='download')
+            })
             return
 
         template_value = {
@@ -244,7 +238,7 @@ class ProgAssignmentTestRunHandler(base.ProgAssignment):
             handler.render_page({
                 'page_title': 'qwe',
                 'main_content': content
-            }, in_action='mentor', in_tab='download')
+            }, in_action='mentor')
             return
 
         content_dict = base.ProgAssignment.get_content(
@@ -275,5 +269,4 @@ class ProgAssignmentTestRunHandler(base.ProgAssignment):
             {
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': content},
-            in_action=cls.DASHBOARD_NAV,
-            in_tab=cls.DASHBOARD_TEST_RUN_TAB)
+            in_action=cls.DASHBOARD_NAV)

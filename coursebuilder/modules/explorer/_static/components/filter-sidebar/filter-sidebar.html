@@ -1,0 +1,113 @@
+<link rel="import" href="/static/polymer-1.2.0/polymer/polymer.html">
+<link rel="import" href="/static/polymer-1.2.0/paper-input/paper-input.html">
+<link rel="import" href="/modules/explorer/_static/components/filter-sidebar/course-status-selector.html">
+<link rel="import" href="/modules/explorer/_static/components/filter-sidebar/course-category-selector.html">
+<link rel="import" href="/modules/explorer/_static/components/filter-sidebar/course-tag-filter.html">
+
+<dom-module id="filter-sidebar">
+  <template>
+    <style>
+      :host {
+        padding: 24px;
+        padding-top: 0;
+        display: block;
+      }
+
+      /*Vertically pace out all the first level children*/
+      :host>* {
+        margin-bottom: 20px;
+      }
+
+      h2 {
+        font-size: 12px;
+        color: rgba(0, 0, 0, 0.87);
+        margin-top: 36px;
+        line-height: 1.2;
+        margin-bottom: 0;
+      }
+      paper-input {
+        --paper-input-container-underline: {
+          background: rgba(0, 0, 0, 0.12);
+        };
+      }
+      paper-input {
+        width: 80%;
+      }
+
+      paper-input iron-icon {
+        cursor: pointer;
+      }
+      .unlabeled {
+        margin-bottom: 16px;
+      }
+    </style>
+
+    <div id="filter-input-div" class="horizontal-container">
+      <paper-input
+          id="keyword-input" label="Search" type="text"
+          value="[[filter_options.filter]]" on-keydown="searchTextChanged"
+          class="horizontal-left">
+          <iron-icon suffix icon="search" on-click="searchTextChanged">Go</iron-icon>
+      </paper-input>
+      <paper-input style="display: none;" id="binded-keyword-input"
+      value="{{filter_options.filter}}"></paper-input>
+    </div>
+
+    <course-status-selector status="{{filter_options.status}}"></course-status-selector>
+
+    <template is="dom-if" if="[[categories.length]]">
+      <h2 class="unlabeled">Category</h2>
+      <course-category-selector
+        value="{{filter_options.category}}"
+        items="[[categories]]"
+      ></course-category-selector>
+    </template>
+
+    <course-tag-filter value="{{filter_options.tags}}"></course-tag-filter>
+  </template>
+  <script>
+    Polymer({
+      is: 'filter-sidebar',
+      properties: {
+        filter_options: {
+          type: Object,
+          notify: true,
+        },
+        categories: {
+          type: Array,
+        },
+        tags: {
+          type: String,
+        },
+      },
+      observers: [
+        'filterCourses(filter_options.*)'
+      ],
+      createSearchURL: function() {
+        return window.location.origin +
+          "?include_closed=" + (this.filter_options.includeClosed?"yes":"no") +
+          "&q=" + this.filter_options.filter + "&status=" +
+          this.filter_options.status + "&category=" +
+          this.filter_options.category + "&tags=" + this.filter_options.tags;
+      },
+      searchTextChanged: function(e) {
+        // Proceed only if user either presses enter or clicks "Go"
+        if (e.type !== "click") {
+          if (e.type !== "keydown" || e.keyCode !== 13) {
+            return;
+          }
+        }
+        document.getElementById("binded-keyword-input").value = document.getElementById("keyword-input").value;
+      },
+      filterCourses: function(changed) {
+        if (changed.path === "filter_options") {
+          // Initial call on page load. do nothing.
+          return;
+        }
+        console.log(this.filter_options);
+        console.log(changed);
+        this.domHost.runQuery();
+      },
+    })
+  </script>
+</dom-module>

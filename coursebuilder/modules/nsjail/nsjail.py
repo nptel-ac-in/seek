@@ -55,7 +55,8 @@ ERROR_LIST = {
     request_pb2.CodeReply.RUNTIME_ERROR: 'Runtime Error',
     request_pb2.CodeReply.WRONG_ANSWER: 'Wrong Answer',
     request_pb2.CodeReply.PRESENTATION_ERROR: 'Presentation Error',
-    request_pb2.CodeReply.COMPILATION_ERROR: 'Compilation Error'
+    request_pb2.CodeReply.COMPILATION_ERROR: 'Compilation Error',
+    request_pb2.CodeReply.NOT_RUN: 'Not able to run'
 }
 
 class NsjailEvaluator(evaluator.ProgramEvaluator):

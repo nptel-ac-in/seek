@@ -26,6 +26,7 @@ class GoogleServiceAccountBase(object):
     DESCRIPTION = ('Settings related to service account,'
         'such as google drive integration')
     DASHBOARD_NAV = 'google_service_account'
+    DASHBOARD_SHOW_LIST_ACTION = 'google_service_account'
     DASHBOARD_SHOW_LIST_TAB = 'google_service_account'
     DASHBOARD_EDIT_SERVICE_ACCOUNT_ACTION = 'edit_google_service_account'
     DASHBOARD_PAGE_TITLE = 'Google Service Accounts'

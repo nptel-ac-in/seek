@@ -42,9 +42,12 @@ from common import tags
 from controllers.utils import BaseRESTHandler
 from controllers.utils import XsrfTokenManager
 from models import custom_modules
+from models import data_removal
 from models import data_sources
 from models import models
+from models import services
 from models import transforms
+from modules.questionnaire import messages
 
 RESOURCES_PATH = '/modules/questionnaire/resources'
 
@@ -78,11 +81,12 @@ class QuestionnaireTag(tags.ContextAwareTag):
         form_id = node.attrib.get('form-id')
         button_label = node.attrib.get('button-label')
         disabled = (node.attrib.get('disabled') == 'true')
+        single_submission = (node.attrib.get('single-submission') == 'true')
         post_message = node.text
 
         user = context.handler.get_user()
         registered = False
-        if user and models.Student.get_enrolled_student_by_email(user.email()):
+        if user and models.Student.get_enrolled_student_by_user(user):
             registered = True
 
         template_vals = {
@@ -90,6 +94,7 @@ class QuestionnaireTag(tags.ContextAwareTag):
             'form_id': form_id,
             'button_label': button_label,
             'disabled': disabled,
+            'single_submission': single_submission,
             'registered': registered,
             'post_message': post_message,
         }
@@ -102,29 +107,30 @@ class QuestionnaireTag(tags.ContextAwareTag):
         reg = schema_fields.FieldRegistry('Questionnaire')
         reg.add_property(
             schema_fields.SchemaField(
-                'form-id', 'Form ID', 'string', optional=True, i18n=False,
-                description=(
-                    'Enter a unique ID for this form. Note this must be '
-                    'unique across your whole course. Then use this ID '
-                    'as the ID attribute of your form element.')))
+                'form-id', 'Form ID', 'string', i18n=False,
+                description=services.help_urls.make_learn_more_message(
+                    messages.RTE_QUESTIONNAIRE_FORM_ID,
+                    'questionnaire:questionnaire:form_id')))
         reg.add_property(
             schema_fields.SchemaField(
-                'button-label', 'Button Label', 'string', optional=True,
-                i18n=True, description=(
-                    'Text to be shown on submit button.')))
+                'button-label', 'Submit Label', 'string', i18n=True,
+                description=str(messages.RTE_QUESTIONNAIRE_SUBMIT_LABEL)))
         reg.add_property(
             schema_fields.SchemaField(
-                'disabled', 'Disabled', 'boolean', optional=True,
-                description=(
-                    'Use this option to render the form with data but leave '
-                    'all the fields disabled. This is used to display the '
-                    'results of a questionnaire on a different page.')))
+                'disabled', 'Disable Fields', 'boolean', optional=True,
+                description=services.help_urls.make_learn_more_message(
+                    messages.RTE_QUESTIONNAIRE_DISABLE_FIELDS,
+                    'questionnaire:questionnaire:disabled')))
         reg.add_property(
             schema_fields.SchemaField(
-                'post-message', 'Post Message', 'text', optional=True,
-                i18n=True, description=(
-                    'Text shown to the student after they submit their '
-                    'responses.')))
+                'single-submission', 'Single Submission', 'boolean',
+                optional=True,
+                description=messages.RTE_QUESTIONNAIRE_SINGLE_SUBMISSION))
+        reg.add_property(
+            schema_fields.SchemaField(
+                'post-message', 'Submission Text', 'text', optional=True,
+                i18n=True,
+                description=messages.RTE_QUESTIONNAIRE_SUBMISSION_TEXT))
         return reg
 
     def rollup_header_footer(self, context):
@@ -138,12 +144,11 @@ class QuestionnaireTag(tags.ContextAwareTag):
 class StudentFormEntity(models.StudentPropertyEntity):
 
     @classmethod
-    def load_or_create(cls, student, form_id):
+    def load_or_default(cls, student, form_id):
         entity = cls.get(student, form_id)
         if entity is None:
             entity = cls.create(student, form_id)
             entity.value = '{}'
-            entity.put()
         return entity
 
 
@@ -172,11 +177,11 @@ class QuestionnaireHandler(BaseRESTHandler):
         if user is None:
             return
 
-        student = models.Student.get_enrolled_student_by_email(user.email())
+        student = models.Student.get_enrolled_student_by_user(user)
         if student is None:
             return
 
-        entity = StudentFormEntity.load_or_create(student, key)
+        entity = StudentFormEntity.load_or_default(student, key)
         if entity.value is None:
             return
 
@@ -184,7 +189,7 @@ class QuestionnaireHandler(BaseRESTHandler):
 
         transforms.send_json_response(
             self, 200, None,
-            payload_dict=transforms.dict_to_json(form_dict, self.SCHEMA))
+            payload_dict=transforms.dict_to_json(form_dict))
 
     def post(self):
         """POST method called when the student submits answers."""
@@ -209,7 +214,7 @@ class QuestionnaireHandler(BaseRESTHandler):
             transforms.send_json_response(self, 401, access_denied, {})
             return
 
-        student = models.Student.get_enrolled_student_by_email(user.email())
+        student = models.Student.get_enrolled_student_by_user(user)
         if student is None:
             transforms.send_json_response(self, 401, access_denied, {})
             return
@@ -217,7 +222,7 @@ class QuestionnaireHandler(BaseRESTHandler):
         payload_json = request.get('payload')
         payload_dict = transforms.json_to_dict(payload_json, self.SCHEMA)
 
-        form_data = StudentFormEntity.load_or_create(student, key)
+        form_data = StudentFormEntity.load_or_default(student, key)
         form_data.value = transforms.dumps(payload_dict)
         form_data.put()
 
@@ -277,7 +282,10 @@ class QuestionnaireDataSource(data_sources.AbstractDbTableRestDataSource):
             else:
                 return str(value)
 
-        transform_fn = cls._build_transform_fn(source_context)
+        if source_context.send_uncensored_pii_data:
+            transform_fn = lambda x: x
+        else:
+            transform_fn = cls._build_transform_fn(source_context)
 
         response_list = []
 
@@ -307,6 +315,8 @@ def register_module():
         tags.Registry.add_tag_binding(
             QuestionnaireTag.binding_name, QuestionnaireTag)
         data_sources.Registry.register(QuestionnaireDataSource)
+        data_removal.Registry.register_indexed_by_user_id_remover(
+            StudentFormEntity.delete_by_user_id_prefix)
 
     global_routes = [
         (os.path.join(RESOURCES_PATH, 'js', '.*'), tags.JQueryHandler),

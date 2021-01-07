@@ -21,11 +21,10 @@ import re
 from common import crypto
 from common import utils as common_utils
 from controllers import sites
-from controllers import utils
-from models import config
 from models import courses
 from models import models
-from modules.dashboard import unit_lesson_editor
+from modules.analytics import analytics
+from modules.courses import unit_lesson_editor
 from tests.functional import actions
 from tools import verify
 
@@ -50,31 +49,32 @@ class UnitPrePostAssessmentTest(actions.TestBase):
 
         self.unit_no_lessons = self.course.add_unit()
         self.unit_no_lessons.title = 'No Lessons'
-        self.unit_no_lessons.now_available = True
+        self.unit_no_lessons.availability = courses.AVAILABILITY_AVAILABLE
 
         self.unit_one_lesson = self.course.add_unit()
         self.unit_one_lesson.title = 'One Lesson'
-        self.unit_one_lesson.now_available = True
+        self.unit_one_lesson.availability = courses.AVAILABILITY_AVAILABLE
         self.lesson = self.course.add_lesson(self.unit_one_lesson)
         self.lesson.title = 'Lesson One'
         self.lesson.objectives = 'body of lesson'
-        self.lesson.now_available = True
+        self.lesson.availability = courses.AVAILABILITY_AVAILABLE
 
         self.assessment_one = self.course.add_assessment()
         self.assessment_one.title = 'Assessment One'
         self.assessment_one.html_content = 'assessment one content'
-        self.assessment_one.now_available = True
+        self.assessment_one.availability = courses.AVAILABILITY_AVAILABLE
 
         self.assessment_two = self.course.add_assessment()
         self.assessment_two.title = 'Assessment Two'
         self.assessment_two.html_content = 'assessment two content'
-        self.assessment_two.now_available = True
+        self.assessment_two.availability = courses.AVAILABILITY_AVAILABLE
 
         self.course.save()
         actions.login(STUDENT_EMAIL)
         actions.register(self, STUDENT_EMAIL, COURSE_NAME)
-        config.Registry.test_overrides[
-            utils.CAN_PERSIST_ACTIVITY_EVENTS.name] = True
+        self.overridden_environment = actions.OverriddenEnvironment(
+            {'course': {analytics.CAN_RECORD_STUDENT_EVENTS: 'true'}})
+        self.overridden_environment.__enter__()
 
         with common_utils.Namespace(NAMESPACE):
             self.track_one_id = models.LabelDAO.save(models.LabelDTO(
@@ -86,8 +86,19 @@ class UnitPrePostAssessmentTest(actions.TestBase):
                        'descripton': 'track_one',
                        'type': models.LabelDTO.LABEL_TYPE_GENERAL}))
 
+    def tearDown(self):
+        self.overridden_environment.__exit__()
+        super(UnitPrePostAssessmentTest, self).tearDown()
+
     def _get_unit_page(self, unit):
         return self.get(BASE_URL + '/unit?unit=' + str(unit.unit_id))
+
+    def _unit_assessment_url(self, unit_id, assessment_id):
+        return "{base}/unit?unit={unit}&assessment={assessment}".format(
+            base=BASE_URL,
+            unit=unit_id,
+            assessment=assessment_id,
+        )
 
     def _click_button(self, class_name, response):
         matches = re.search(
@@ -211,7 +222,7 @@ class UnitPrePostAssessmentTest(actions.TestBase):
 
         response = self.get(COURSE_URL)
         self._assert_progress_state(
-            'Not yet started', 'Unit 2 - %s</a>' % self.unit_one_lesson.title,
+            'Not yet started', 'Unit 2 - %s' % self.unit_one_lesson.title,
             response)
 
         # On pre-assessment; no progress markers on any lesson.
@@ -244,7 +255,7 @@ class UnitPrePostAssessmentTest(actions.TestBase):
         # Back on course page; expect partial progress.
         response = self._click_next_button(response)
         self._assert_progress_state(
-            'In progress', 'Unit 2 - %s</a>' % self.unit_one_lesson.title,
+            'In progress', 'Unit 2 - %s' % self.unit_one_lesson.title,
             response)
 
     def _post_assessment(self, assessment_id):
@@ -297,7 +308,7 @@ class UnitPrePostAssessmentTest(actions.TestBase):
         # Verify that the overall course state is completed.
         response = self._click_next_button(response)
         self._assert_progress_state(
-            'Completed', 'Unit 2 - %s</a>' % self.unit_one_lesson.title,
+            'Completed', 'Unit 2 - %s' % self.unit_one_lesson.title,
             response)
 
     def _get_selection_choices(self, schema, match):
@@ -309,6 +320,7 @@ class UnitPrePostAssessmentTest(actions.TestBase):
         return ret
 
     def test_old_assessment_availability(self):
+        actions.login(ADMIN_EMAIL, is_admin=True)
         new_course_context = actions.simple_add_course(
             'new_course', ADMIN_EMAIL, 'My New Course')
         new_course = courses.Course(None, new_course_context)
@@ -324,8 +336,8 @@ class UnitPrePostAssessmentTest(actions.TestBase):
         unit = new_course.get_units_of_type(verify.UNIT_TYPE_UNIT)[0]
 
         unit_rest_handler = unit_lesson_editor.UnitRESTHandler()
-        schema = unit_rest_handler.get_annotations_dict(
-            new_course, unit.unit_id)
+        schema = unit_rest_handler.get_schema(
+            new_course, unit.unit_id).get_schema_dict()
 
         # Verify that there are 4 valid choices for pre- or post-asssments
         # for this unit
@@ -359,7 +371,6 @@ class UnitPrePostAssessmentTest(actions.TestBase):
             unit,
             {
                 'title': unit.title,
-                'now_available': unit.now_available,
                 'label_groups': [],
                 'pre_assessment': assessment.unit_id,
                 'post_assessment': -1,
@@ -372,10 +383,11 @@ class UnitPrePostAssessmentTest(actions.TestBase):
         assert not errors
 
     def test_new_assessment_availability(self):
+        actions.login(ADMIN_EMAIL, is_admin=True)
         unit_rest_handler = unit_lesson_editor.UnitRESTHandler()
 
-        schema = unit_rest_handler.get_annotations_dict(
-            self.course, self.unit_no_lessons.unit_id)
+        schema = unit_rest_handler.get_schema(
+            self.course, self.unit_no_lessons.unit_id).get_schema_dict()
         choices = self._get_selection_choices(
             schema, ['properties', 'pre_assessment', '_inputex'])
         self.assertEquals({
@@ -391,6 +403,7 @@ class UnitPrePostAssessmentTest(actions.TestBase):
             self.assessment_two.title: self.assessment_two.unit_id}, choices)
 
     def test_rest_unit_assignment(self):
+        actions.login(ADMIN_EMAIL, is_admin=True)
         unit_rest_handler = unit_lesson_editor.UnitRESTHandler()
         unit_rest_handler.app_context = self.course.app_context
         # Use REST handler function to save pre/post handlers on one unit.
@@ -399,7 +412,6 @@ class UnitPrePostAssessmentTest(actions.TestBase):
             self.unit_no_lessons,
             {
                 'title': self.unit_no_lessons.title,
-                'now_available': self.unit_no_lessons.now_available,
                 'label_groups': [],
                 'pre_assessment': self.assessment_one.unit_id,
                 'post_assessment': self.assessment_two.unit_id,
@@ -418,16 +430,16 @@ class UnitPrePostAssessmentTest(actions.TestBase):
 
         # Verify that the assessments are no longer available for choosing
         # on the other unit.
-        schema = unit_rest_handler.get_annotations_dict(
-            self.course, self.unit_one_lesson.unit_id)
+        schema = unit_rest_handler.get_schema(
+            self.course, self.unit_one_lesson.unit_id).get_schema_dict()
         choices = self._get_selection_choices(
             schema, ['properties', 'pre_assessment', '_inputex'])
         self.assertEquals({'-- None --': -1}, choices)
 
         # Verify that they are available for choosing on the unit where
         # they are assigned.
-        schema = unit_rest_handler.get_annotations_dict(
-            self.course, self.unit_no_lessons.unit_id)
+        schema = unit_rest_handler.get_schema(
+            self.course, self.unit_no_lessons.unit_id).get_schema_dict()
         choices = self._get_selection_choices(
             schema, ['properties', 'pre_assessment', '_inputex'])
         self.assertEquals({
@@ -442,7 +454,6 @@ class UnitPrePostAssessmentTest(actions.TestBase):
             self.unit_one_lesson,
             {
                 'title': self.unit_one_lesson.title,
-                'now_available': self.unit_one_lesson.now_available,
                 'label_groups': [],
                 'pre_assessment': self.assessment_one.unit_id,
                 'post_assessment': self.assessment_two.unit_id,
@@ -454,9 +465,9 @@ class UnitPrePostAssessmentTest(actions.TestBase):
             }, errors)
         self.assertEquals(
             ['Assessment "Assessment One" is already '
-             'asssociated to unit "No Lessons"',
+             'associated to unit "No Lessons"',
              'Assessment "Assessment Two" is already '
-             'asssociated to unit "No Lessons"'], errors)
+             'associated to unit "No Lessons"'], errors)
         self.assertEquals(self.unit_one_lesson.pre_assessment, None)
         self.assertEquals(self.unit_one_lesson.post_assessment, None)
         self.course.save()
@@ -468,7 +479,6 @@ class UnitPrePostAssessmentTest(actions.TestBase):
             self.unit_no_lessons,
             {
                 'title': self.unit_no_lessons.title,
-                'now_available': self.unit_no_lessons.now_available,
                 'label_groups': [],
                 'pre_assessment': self.assessment_two.unit_id,
                 'post_assessment': self.assessment_one.unit_id,
@@ -491,7 +501,6 @@ class UnitPrePostAssessmentTest(actions.TestBase):
             self.unit_no_lessons,
             {
                 'title': self.unit_no_lessons.title,
-                'now_available': self.unit_no_lessons.now_available,
                 'label_groups': [],
                 'pre_assessment': self.assessment_one.unit_id,
                 'post_assessment': self.assessment_one.unit_id,
@@ -590,7 +599,6 @@ class UnitPrePostAssessmentTest(actions.TestBase):
                 self.unit_no_lessons,
                 {
                     'title': self.unit_no_lessons.title,
-                    'now_available': self.unit_no_lessons.now_available,
                     'label_groups': [],
                     'pre_assessment': self.assessment_one.unit_id,
                     'post_assessment': self.assessment_two.unit_id,
@@ -606,35 +614,38 @@ class UnitPrePostAssessmentTest(actions.TestBase):
                 'Assessment "Assessment Two" has track labels, so it '
                 'cannot be used as a pre/post unit element'], errors)
 
-    def _test_assessments_as_pre_post_labels(self, label_id, expected_errors):
+    def _test_assessments_as_pre_post_labels(
+            self, label_id, label_type, expected_errors):
+
+        class FakeRequest(object):
+            host_url = 'https://www.example.com'
+
         self.unit_no_lessons.pre_assessment = self.assessment_one.unit_id
         self.unit_no_lessons.post_assessment = self.assessment_two.unit_id
         self.course.save()
 
         assessment_rest_handler = unit_lesson_editor.AssessmentRESTHandler()
         assessment_rest_handler.app_context = self.course.app_context
+        assessment_rest_handler.request = FakeRequest()
 
         with common_utils.Namespace(NAMESPACE):
             errors = []
             properties = assessment_rest_handler.unit_to_dict(
                 self.assessment_one)
-            properties['label_groups'] = [{
-                'labels': [{
-                    'checked': True,
-                    'id': label_id
-                }]
-            }]
+            properties[label_type] = [label_id]
             assessment_rest_handler.apply_updates(self.assessment_one,
                                                   properties, errors)
             self.assertEquals(expected_errors, errors)
 
     def test_assessments_as_pre_post_cannot_have_tracks_added(self):
         self._test_assessments_as_pre_post_labels(
-            self.track_one_id, ['Cannot set track labels on entities which are '
-                                'used within other units.'])
+            self.track_one_id, 'tracks',
+            ['Cannot set track labels on entities which are used within other '
+            'units.'])
 
     def test_assessments_as_pre_post_can_have_general_labels_added(self):
-        self._test_assessments_as_pre_post_labels(self.general_one_id, [])
+        self._test_assessments_as_pre_post_labels(
+            self.general_one_id, 'labels', [])
 
     def test_suppress_next_prev_buttons(self):
         # Set up one-lesson unit w/ pre, post assessment.  Set course
@@ -674,3 +685,91 @@ class UnitPrePostAssessmentTest(actions.TestBase):
         self.assertIn('Previous Page', response.body)
         self.assertNotIn('Next Page', response.body)
         self.assertIn(' End ', response.body)
+
+    def test_private_assessments(self):
+        actions.login(ADMIN_EMAIL)
+
+        self.unit_one_lesson.pre_assessment = self.assessment_one.unit_id
+        self.unit_one_lesson.post_assessment = self.assessment_two.unit_id
+        self.assessment_one.availability = courses.AVAILABILITY_UNAVAILABLE
+        self.assessment_two.availability = courses.AVAILABILITY_UNAVAILABLE
+        self.course.save()
+
+        actions.login(STUDENT_EMAIL)
+
+        response = self.get(self._unit_assessment_url(
+            self.unit_one_lesson.unit_id, self.assessment_one.unit_id))
+        self.assertNotIn(self.assessment_one.html_content, response.body,
+            msg=('Private pre-assessment content should not be visible to '
+                'student'))
+        self.assertEquals(response.status_int, 302)  # expect redir to /
+
+        actions.login(ADMIN_EMAIL)
+
+        response = self.get(self._unit_assessment_url(
+            self.unit_one_lesson.unit_id, self.assessment_one.unit_id))
+        self.assertIn(self.assessment_one.html_content, response.body,
+            msg='Private pre-assessment content should be visible to admin')
+
+        response = self.get(self._unit_assessment_url(
+            self.unit_one_lesson.unit_id, self.assessment_two.unit_id))
+        self.assertIn(self.assessment_two.html_content, response.body,
+            msg='Private post-assessment content should be visible to admin')
+
+
+class UnitPartialUpdateTests(actions.TestBase):
+
+    def setUp(self):
+        super(UnitPartialUpdateTests, self).setUp()
+        context = actions.simple_add_course(
+            COURSE_NAME, ADMIN_EMAIL, COURSE_TITLE)
+        self.course = courses.Course(None, context)
+        self.unit = self.course.add_unit()
+        self.assessment = self.course.add_assessment()
+        self.link = self.course.add_link()
+        self.course.save()
+        actions.login(ADMIN_EMAIL, is_admin=True)
+
+        self.rest_handler = unit_lesson_editor.CommonUnitRESTHandler()
+        self.rest_handler.app_context = self.course.app_context
+
+    def test_set_none(self):
+        errors = []
+        self.rest_handler.apply_updates(self.unit, {}, errors)
+        self.rest_handler.apply_updates(self.assessment, {}, errors)
+        self.rest_handler.apply_updates(self.link, {}, errors)
+        self.assertEquals(0, len(errors))
+
+    def test_set_only_title(self):
+        errors = []
+        self.rest_handler.apply_updates(
+            self.unit, {'title': 'Title'}, errors)
+        self.rest_handler.apply_updates(
+            self.assessment, {'title': 'Title'}, errors)
+        self.rest_handler.apply_updates(
+            self.link, {'title': 'Title'}, errors)
+        self.assertEquals(self.unit.title, 'Title')
+        self.assertEquals(self.assessment.title, 'Title')
+        self.assertEquals(self.link.title, 'Title')
+        self.assertEquals(0, len(errors))
+
+    def test_set_only_unit_header(self):
+        errors = []
+        self.rest_handler.apply_updates(
+            self.unit, {'unit_header': 'content'}, errors)
+        self.assertEquals(self.unit.unit_header, 'content')
+        self.assertEquals(0, len(errors))
+
+    def test_set_only_assessment_weight(self):
+        errors = []
+        self.rest_handler.apply_updates(
+            self.assessment, {'weight': '123.4'}, errors)
+        self.assertEquals(self.assessment.weight, 123.4)
+        self.assertEquals(0, len(errors))
+
+    def test_set_only_link_href(self):
+        errors = []
+        self.rest_handler.apply_updates(
+            self.link, {'url': 'foo'}, errors)
+        self.assertEquals(self.link.href, 'foo')
+        self.assertEquals(0, len(errors))

@@ -25,13 +25,13 @@ import pickle
 import re
 import sys
 import threading
-import config
 import custom_units
 
 import course_list
 import messages
 import progress
 import review
+import roles
 import transforms
 import utils
 import vfs
@@ -45,14 +45,24 @@ from common import safe_dom
 from common import schema_fields
 from common import utils as common_utils
 import common.tags
-from common.utils import Namespace
 import models
 from models import MemcacheManager
 from models import QuestionImporter
+from models import services
+from modules.lockdown import lockdown
 from tools import verify
 
-from google.appengine.api import namespace_manager
 from google.appengine.ext import db
+
+
+from modules.courses.constants import  COURSE_AVAILABILITY_PRIVATE
+from modules.courses.constants import  COURSE_AVAILABILITY_REGISTRATION_REQUIRED
+from modules.courses.constants import  COURSE_AVAILABILITY_REGISTRATION_OPTIONAL
+from modules.courses.constants import  COURSE_AVAILABILITY_REGISTRATION_CLOSED
+from modules.courses.constants import  COURSE_AVAILABILITY_PUBLIC
+from modules.courses.constants import  COURSE_AVAILABILITY_POLICIES
+
+
 
 COURSE_MODEL_VERSION_1_2 = '1.2'
 COURSE_MODEL_VERSION_1_3 = '1.3'
@@ -63,7 +73,7 @@ DEFAULT_FETCH_LIMIT = 100
 # import
 COURSE_CONTENT_ENTITIES = frozenset([
     models.QuestionEntity, models.QuestionGroupEntity, models.LabelEntity,
-    models.RoleEntity])
+    models.RoleEntity, models.ContentChunkEntity])
 
 # add your custom entities here during module registration; they will also be
 # copied from source to target during course import
@@ -82,13 +92,6 @@ ALLOWED_MATCHERS_NAMES = {review.PEER_MATCHER: messages.PEER_MATCHER_NAME}
 # Example: '2013-03-21 13:00'
 ISO_8601_DATE_FORMAT = '%Y-%m-%d %H:%M'
 
-# Whether or not individual courses are allowed to use Google APIs.
-COURSES_CAN_USE_GOOGLE_APIS = config.ConfigProperty(
-    'gcb_courses_can_use_google_apis', bool, (
-        'Whether or not courses can use Google APIs. If True, individual '
-        'courses must also be configured with API keys, etc., in order to '
-        'actually make API calls'), False)
-
 # The config key part under which course info lives.
 _CONFIG_KEY_PART_COURSE = 'course'
 # The config key part under which google info lives.
@@ -97,6 +100,8 @@ _CONFIG_KEY_PART_GOOGLE = 'google'
 _CONFIG_KEY_PART_API_KEY = 'api_key'
 # The config key part under which the client id is stored.
 _CONFIG_KEY_PART_CLIENT_ID = 'client_id'
+# The config key part under which the client secret is stored.
+_CONFIG_KEY_PART_CLIENT_SECRET = 'client_secret'
 # The key in course.yaml under which the Google API key lives.
 CONFIG_KEY_GOOGLE_API_KEY = '%s:%s:%s' % (
     _CONFIG_KEY_PART_COURSE, _CONFIG_KEY_PART_GOOGLE, _CONFIG_KEY_PART_API_KEY)
@@ -104,7 +109,9 @@ CONFIG_KEY_GOOGLE_API_KEY = '%s:%s:%s' % (
 CONFIG_KEY_GOOGLE_CLIENT_ID = '%s:%s:%s' % (
     _CONFIG_KEY_PART_COURSE, _CONFIG_KEY_PART_GOOGLE,
     _CONFIG_KEY_PART_CLIENT_ID)
-
+CONFIG_KEY_GOOGLE_CLIENT_SECRET = '%s:%s:%s' % (
+    _CONFIG_KEY_PART_COURSE, _CONFIG_KEY_PART_GOOGLE,
+    _CONFIG_KEY_PART_CLIENT_SECRET)
 
 def deep_dict_merge(*args):
     """Merges default and real value dictionaries recursively."""
@@ -142,28 +149,31 @@ with open(yaml_path) as course_template_yaml:
         course_template_yaml.read().decode('utf-8'))
 
 # Here are the defaults for a new course.
+DEFAULT_BROWSABLE = False
+DEFAULT_COURSE_NOW_AVAILABLE = False
+DEFAULT_CAN_REGISTER = False
+
 DEFAULT_COURSE_YAML_DICT = {
     'course': {
         'title': 'UNTITLED COURSE',
         'locale': 'en_US',
         'main_image': {},
-        'browsable': True,
-        'now_available': False},
+        'browsable': DEFAULT_BROWSABLE,
+        'now_available': DEFAULT_COURSE_NOW_AVAILABLE},
     'html_hooks': {},
     'preview': {},
     'unit': {},
     'reg_form': {
-        'can_register': True,
-        'allowlist': '',
+        'can_register': DEFAULT_CAN_REGISTER,
+        'whitelist': '',
         'additional_registration_fields': '',
-        }
+        },
 }
 
 # Here are the defaults for an existing course.
 DEFAULT_EXISTING_COURSE_YAML_DICT = deep_dict_merge(
     {'course': {
-        'now_available': True},
-    },
+        'now_available': True}},
     DEFAULT_COURSE_YAML_DICT)
 
 # Here is the default course.yaml for a new course.
@@ -188,7 +198,9 @@ ALLOWED_GRADERS = [AUTO_GRADER, HUMAN_GRADER]
 # Keys in unit.workflow (when it is converted to a dict).
 GRADER_KEY = 'grader'
 MATCHER_KEY = 'matcher'
+SINGLE_SUBMISSION_KEY = 'single_submission'
 SUBMISSION_DUE_DATE_KEY = 'submission_due_date'
+SHOW_FEEDBACK_KEY = 'show_feedback'
 REVIEW_DUE_DATE_KEY = 'review_due_date'
 REVIEW_MIN_COUNT_KEY = 'review_min_count'
 REVIEW_WINDOW_MINS_KEY = 'review_window_mins'
@@ -215,7 +227,7 @@ DEFAULT_AUTO_GRADER_WORKFLOW = yaml.safe_dump({
     GRADER_KEY: AUTO_GRADER
 }, default_flow_style=False)
 
-# This value is meant to be used only for the human-reviewed assessments in the
+# This value is meant to be used only for the peer-reviewed assessments in the
 # sample v1.2 Power Searching course.
 LEGACY_HUMAN_GRADER_WORKFLOW = yaml.safe_dump({
     GRADER_KEY: HUMAN_GRADER,
@@ -226,6 +238,76 @@ LEGACY_HUMAN_GRADER_WORKFLOW = yaml.safe_dump({
     REVIEW_WINDOW_MINS_KEY: DEFAULT_REVIEW_WINDOW_MINS,
     SUBMIT_ONLY_ONCE: False
 }, default_flow_style=False)
+
+# Availability policies that can be used for units and lessons.
+AVAILABILITY_AVAILABLE = 'public'
+AVAILABILITY_UNAVAILABLE = 'private'
+AVAILABILITY_COURSE = 'course'
+AVAILABILITY_VALUES = [
+    AVAILABILITY_UNAVAILABLE,
+    AVAILABILITY_COURSE,
+    AVAILABILITY_AVAILABLE,
+]
+AVAILABILITY_SELECT_DATA = [
+    (AVAILABILITY_UNAVAILABLE, 'Private'),
+    (AVAILABILITY_COURSE, 'Course'),
+    (AVAILABILITY_AVAILABLE, 'Public'),
+]
+
+
+COURSE_AVAILABILITY_VALUES = COURSE_AVAILABILITY_POLICIES.keys()
+
+COURSE_AVAILABILITY_SELECT_DATA = [
+    (k, v['title'])
+    for k, v in COURSE_AVAILABILITY_POLICIES.iteritems()]
+
+
+Displayability = collections.namedtuple(
+    'Displayability', [
+        # Whether the student can see that this item exists.  E.g., from the
+        # syllabus, is the name of the element displayed at all?  Note that
+        # this does not govern whether the current user may see the actual
+        # content of the item; here we just care about seeing the name.
+        'is_name_visible',
+
+        # Whether content of the element is available to the student.  This
+        # should also be used to govern whether a link is added to the name
+        # of the element (assuming is_name_visible is True)
+        'is_content_available',
+
+        # These items are only relevant for admin users; since admins can
+        # always see all content, we add markup to pages to indicate whether
+        # certain items are visible only because of the admin privileges
+        # (and not available to students and/or visitors)
+        'is_available_to_students',
+        'is_available_to_visitors'
+        ],
+    )
+
+BLANK_VALUES = ('', None)
+INSTITUTION_NAME_BLANK_VALUES = BLANK_VALUES + ('Add Your Institution Here',)
+INSTITUTION_URL_BLANK_VALUES = BLANK_VALUES + ('LINK_TO_YOUR_INSTITUTION_HERE',)
+PRIVACY_TERM_URL_BLANK_VALUES = (
+    BLANK_VALUES + ('PRIVACY_POLICY_AND_TERMS_OF_SERVICE',))
+SITE_NAME_BLANK_VALUES = BLANK_VALUES
+SITE_LOGO_BLANK_VALUES = BLANK_VALUES + ('assets/img/your_logo_here.png',)
+
+
+def get_setting_value(app_context, constant):
+    obj = app_context.get_environ()
+    try:
+        for segment in constant.split(':'):
+            obj = obj[segment]
+        return obj
+    except KeyError:
+        return None
+
+
+def add_deprecated_field(
+        course, group, path, title, type_, blank_values=BLANK_VALUES, **kwargs):
+    if get_setting_value(course.app_context, path) not in blank_values:
+        group.add_property(schema_fields.SchemaField(
+            path, title, type_, **kwargs))
 
 
 def copy_attributes(source, target, converter):
@@ -315,6 +397,37 @@ def has_at_least_one_old_style_activity(course):
 
 def has_only_new_style_activities(course):
     return not has_at_least_one_old_style_activity(course)
+
+def convert_now_available_to_availability(adict):
+    """For backward compatibility"""
+    for obj in adict['lessons'] + adict['units']:
+        if isinstance(obj, dict):
+            if 'now_available' in obj:
+                if obj.get('availability'):
+                    # Do not overwrite
+                    continue
+                obj['availability'] = (
+                    AVAILABILITY_COURSE if obj['now_available']
+                    else AVAILABILITY_UNAVAILABLE)
+        elif isinstance(obj, Lesson13) or isinstance(obj, Unit13):
+            if hasattr(obj, 'now_available'):
+                if hasattr(obj, 'availability') and obj.availability:
+                    # Do not overwrite
+                    continue
+                obj.availability = (AVAILABILITY_COURSE if obj.now_available
+                                    else AVAILABILITY_UNAVAILABLE)
+
+def convert_availability_to_now_available(adict):
+    """For backward compatibility"""
+    for obj in adict['lessons'] + adict['units']:
+        if isinstance(obj, dict):
+            if 'availability' in obj:
+                obj['now_available'] = obj['availability'] in (
+                    AVAILABILITY_COURSE, AVAILABILITY_AVAILABLE)
+        elif isinstance(obj, Lesson13) or isinstance(obj, Unit13):
+            if hasattr(obj, 'availability'):
+                obj.now_available = obj.availability in (
+                    AVAILABILITY_COURSE, AVAILABILITY_AVAILABLE)
 
 
 class AbstractCachedObject(object):
@@ -426,6 +539,7 @@ class AbstractCachedObject(object):
 
     def serialize(self):
         """Saves instance to a pickle representation."""
+        convert_availability_to_now_available(self.__dict__)
         return pickle.dumps(self.__dict__)
 
     def deserialize(self, binary_data):
@@ -434,6 +548,7 @@ class AbstractCachedObject(object):
         if self.version != adict.get('version'):
             raise Exception('Expected version %s, found %s.' % (
                 self.version, adict.get('version')))
+        convert_now_available_to_availability(adict)
         self.__dict__.update(adict)
 
 
@@ -517,7 +632,23 @@ class Unit12(object):
         return self.workflow.get_grader() == HUMAN_GRADER
 
     def is_custom_unit(self):
-        return None
+        return False
+
+    def is_unit(self):
+        return verify.UNIT_TYPE_UNIT == self.type
+
+    def is_link(self):
+        return verify.UNIT_TYPE_LINK == self.type
+
+    @property
+    def shown_when_unavailable(self):
+        return False
+
+    @property
+    def availability(self):
+        if self.now_available:
+            return AVAILABILITY_COURSE
+        return AVAILABILITY_UNAVAILABLE
 
 
 class Lesson12(object):
@@ -546,6 +677,14 @@ class Lesson12(object):
         return True
 
     @property
+    def shown_when_unavailable(self):
+        return False
+
+    @property
+    def availability(self):
+        return AVAILABILITY_COURSE
+
+    @property
     def auto_index(self):
         return self._auto_index
 
@@ -560,6 +699,10 @@ class Lesson12(object):
     @property
     def manual_progress(self):
         return False
+
+    @property
+    def labels(self):
+        return None
 
 
 class CachedCourse12(AbstractCachedObject):
@@ -700,6 +843,7 @@ class CourseModel12(object):
 
     def get_review_content(self, unit):
         """Returns the schema for a review form as a Python dict."""
+        # Not being used anymore
         return self._get_assessment_as_dict(
             self.get_review_filename(unit.unit_id))
 
@@ -726,6 +870,13 @@ class CourseModel12(object):
 
     def get_subunits(self, unit_id):
         return []
+    def is_unit_available(self, unit):
+        return unit.now_available
+
+    def is_lesson_available(self, unit, lesson):
+        if unit is None:
+            unit = self.find_unit_by_id(lesson.unit_id)
+        return self.is_unit_available(unit) and lesson.now_available
 
 
 class Unit13(object):
@@ -748,6 +899,9 @@ class Unit13(object):
         'custom_unit_type': None,
         'parent_unit': None,
         'enable_negative_marking': False,
+        'shown_when_unavailable': False,
+        'availability': AVAILABILITY_COURSE,
+        'shown_when_unavailable': None,
         'now_available': False,
         }
 
@@ -756,6 +910,8 @@ class Unit13(object):
         self.type = ''
         self.title = ''
         self.release_date = ''
+        self.availability = AVAILABILITY_COURSE
+        self.shown_when_unavailable = None
         self.now_available = False
 
         # custom properties
@@ -776,9 +932,13 @@ class Unit13(object):
 
         # Only valid for the unit.type == verify.UNIT_TYPE_ASSESSMENT.
         self.html_content = None
-        self.html_check_answers = False
         self.html_review_form = None
         self.enable_negative_marking = False
+
+        # Previously this was valid only for assessments. Added this option
+        # in normal units as well to allow checking of answers for questions
+        # added in lessons.
+        self.html_check_answers = False
 
         # Only valid for the unit.type == verify.UNIT_TYPE_ASSESSMENT.
         self.workflow_yaml = DEFAULT_AUTO_GRADER_WORKFLOW
@@ -830,7 +990,9 @@ class Unit13(object):
     @property
     def workflow(self):
         """Returns the workflow as an object."""
-        assert self.is_assessment() or self.is_custom_unit()
+        # TODO(rishav) Commmenting this to allow rendering of questions in
+        # lessons. Remove if all's good.
+        # assert self.is_assessment() or self.is_custom_unit()
         workflow = Workflow(self.workflow_yaml)
         return workflow
 
@@ -840,11 +1002,32 @@ class Unit13(object):
             return self._custom_unit_url
         return None
 
+    @property
+    def is_locked(self):
+        return lockdown.Lockdown.get_or_create_by_id_and_type(
+            'unit_' + self.type, self.unit_id).locked
+
+    @is_locked.setter
+    def is_locked(self, value):
+        # Set Lockdown statuses for this unit as well it's questions and
+        # question groups.
+        # TODO(implement this)
+        lockdown.Lockdown.set_for_id_and_type(
+            'unit_' + self.type, self.unit_id, value)
+
+        # For all question inside unit, lockdown.Lockdown.set_for_question_id
+
     def set_custom_unit_url(self, url):
         self._custom_unit_url = url
 
     def is_assessment(self):
         return verify.UNIT_TYPE_ASSESSMENT == self.type
+
+    def is_unit(self):
+        return verify.UNIT_TYPE_UNIT == self.type
+
+    def is_link(self):
+        return verify.UNIT_TYPE_LINK == self.type
 
     def is_custom_unit(self):
         return verify.UNIT_TYPE_CUSTOM == self.type
@@ -874,6 +1057,25 @@ class Unit13(object):
             return cu and cu.is_graded
         return False
 
+    @property
+    def now_available(self):
+        return self.availability
+
+    @now_available.setter
+    def now_available(self, value):
+        """Backward compatibility to existing settings.
+
+        This setter will be called when a course element is regenerated from
+        stored JSON, and will instead set the 'availability' enum member,
+        rather than the deprecated now_available boolean
+
+        """
+        if value:
+            self.availability = AVAILABILITY_COURSE
+        else:
+            self.availability = AVAILABILITY_UNAVAILABLE
+
+
 class Lesson13(object):
     """An object to represent a Lesson (version 1.3)."""
 
@@ -883,7 +1085,9 @@ class Lesson13(object):
         'properties': {},
         'auto_index': True,
         'manual_progress': False,
-	'now_available': False,
+        'availability': AVAILABILITY_COURSE,
+        'shown_when_unavailable': None,
+	    'now_available': False,
     }
 
     def __init__(self):
@@ -895,6 +1099,8 @@ class Lesson13(object):
         self.video = ''
         self.notes = ''
         self.duration = ''
+        self.availability = AVAILABILITY_COURSE
+        self.shown_when_unavailable = None
         self.now_available = False
         self.has_activity = False
         self.activity_title = ''
@@ -922,17 +1128,40 @@ class Lesson13(object):
         """A symbolic name to old attribute."""
         return self.has_activity
 
+    @property
+    def now_available(self):
+        return self.availability
+
+    @now_available.setter
+    def now_available(self, value):
+        """Backward compatibility to existing settings.
+
+        This setter will be called when a course element is regenerated from
+        stored JSON, and will instead set the 'availability' enum member,
+        rather than the deprecated now_available boolean
+
+        """
+        if value:
+            self.availability = AVAILABILITY_COURSE
+        else:
+            self.availability = AVAILABILITY_UNAVAILABLE
+
+    @property
+    def labels(self):
+        return None
+
 
 class PersistentCourse13(object):
     """A representation of a Course13 optimized for persistence."""
 
     COURSES_FILENAME = 'data/course.json'
 
-    def __init__(self, next_id=None, units=None, lessons=None):
+    def __init__(self, next_id=None, units=None, lessons=None, children_order=None):
         self.version = CourseModel13.VERSION
         self.next_id = next_id
         self.units = units
         self.lessons = lessons
+        self.children_order = children_order
 
     def to_dict(self):
         """Saves object attributes into a dict."""
@@ -949,7 +1178,7 @@ class PersistentCourse13(object):
         for lesson in self.lessons:
             lessons.append(transforms.instance_to_dict(lesson))
         result['lessons'] = lessons
-
+        result['children_order'] = self.children_order
         return result
 
     def _from_dict(self, adict):
@@ -979,13 +1208,14 @@ class PersistentCourse13(object):
                 transforms.dict_to_instance(
                     lesson_dict, lesson, defaults=Lesson13.DEFAULT_VALUES)
                 self.lessons.append(lesson)
+        self.children_order = adict.get('children_order')
 
     @classmethod
     def save(cls, app_context, course):
         """Saves course to datastore."""
         persistent = PersistentCourse13(
             next_id=course.next_id,
-            units=course.units, lessons=course.lessons)
+            units=course.units, lessons=course.lessons, children_order=course.children_order)
 
         fs = app_context.fs.impl
         filename = fs.physical_to_logical(cls.COURSES_FILENAME)
@@ -1003,12 +1233,13 @@ class PersistentCourse13(object):
             persistent.deserialize(stream.read())
             return CourseModel13(
                 app_context, next_id=persistent.next_id,
-                units=persistent.units, lessons=persistent.lessons)
+                units=persistent.units, lessons=persistent.lessons, children_order=persistent.children_order)
         return None
 
     def serialize(self):
         """Saves instance to a JSON representation."""
         adict = self.to_dict()
+        convert_availability_to_now_available(adict)
         json_text = transforms.dumps(adict)
         return json_text.encode('utf-8')
 
@@ -1016,6 +1247,7 @@ class PersistentCourse13(object):
         """Loads instance from a JSON representation."""
         json_text = binary_data.decode('utf-8')
         adict = transforms.loads(json_text)
+        convert_now_available_to_availability(adict)
         if self.version != adict.get('version'):
             raise Exception('Expected version %s, found %s.' % (
                 self.version, adict.get('version')))
@@ -1029,13 +1261,13 @@ class CachedCourse13(AbstractCachedObject):
 
     def __init__(
         self, next_id=None, units=None, lessons=None,
-        unit_id_to_lesson_ids=None, unit_id_to_child_unit_ids=None):
+        unit_id_to_lesson_ids=None, unit_id_to_child_unit_ids=None, children_order=None):
 
         self.version = self.VERSION
         self.next_id = next_id
         self.units = units
         self.lessons = lessons
-
+        self.children_order = children_order
         # This is almost the same as PersistentCourse13 above, but it also
         # stores additional indexes used for performance optimizations. There
         # is no need to persist these indexes in durable storage, but it is
@@ -1059,7 +1291,7 @@ class CachedCourse13(AbstractCachedObject):
             app_context, next_id=memento.next_id,
             units=memento.units, lessons=memento.lessons,
             unit_id_to_lesson_ids=memento.unit_id_to_lesson_ids,
-            unit_id_to_child_unit_ids=memento.unit_id_to_child_unit_ids)
+            unit_id_to_child_unit_ids=memento.unit_id_to_child_unit_ids, children_order = memento.children_order)
 
     @classmethod
     def memento_from_instance(cls, course):
@@ -1067,7 +1299,7 @@ class CachedCourse13(AbstractCachedObject):
             next_id=course.next_id,
             units=course.units, lessons=course.lessons,
             unit_id_to_lesson_ids=course.unit_id_to_lesson_ids,
-            unit_id_to_child_unit_ids=course.unit_id_to_child_unit_ids)
+            unit_id_to_child_unit_ids=course.unit_id_to_child_unit_ids, children_order = course.children_order)
 
 
 class CourseModel13(object):
@@ -1083,6 +1315,11 @@ class CourseModel13(object):
             course = PersistentCourse13.load(app_context)
             if course:
                 CachedCourse13.save(app_context, course)
+
+        if course:
+            # Create children order if missing
+            if (not course.children_order) and len(course.get_units()) > 0:
+                course.create_default_children_order()
         return course
 
     @classmethod
@@ -1111,7 +1348,7 @@ class CourseModel13(object):
 
     def __init__(
         self, app_context, next_id=None, units=None, lessons=None,
-        unit_id_to_lesson_ids=None, unit_id_to_child_unit_ids=None):
+        unit_id_to_lesson_ids=None, unit_id_to_child_unit_ids=None, children_order=None):
 
         # Init default values.
         self._app_context = app_context
@@ -1119,6 +1356,7 @@ class CourseModel13(object):
         self._units = []
         self._lessons = []
         self._unit_id_to_lesson_ids = {}
+        self._children_order = []
 
         # These array keep dirty object in current transaction.
         self._dirty_units = []
@@ -1138,6 +1376,9 @@ class CourseModel13(object):
             self._unit_id_to_child_unit_ids = unit_id_to_child_unit_ids
         else:
             self._index()
+        if children_order:
+            self._children_order = children_order
+
 
     @property
     def app_context(self):
@@ -1150,6 +1391,10 @@ class CourseModel13(object):
     @property
     def units(self):
         return self._units
+
+    @property
+    def children_order(self):
+        return self._children_order
 
     @property
     def lessons(self):
@@ -1203,6 +1448,25 @@ class CourseModel13(object):
     def is_dirty(self):
         """Checks if course object has been modified and needs to be saved."""
         return self._dirty_units or self._dirty_lessons
+
+    def _is_unit_or_lesson_available(self, unit_or_lesson):
+        if unit_or_lesson.availability == AVAILABILITY_AVAILABLE:
+            return True
+        elif unit_or_lesson.availability == AVAILABILITY_UNAVAILABLE:
+            return False
+        elif unit_or_lesson.availability == AVAILABILITY_COURSE:
+            return self.app_context.now_available
+        else:
+            raise ValueError('Unexpected value "%s" for unit availability; '
+                             'expected one of: %s' % (
+                                 unit_or_lesson.availability,
+                                 ' '.join(AVAILABILITY_VALUES)))
+
+    def is_unit_available(self, unit):
+        return self._is_unit_or_lesson_available(unit)
+
+    def is_lesson_available(self, unit, lesson):
+        return self._is_unit_or_lesson_available(lesson)
 
     def _flush_deleted_objects(self):
         """Delete files owned by deleted objects."""
@@ -1275,7 +1539,7 @@ class CourseModel13(object):
             if fs.isfile(path):
                 self.set_file_content(
                     filename, None, metadata_only=True,
-                    is_draft=not unit.now_available)
+                    is_draft=not self.is_unit_available(unit))
 
         # Update state of owned activities.
         for lesson in self._dirty_lessons:
@@ -1287,7 +1551,7 @@ class CourseModel13(object):
             if fs.isfile(path):
                 fs.put(
                     path, None, metadata_only=True,
-                    is_draft=not lesson.now_available)
+                    is_draft=not self.is_lesson_available(None, lesson))
 
     def save(self):
         """Saves course to datastore and memcache."""
@@ -1306,6 +1570,9 @@ class CourseModel13(object):
     def get_units(self):
         return self._units[:]
 
+    def get_children_order(self):
+        return self._children_order
+
     def get_subunits(self, unit_id):
         if self._unit_id_to_child_unit_ids == None:
             return []
@@ -1320,12 +1587,25 @@ class CourseModel13(object):
         return [x for x in self.get_units() if x.is_assessment()]
 
     def get_lessons(self, unit_id):
-        lesson_ids = self._unit_id_to_lesson_ids.get(str(unit_id))
-        lessons = []
-        if lesson_ids:
-            for lesson_id in lesson_ids:
-                lessons.append(self.find_lesson_by_id(None, lesson_id))
-        return lessons
+        if self._children_order:
+            for unit_order in self._children_order:
+                if unit_order['id'] == unit_id:
+                    lessons = []
+                    for child in unit_order['children']:
+                        if child['section'] == 'lesson':
+                            lesson = self.find_lesson_by_id(None, child['id'])
+                            if lesson:
+                                lessons.append(lesson)
+                    return lessons
+            return []
+        else:
+            # Backward compatibility
+            lesson_ids = self._unit_id_to_lesson_ids.get(str(unit_id))
+            lessons = []
+            if lesson_ids:
+                for lesson_id in lesson_ids:
+                    lessons.append(self.find_lesson_by_id(None, lesson_id))
+            return lessons
 
     def get_assessment_filename(self, unit_id):
         """Returns assessment base filename."""
@@ -1362,12 +1642,10 @@ class CourseModel13(object):
         return None
 
     def get_parent_unit(self, unit_id):
-        # See if the unit is an assessment being used as a pre/post
-        # unit lesson.
-        for unit in self.get_units():
-            if (str(unit.pre_assessment) == str(unit_id) or
-                str(unit.post_assessment) == str(unit_id)):
-                return unit
+        unit = self.find_unit_by_id(unit_id)
+        if unit and unit.parent_unit is not None:
+            return self.find_unit_by_id(unit.parent_unit)
+
 
         # Nope, no other kinds of parentage; no parent.
         return None
@@ -1384,7 +1662,10 @@ class CourseModel13(object):
         unit.type = unit_type
         unit.unit_id = self._get_next_id()
         unit.title = title
-        unit.now_available = False
+        #changing the availability AVAILABILITY_UNAVAILABLE so it wont be locked
+        #and by default its private
+        unit.availability = AVAILABILITY_UNAVAILABLE
+        unit.shown_when_unavailable = False
         if verify.UNIT_TYPE_CUSTOM == unit_type:
             unit.custom_unit_type = custom_unit_type
         unit.parent_unit = punit.unit_id if punit else None
@@ -1392,6 +1673,7 @@ class CourseModel13(object):
         self._index()
 
         self._dirty_units.append(unit)
+        self.update_children_order_for_addition(unit.unit_id ,unit.parent_unit , 'sub_unit')
         return unit
 
     def add_lesson(self, unit, title):
@@ -1403,13 +1685,66 @@ class CourseModel13(object):
         lesson.lesson_id = self._get_next_id()
         lesson.unit_id = unit.unit_id
         lesson.title = title
-        lesson.now_available = False
+        lesson.availability = AVAILABILITY_COURSE
+        lesson.shown_when_unavailable = False
 
         self._lessons.append(lesson)
         self._index()
 
         self._dirty_lessons.append(lesson)
+        self.update_children_order_for_addition(lesson.lesson_id, unit.unit_id, 'lesson')
         return lesson
+
+    #this is for backup compatibility. Because we dont have this for existing
+    def create_default_children_order(self):
+        self._children_order = []
+        for unit in self.get_units():
+            item = {'id':unit.unit_id, 'children':[]}
+            lessons = self.get_lessons(unit.unit_id)
+            for lesson in lessons:
+                child_lesson = {'id':lesson.lesson_id, 'section':'lesson', 'children':[]}
+                item['children'].append(child_lesson)
+
+            sub_units =  self.get_subunits(unit.unit_id)
+            for sub_unit in sub_units:
+                child_unit = {'id':sub_unit.unit_id, 'section':'sub_unit', 'children':[]}
+                item['children'].append(child_unit)
+
+            self._children_order.append(item)
+
+    def update_children_order_for_addition(self, child_id, parent_id, section):
+        if not self.children_order and len(self.get_units()) > 1:
+            self.create_default_children_order()
+
+        if parent_id is None:
+            #add at the top level
+            child = {'id':child_id, 'children':[]}
+            self.children_order.append(child)
+        else:
+            #fid the parent and it as its child
+            for item in self.children_order:
+                if item['id'] == parent_id:
+                    child = {'id':child_id,'section':section, 'children':[]}
+                    if item['children'] is None:
+                        item['children'] = []
+                    item['children'].append(child)
+                    add_as_child = True
+                    break
+
+
+    def update_children_order_for_deletion(self, child_id, parent_id, section):
+        if not self.children_order and len(self.get_units()) > 1:
+            self.create_default_children_order()
+
+        for item in self.children_order:
+            if item['id'] == child_id:
+                self.children_order.remove(item)
+
+            if str(item['id']) == parent_id:
+                children = item['children']
+                for child in children:
+                    if child['id'] == child_id:
+                        children.remove(child)
 
     def move_lesson_to(self, lesson, unit):
         """Moves a lesson to another unit."""
@@ -1468,6 +1803,7 @@ class CourseModel13(object):
         self._index()
         self._deleted_lessons.append(lesson)
         self._dirty_lessons.append(lesson)
+        self.update_children_order_for_deletion(lesson.lesson_id, lesson.unit_id, 'lesson')
         return True
 
     def delete_unit(self, unit):
@@ -1475,19 +1811,16 @@ class CourseModel13(object):
         unit = self.find_unit_by_id(unit.unit_id)
         if not unit:
             return False
-        for lesson in self.get_lessons(unit.unit_id):
-            self.delete_lesson(lesson)
-        parent = self.get_parent_unit(unit.unit_id)
-        if parent:
-            if parent.pre_assessment == unit.unit_id:
-                parent.pre_assessment = None
-            if parent.post_assessment == unit.unit_id:
-                parent.post_assessment = None
-            self._dirty_units.append(parent)
+        if len(self.get_lessons(unit.unit_id)):
+            return False
+        if len(self.get_subunits(unit.unit_id)):
+            return False
+
         self._units.remove(unit)
         self._index()
         self._deleted_units.append(unit)
         self._dirty_units.append(unit)
+        self.update_children_order_for_deletion(unit.unit_id ,unit.parent_unit , 'sub_unit')
         return True
 
     def update_unit(self, unit):
@@ -1497,10 +1830,9 @@ class CourseModel13(object):
             return False
         existing_unit.title = unit.title
         existing_unit.release_date = unit.release_date
-        existing_unit.now_available = unit.now_available
+        existing_unit.availability = unit.availability
+        existing_unit.shown_when_unavailable = unit.shown_when_unavailable
         existing_unit.labels = unit.labels
-        existing_unit.pre_assessment = unit.pre_assessment
-        existing_unit.post_assessment = unit.post_assessment
         existing_unit.show_contents_on_one_page = unit.show_contents_on_one_page
         existing_unit.manual_progress = unit.manual_progress
         existing_unit.description = unit.description
@@ -1508,7 +1840,9 @@ class CourseModel13(object):
         existing_unit.unit_footer = unit.unit_footer
         existing_unit.properties = unit.properties
         existing_unit.custom_unit_type = unit.custom_unit_type
-        existing_unit.parent_unit = unit.parent_unit
+        existing_unit.html_check_answers = unit.html_check_answers
+        if unit.parent_unit:
+            existing_unit.parent_unit = unit.parent_unit
 
         if verify.UNIT_TYPE_LINK == existing_unit.type:
             existing_unit.href = unit.href
@@ -1516,7 +1850,6 @@ class CourseModel13(object):
         if existing_unit.is_assessment() or existing_unit.is_custom_unit():
             existing_unit.weight = unit.weight
             existing_unit.html_content = unit.html_content
-            existing_unit.html_check_answers = unit.html_check_answers
             existing_unit.html_review_form = unit.html_review_form
             existing_unit.workflow_yaml = unit.workflow_yaml
             existing_unit.enable_negative_marking = unit.enable_negative_marking
@@ -1537,7 +1870,8 @@ class CourseModel13(object):
         existing_lesson.video = lesson.video
         existing_lesson.notes = lesson.notes
         existing_lesson.duration = lesson.duration
-        existing_lesson.now_available = lesson.now_available
+        existing_lesson.availability = lesson.availability
+        existing_lesson.shown_when_unavailable = lesson.shown_when_unavailable
         existing_lesson.has_actvity = lesson.has_activity
         existing_lesson.activity_title = lesson.activity_title
         existing_lesson.activity_listed = lesson.activity_listed
@@ -1557,9 +1891,9 @@ class CourseModel13(object):
             order_data: list of dict. Format is
                 The order_data is in the following format:
                 [
-                    {'id': 0, 'lessons': [{'id': 0}, {'id': 1}, {'id': 2}]},
+                    {'id': 0, 'children': [{'id': 0, 'title':'', ''section':'sub_unit'}, {'id': 1, 'title':'', ''section':'lesson'}, {'id': 2, 'title':'', ''section':'lesson'}]},
                     {'id': 1},
-                    {'id': 2, 'lessons': [{'id': 0}, {'id': 1}]}
+                    {'id': 2, 'children': [{'id': 0, 'title':'', ''section':'lesson'}]}
                     ...
                 ]
         """
@@ -1582,15 +1916,22 @@ class CourseModel13(object):
             assert unit
             if verify.UNIT_TYPE_UNIT != unit.type:
                 continue
-            for lesson_data in unit_data['lessons']:
-                lesson_id = lesson_data['id']
-                lesson = self.find_lesson_by_id(None, lesson_id)
-                lesson.unit_id = unit_id
-                reordered_lessons.append(lesson)
-                lesson_ids.add((unit_id, lesson_id))
+            for child_data in unit_data['children']:
+                if child_data['section'] == 'sub_unit':
+                    #child is a subnode
+                    child_unit_id = child_data['id']
+                    child_unit = self.find_unit_by_id(child_unit_id)
+                    child_unit.parent_unit = unit_id
+                else:
+                    #child is a lesson
+                    lesson_id = child_data['id']
+                    lesson = self.find_lesson_by_id(None, lesson_id)
+                    lesson.unit_id = unit_id
+                    reordered_lessons.append(lesson)
+                    lesson_ids.add((unit_id, lesson_id))
         assert len(lesson_ids) == len(self._lessons)
         self._lessons = reordered_lessons
-
+        self._children_order = order_data
         self._index()
 
     def _get_file_content_as_dict(self, filename):
@@ -1610,6 +1951,7 @@ class CourseModel13(object):
 
     def get_review_content(self, unit):
         """Returns the schema for a review form as a Python dict."""
+        # Not being used anymore
         return self._get_file_content_as_dict(
             self.get_review_filename(unit.unit_id))
 
@@ -1651,7 +1993,7 @@ class CourseModel13(object):
 
         self.set_file_content(
             dest_filename, vfs.string_to_stream(assessment_content),
-            is_draft=not unit.now_available)
+            is_draft=not self.is_unit_available(unit))
 
     def set_assessment_content(self, unit, assessment_content, errors=None):
         """Updates the content of an assessment."""
@@ -1699,8 +2041,9 @@ class CourseModel13(object):
                 root_name, ex.message or ''))
             return
 
-        self.set_file_content(filename, vfs.string_to_stream(activity_content),
-                               is_draft=not lesson.now_available)
+        self.set_file_content(
+            filename, vfs.string_to_stream(activity_content),
+            is_draft=not self.is_lesson_available(None, lesson))
 
     def import_from(self, src_course, errors):
         """Imports a content of another course into this course."""
@@ -1733,8 +2076,7 @@ class CourseModel13(object):
 
             # prepare all the dtos for the questions in the assignment content
             question_dtos = QuestionImporter.build_question_dtos(
-                assessment, 'Imported from assessment "%s" (question #%s)',
-                dst_unit, errors)
+                assessment, '%s - Question #%s', dst_unit, errors)
             if question_dtos is None:
                 return False
 
@@ -1748,8 +2090,7 @@ class CourseModel13(object):
                 if review_dict.get('preamble'):
                     html_review_form.append(review_dict['preamble'])
                     review_dtos = QuestionImporter.build_question_dtos(
-                        review_dict,
-                        'Imported from assessment "%s" (review question #%s)',
+                        review_dict, '%s - Review question #%s',
                         dst_unit, errors)
                     if review_dtos is None:
                         return False
@@ -1784,7 +2125,8 @@ class CourseModel13(object):
             assert dst_unit.type == src_unit.type
 
             dst_unit.release_date = src_unit.release_date
-            dst_unit.now_available = src_unit.now_available
+            dst_unit.availability = src_unit.availability
+            dst_unit.shown_when_unavailable = src_unit.shown_when_unavailable
 
             if verify.UNIT_TYPE_LINK == dst_unit.type:
                 dst_unit.href = src_unit.href
@@ -1796,7 +2138,8 @@ class CourseModel13(object):
         def copy_unit13_into_unit13(src_unit, dst_unit, src_course, errors):
             """Copies unit13 attributes to a new unit."""
             dst_unit.release_date = src_unit.release_date
-            dst_unit.now_available = src_unit.now_available
+            dst_unit.availability = src_unit.availability
+            dst_unit.shown_when_unavailable = src_unit.shown_when_unavailable
             dst_unit.workflow_yaml = src_unit.workflow_yaml
 
             if dst_unit.is_assessment():
@@ -1807,8 +2150,10 @@ class CourseModel13(object):
                     dst_unit.properties = copy.deepcopy(src_unit.properties)
                     dst_unit.weight = src_unit.weight
                     dst_unit.html_content = src_unit.html_content
-                    dst_unit.html_check_answers = src_unit.html_check_answers
                     dst_unit.html_review_form = src_unit.html_review_form
+
+            if hasattr(src_unit, 'html_check_answers'):
+                dst_unit.html_check_answers = bool(src_unit.html_check_answers)
 
         def import_lesson12_activities(
                 text, unit, lesson_w_activity, lesson_title, errors):
@@ -1877,14 +2222,15 @@ class CourseModel13(object):
             return True
 
         def copy_to_lesson_13(
-                src_unit, src_lesson, dst_unit, dst_lesson, now_available,
-                errors):
+                src_unit, src_lesson, dst_unit, dst_lesson, availability,
+                shown_when_unavailable, errors):
             dst_lesson.objectives = src_lesson.objectives
             dst_lesson.video = src_lesson.video
             dst_lesson.notes = src_lesson.notes
             dst_lesson.duration = src_lesson.duration
             dst_lesson.activity_listed = False
-            dst_lesson.now_available = now_available
+            dst_lesson.availability = availability
+            dst_lesson.shown_when_unavailable = shown_when_unavailable
 
             # Copy over the activity. Note that we copy files directly and
             # avoid all logical validations of their content. This is done for a
@@ -1898,7 +2244,9 @@ class CourseModel13(object):
                 lesson_w_activity = self.add_lesson(dst_unit, title)
                 lesson_w_activity.auto_index = False
                 lesson_w_activity.activity_listed = False
-                lesson_w_activity.now_available = now_available
+                lesson_w_activity.availability = availability
+                lesson_w_activity.shown_when_unavailable = (
+                    shown_when_unavailable)
                 src_filename = os.path.join(
                     src_course.app_context.get_home(),
                     src_course.get_activity_filename(
@@ -1912,50 +2260,38 @@ class CourseModel13(object):
         def copy_lesson12_into_lesson13(
                 src_unit, src_lesson, dst_unit, dst_lesson, errors):
             copy_to_lesson_13(
-                src_unit, src_lesson, dst_unit, dst_lesson, True, errors)
-            dst_lesson.now_available = True
+                src_unit, src_lesson, dst_unit, dst_lesson,
+                AVAILABILITY_COURSE, False, errors)
 
         def copy_lesson13_into_lesson13(
                 src_unit, src_lesson, dst_unit, dst_lesson, errors):
             copy_to_lesson_13(
                 src_unit, src_lesson, dst_unit, dst_lesson,
-                src_lesson.now_available, errors)
-            dst_lesson.now_available = src_lesson.now_available
+                src_lesson.availability, src_lesson.shown_when_unavailable,
+                errors)
             dst_lesson.scored = src_lesson.scored
             dst_lesson.properties = src_lesson.properties
 
         def _copy_entities_between_namespaces(entity_types, from_ns, to_ns):
             """Copies entities between different namespaces."""
 
-            def _mapper_func(entity, unused_ns):
-                _add_entity_instance_to_a_namespace(
-                    to_ns, entity.__class__, entity.key().id_or_name(),
-                    entity.data)
-
-            old_namespace = namespace_manager.get_namespace()
-            try:
-                namespace_manager.set_namespace(from_ns)
-                for _entity_class in entity_types:
+            with common_utils.Namespace(from_ns):
+                for entity_class in entity_types:
                     mapper = utils.QueryMapper(
-                        _entity_class.all(), batch_size=DEFAULT_FETCH_LIMIT,
+                        entity_class.all(), batch_size=DEFAULT_FETCH_LIMIT,
                         report_every=0)
-                    mapper.run(_mapper_func, from_ns)
-            finally:
-                namespace_manager.set_namespace(old_namespace)
+                    mapper.run(_add_entity_instance_to_a_namespace,
+                               entity_class, to_ns)
 
-        def _add_entity_instance_to_a_namespace(
-                ns, entity_class, _id_or_name, data):
+        def _add_entity_instance_to_a_namespace(entity, entity_class, to_ns):
             """Add new entity to the datastore of and a given namespace."""
-            old_namespace = namespace_manager.get_namespace()
-            try:
-                namespace_manager.set_namespace(ns)
-
-                new_key = db.Key.from_path(entity_class.__name__, _id_or_name)
-                new_instance = entity_class(key=new_key)
-                new_instance.data = data
-                new_instance.put()
-            finally:
-                namespace_manager.set_namespace(old_namespace)
+            with common_utils.Namespace(to_ns):
+                new_key = db.Key.from_path(
+                    entity_class.kind(), entity.key().id_or_name())
+                kwargs = {}
+                for prop_name, prop in entity_class.properties().iteritems():
+                    kwargs[prop_name] = prop.get_value_for_datastore(entity)
+                entity_class(key=new_key, **kwargs).put()
 
         def copy_unit(unit, punit, src_course, errors):
             new_unit = self.add_unit(
@@ -1998,7 +2334,7 @@ class CourseModel13(object):
             return None, None
 
         # iterate over course structure and assets and import each item
-        with Namespace(self.app_context.get_namespace_name()):
+        with common_utils.Namespace(self.app_context.get_namespace_name()):
             for unit in src_course.get_units():
                 # import unit
                 if unit.parent_unit:
@@ -2083,11 +2419,17 @@ class Workflow(object):
     def get_matcher(self):
         return self.to_dict().get(MATCHER_KEY)
 
+    def is_single_submission(self):
+        return self.to_dict().get(SINGLE_SUBMISSION_KEY, False)
+
     def get_submission_due_date(self):
         date_str = self.to_dict().get(SUBMISSION_DUE_DATE_KEY)
         if date_str is None:
             return None
         return self._convert_date_string_to_datetime(date_str)
+
+    def show_feedback(self):
+        return self.to_dict().get(SHOW_FEEDBACK_KEY, False)
 
     def get_review_due_date(self):
         date_str = self.to_dict().get(REVIEW_DUE_DATE_KEY)
@@ -2156,7 +2498,7 @@ class Workflow(object):
                         missing_keys.append(key)
 
                 assert not missing_keys, (
-                    'missing key(s) for a human-reviewed assessment: %s.' %
+                    'missing key(s) for a peer-reviewed assessment: %s.' %
                     ', '.join(missing_keys))
 
                 if (workflow_dict[MATCHER_KEY] not in
@@ -2216,6 +2558,24 @@ class Course(object):
     # object, which will be added to the appropriate subsection.
     OPTIONS_SCHEMA_PROVIDERS = collections.defaultdict(list)
 
+    # Use this to set a human-readable name for a schema provider in the dict
+    # above.  Otherwise the name will be derived from the key.  This dict uses
+    # the same keys as above.
+    SCHEMA_SECTION_COURSE = 'homepage'
+    SCHEMA_SECTION_REGISTRATION = 'registration'
+    SCHEMA_SECTION_UNITS_AND_LESSONS = 'unit'
+    SCHEMA_SECTION_ASSESSMENT = 'assessment'
+    SCHEMA_SECTION_I18N = 'i18n'
+    SCHEMA_SECTION_FORUMS = 'forums'
+    OPTIONS_SCHEMA_PROVIDER_TITLES = {
+        SCHEMA_SECTION_COURSE: 'Course',
+        SCHEMA_SECTION_REGISTRATION: 'Registration',
+        SCHEMA_SECTION_UNITS_AND_LESSONS: 'Units & lessons',
+        SCHEMA_SECTION_ASSESSMENT: 'Assessments',
+        SCHEMA_SECTION_I18N: 'Translations',
+        SCHEMA_SECTION_FORUMS: 'Forums',
+    }
+
     # Holds callback functions which are passed the course object after it it
     # loaded, to perform any further processing on loaded course data. An
     # instance of the newly created course is passed into each of the hook
@@ -2223,8 +2583,25 @@ class Course(object):
     POST_LOAD_HOOKS = []
 
     # Holds callback functions which are passed the course env dict after it is
-    # loaded, to perform any further processing on it.
+    # loaded, to perform any further processing on it.  This is for applying
+    # environment modifications based on entities that are too large to
+    # reasonably cache.  When adding an item to this list, you should also
+    # modify the code of get_environ() to add something to the cache key
+    # to discriminate among your use cases.  NOTE: This will produce a
+    # combinatorial explosion in the number of cache entries; use this
+    # with caution.
     COURSE_ENV_POST_LOAD_HOOKS = []
+
+    # Callbacks used after cloning cached copy of environment for returning to
+    # callers.  Allows processing using entities which are, themselves,
+    # cache-able.  These hooks apply each time the env is cloned, and so do
+    # not contribute to an explosion of versions of env in caches.
+    #
+    # Callbacks are passed:
+    # - the current application context
+    # - the environment dict, which should be modified in place.
+    # Return values from callbacks are ignored.
+    COURSE_ENV_POST_COPY_HOOKS = []
 
     # Holds callback functions which are passed the course env dict after it is
     # saved.
@@ -2233,13 +2610,17 @@ class Course(object):
     # Data which is patched onto the course environment - for testing use only.
     ENVIRON_TEST_OVERRIDES = {}
 
-    SCHEMA_SECTION_COURSE = 'course'
-    SCHEMA_SECTION_HOMEPAGE = 'homepage'
-    SCHEMA_SECTION_REGISTRATION = 'registration'
-    SCHEMA_SECTION_UNITS_AND_LESSONS = 'unit'
-    SCHEMA_SECTION_ASSESSMENT = 'assessment'
-    SCHEMA_SECTION_ASSESSMENT_REPORTING = 'assessment_reporting'
-    SCHEMA_SECTION_I18N = 'i18n'
+    # Callback functions for modifying course content elements (units and
+    # lessons) when these are cloned in 'get_track_matching_student()'.
+    # Parameters are:
+    # - The current course
+    # - The Student object - may be a real Student, TransientStudent or None
+    # - List of units (possibly empty, but non-None)
+    # - List of lessons (possibly empty, but non-None)
+    # Hooks are expected to modify the units and lessons in place.  Any
+    # modifications are allowed, since these do not affect the official cached
+    # or stored copies.
+    COURSE_ELEMENT_STUDENT_VIEW_HOOKS = []
 
     SCHEMA_LOCALE_AVAILABILITY = 'availability'
     SCHEMA_LOCALE_AVAILABILITY_AVAILABLE = 'available'
@@ -2253,12 +2634,11 @@ class Course(object):
     def get_schema_sections(cls):
         ret = set([
             cls.SCHEMA_SECTION_COURSE,
-            cls.SCHEMA_SECTION_HOMEPAGE,
             cls.SCHEMA_SECTION_REGISTRATION,
             cls.SCHEMA_SECTION_UNITS_AND_LESSONS,
             cls.SCHEMA_SECTION_ASSESSMENT,
-            cls.SCHEMA_SECTION_ASSESSMENT_REPORTING,
             cls.SCHEMA_SECTION_I18N,
+            cls.SCHEMA_SECTION_FORUMS,
             ])
         for name in cls.OPTIONS_SCHEMA_PROVIDERS:
             ret.add(name)
@@ -2271,6 +2651,34 @@ class Course(object):
             os.environ.get('CURRENT_VERSION_ID'), locale)
 
     @classmethod
+    def _run_env_post_copy_hooks(cls, app_context, env):
+        env = copy.deepcopy(env)
+
+        # Monkey patch to defend against infinite recursion. Downstream
+        # calls do not reload the env but just return the copy we have here.
+        old_get_environ = cls.get_environ
+        try:
+            cls.get_environ = classmethod(lambda cl, ac: env)
+            common_utils.run_hooks(
+                cls.COURSE_ENV_POST_COPY_HOOKS, app_context, env)
+        finally:
+            # Restore the original method from monkey-patch
+            cls.get_environ = old_get_environ
+        return env
+
+    @classmethod
+    def _run_env_post_load_hooks(cls, env):
+        old_get_environ = cls.get_environ
+        try:
+            cls.get_environ = classmethod(lambda cl, ac: env)
+            common_utils.run_hooks(
+                cls.COURSE_ENV_POST_LOAD_HOOKS, env)
+        finally:
+            # Restore the original method from monkey-patch
+            cls.get_environ = old_get_environ
+
+
+    @classmethod
     def get_environ(cls, app_context):
         """Returns currently defined course settings as a dictionary."""
         # pylint: disable=protected-access
@@ -2278,7 +2686,7 @@ class Course(object):
         # get from local cache
         env = app_context._cached_environ
         if env:
-            return copy.deepcopy(env)
+            return cls._run_env_post_copy_hooks(app_context, env)
 
         # get from global cache
         _locale = app_context.get_current_locale()
@@ -2286,33 +2694,25 @@ class Course(object):
         env = models.MemcacheManager.get(
             _key, namespace=app_context.get_namespace_name())
         if env:
-            return env
+            # put into local cache
+            app_context._cached_environ = env
+            return cls._run_env_post_copy_hooks(app_context, env)
 
         models.MemcacheManager.begin_readonly()
         try:
             # get from datastore
             env = cls._load_environ(app_context)
+            cls._run_env_post_load_hooks(env)
 
-            # Monkey patch to defend against infinite recursion. Downstream
-            # calls do not reload the env but just return the copy we have here.
-            old_get_environ = cls.get_environ
-            cls.get_environ = classmethod(lambda cl, ac: env)
-            try:
-                # run hooks
-                for hook in cls.COURSE_ENV_POST_LOAD_HOOKS:
-                    hook(env)
-
-                # put into local and global cache
-                app_context._cached_environ = env
-                models.MemcacheManager.set(
-                    _key, env, namespace=app_context.get_namespace_name())
-            finally:
-                # Restore the original method from monkey-patch
-                cls.get_environ = old_get_environ
+            # put into local and global cache
+            app_context._cached_environ = env
+            models.MemcacheManager.set(
+                _key, env, namespace=app_context.get_namespace_name())
         finally:
             models.MemcacheManager.end_readonly()
 
-        return copy.deepcopy(env)
+        return cls._run_env_post_copy_hooks(app_context, env)
+
 
     @classmethod
     def _load_environ(cls, app_context):
@@ -2338,283 +2738,342 @@ class Course(object):
             DEFAULT_EXISTING_COURSE_YAML_DICT, COURSE_TEMPLATE_DICT)
 
     @classmethod
-    def create_base_settings_schema(cls):
-        """Create the registry for course properties."""
+    def create_forum_settings_schema(cls, reg):
+        opts = reg.add_sub_registry(
+            Course.SCHEMA_SECTION_FORUMS,
+            Course.get_schema_section_title(Course.SCHEMA_SECTION_FORUMS),
+            extra_schema_dict_values={
+                'className': 'inputEx-Group hidden-header'
+            })
 
-        reg = schema_fields.FieldRegistry('Course Settings',
-            description='Course Settings', extra_schema_dict_values={
-                'className': 'inputEx-Group new-form-layout'})
+        opts.add_property(schema_fields.SchemaField(
+            'course:forum_email', 'Google Group Email', 'string', optional=True,
+            description='This is the email address of the Google Group forum '
+            'for this course. It can be at googlegroups.com or at your own '
+            'domain, but must correspond to a Google Group.', i18n=True))
+	opts.add_property(schema_fields.SchemaField(
+	    'course:auto_subscribe_to_forum',
+	    'Automatically Subscribe to Forum', 'boolean'))
+        return opts
 
-        course_opts = reg.add_sub_registry(
-            Course.SCHEMA_SECTION_COURSE, 'Course')
-        course_opts.add_property(schema_fields.SchemaField(
-            'course:now_available', 'Availability', 'boolean',
-            description='Make the course available to students.'))
-        course_opts.add_property(schema_fields.SchemaField(
+    @classmethod
+    def create_course_settings_schema(cls, reg, course):
+        opts = reg.add_sub_registry(
+            Course.SCHEMA_SECTION_COURSE,
+            Course.get_schema_section_title(Course.SCHEMA_SECTION_COURSE),
+            extra_schema_dict_values={
+                'className': 'inputEx-Group hidden-header'
+            })
+
+        add_deprecated_field(
+            course, opts, 'institution:name', 'Organization Name', 'string',
+            blank_values=INSTITUTION_NAME_BLANK_VALUES,
+            description=messages.ORGANIZATION_NAME_DESCRIPTION,
+            optional=True)
+        add_deprecated_field(
+            course, opts, 'institution:url', 'Organization URL', 'string',
+            blank_values=INSTITUTION_URL_BLANK_VALUES,
+            description=messages.ORGANIZATION_URL_DESCRIPTION,
+            extra_schema_dict_values={'_type': 'url', 'showMsg': True},
+            optional=True)
+
+        add_deprecated_field(
+            course, opts, 'base:privacy_terms_url', 'Privacy & Terms URL',
+            'string',
+            description=messages.HOMEPAGE_PRIVACY_URL_DESCRIPTION,
+            extra_schema_dict_values={'_type': 'url', 'showMsg': True},
+            optional=True)
+
+        add_deprecated_field(
+            course, opts, 'base:nav_header', 'Site Name', 'string',
+            blank_values=SITE_NAME_BLANK_VALUES,
+            description=messages.SITE_NAME_DESCRIPTION,
+            optional=True)
+        add_deprecated_field(
+            course, opts, 'institution:logo:url', 'Site Logo', 'string',
+            blank_values=SITE_LOGO_BLANK_VALUES,
+            description=messages.SITE_LOGO_DESCRIPTION,
+            extra_schema_dict_values={'_type': 'url', 'showMsg': True},
+            optional=True)
+        add_deprecated_field(
+            course, opts, 'institution:logo:alt_text', 'Site Logo Description',
+            'string',
+            description=messages.SITE_LOGO_DESCRIPTION_DESCRIPTION,
+            optional=True)
+
+        opts.add_property(schema_fields.SchemaField(
+            'course:title', 'Title', 'string',
+            description=messages.HOMEPAGE_TITLE_DESCRIPTION))
+
+        opts.add_property(schema_fields.SchemaField(
+            '_reserved:context_path', 'URL Component', 'uneditable',
+            description=messages.COURSE_URL_COMPONENT_DESCRIPTION,
+            optional=True))
+        opts.add_property(schema_fields.SchemaField(
+            '_reserved:namespace', 'Namespace', 'uneditable',
+            description=messages.COURSE_NAMESPACE_DESCRIPTION,
+            optional=True))
+
+        opts.add_property(schema_fields.SchemaField(
+            'course:admin_user_emails', 'Admin Emails', 'string',
+            description=messages.COURSE_ADMIN_EMAILS_DESCRIPTION, i18n=False,
+            optional=True))
+
+        opts.add_property(schema_fields.SchemaField(
+            # Note: Not directly user-editable; now controlled as part of a
+            # cluster of settings from modules/courses/availability.py
             'course:browsable', 'Make Course Browsable', 'boolean',
-            description='Allow non-registered users to view course content.'))
-        course_opts.add_property(schema_fields.SchemaField(
-            'course:admin_user_emails', 'Course Admin Emails', 'string',
-            i18n=False,
-            description='A list of email addresses of course administrators.  '
-            'Syntax: Entries may be separated with any combination of '
-            'tabs, spaces, commas, or newlines.  Existing values using "[" and '
-            '"]" around email addresses continues to be supported.  '
-            'Regular expressions are not supported.'))
-        course_opts.add_property(schema_fields.SchemaField(
-            'course:forum_email', 'Forum Email', 'string', optional=True,
-            description='Email for the forum, e.g. '
-            '\'My-Course@googlegroups.com\'.', i18n=False))
-        course_opts.add_property(SchemaField(
+            description='Allow non-registered users to view course content.',
+            optional=True, hidden=True, editable=False, i18n=False))
+
+        opts.add_property(SchemaField(
             'course:closed', 'Course Closed', 'boolean',
             description='Is the course closed'))
-        course_opts.add_property(
-            SchemaField(
-                'course:auto_subscribe_to_forum',
-                'Automatically Subscribe to Forum', 'boolean'))
 
-        course_opts.add_property(schema_fields.SchemaField(
+        opts.add_property(schema_fields.SchemaField(
             'course:forum_embed_url', 'Forum URL for embedding', 'string',
             optional=True, description='URL for the forum &lt;iframe&gt;.'))
-        course_opts.add_property(schema_fields.SchemaField(
+        opts.add_property(schema_fields.SchemaField(
             'course:forum_url', 'Forum URL', 'string', optional=True,
             description='URL for the forum.'))
-        course_opts.add_property(schema_fields.SchemaField(
+        opts.add_property(schema_fields.SchemaField(
             'course:announcement_list_url', 'Announcement List URL',
             'string', optional=True, description='URL for the mailing list '
             'where students can register to receive course announcements.'))
-        course_opts.add_property(schema_fields.SchemaField(
+        opts.add_property(schema_fields.SchemaField(
             'course:announcement_list_email', 'Announcement List Email',
             'string', optional=True, description='Email for the mailing list '
             'where students can register to receive course announcements, e.g. '
             '\'My-Course-Announce@googlegroups.com\'', i18n=False))
-        course_opts.add_property(schema_fields.SchemaField(
+        opts.add_property(schema_fields.SchemaField(
             'course:start_date', 'Course Start Date', 'string', optional=True,
-            i18n=False))
-        course_opts.add_property(schema_fields.SchemaField(
-            'course:google_analytics_id', 'ID for Google Analytics', 'string',
-            optional=True, i18n=False,
-            description='This ID tells Google Analytics who is '
-            'calling, and allows it to string together routes that visitors '
-            'take through pages.  Obtain this ID by signing up at '
-            'http://www.google.com/analytics'))
-        course_opts.add_property(schema_fields.SchemaField(
-            'course:google_tag_manager_id', 'ID for Google Tag Manager',
-            'string', optional=True, i18n=False,
-            description='This ID tells Google Tag '
-            'Manager who is calling.  This allows the Tag Manager to notify '
-            'other site use tracking services what users are doing on the '
-            'site.  Obtain this ID by signing up at '
-            'http://www.google.com/tagmanager'))
-
-        homepage_opts = reg.add_sub_registry(
-            Course.SCHEMA_SECTION_HOMEPAGE, 'Homepage')
-        homepage_opts.add_property(schema_fields.SchemaField(
-            'base:show_gplus_button', 'Show G+ Button', 'boolean',
-            optional=True, description='Whether to show a G+ button on the '
-            'header of all pages.'))
-        homepage_opts.add_property(schema_fields.SchemaField(
-            'base:nav_header', 'Organization Name', 'string',
-            optional=True,
-            description='Header phrase for the main navigation bar'))
-        homepage_opts.add_property(schema_fields.SchemaField(
-            'course:title', 'Course Name', 'string'))
-        homepage_opts.add_property(schema_fields.SchemaField(
-            'course:blurb', 'Course Abstract', 'html', optional=True,
-            description='Text, shown on the course homepage, that explains '
-            'what the course is about.',
+            i18n=False, extra_schema_dict_values={
+                'disabled': True
+            }))
+        opts.add_property(schema_fields.SchemaField(
+            'course:blurb', 'Abstract', 'html',
+            description=messages.HOMEPAGE_ABSTRACT_DESCRIPTION,
             extra_schema_dict_values={
                 'supportCustomTags': common.tags.CAN_USE_DYNAMIC_TAGS.value,
                 'excludedCustomTags':
-                common.tags.EditorDenylists.COURSE_SCOPE}))
-        homepage_opts.add_property(schema_fields.SchemaField(
-            'course:instructor_details', 'Instructor Details', 'html',
+                common.tags.EditorBlacklists.COURSE_SCOPE},
             optional=True))
-        homepage_opts.add_property(schema_fields.SchemaField(
+        opts.add_property(schema_fields.SchemaField(
+            'course:instructor_details', 'Instructor Details', 'html',
+            description=messages.HOMEPAGE_INSTRUCTOR_DETAILS_DESCRIPTION,
+            extra_schema_dict_values={
+                'supportCustomTags': common.tags.CAN_USE_DYNAMIC_TAGS.value,
+                'excludedCustomTags':
+                common.tags.EditorBlacklists.COURSE_SCOPE},
+            optional=True))
+        opts.add_property(schema_fields.SchemaField(
             'course:extra_info', 'Extra Course Info', 'html', optional=True,
             description='Text, shown on the course homepage, after the Instructor '
             'details ',
             extra_schema_dict_values={
                 'supportCustomTags': common.tags.CAN_USE_DYNAMIC_TAGS.value,
                 'excludedCustomTags':
-                common.tags.EditorDenylists.COURSE_SCOPE}))
-        homepage_opts.add_property(schema_fields.SchemaField(
-            'course:main_video:url', 'Course Video', 'url', optional=True,
-            description='URL for the preview video shown on the course '
-            'homepage (e.g. https://www.youtube.com/embed/Kdg2drcUjYI ).'))
-        homepage_opts.add_property(schema_fields.SchemaField(
-            'course:main_image:url', 'Course Image', 'string', optional=True,
-            description='URL for the preview image shown on the course '
-            'homepage. This will only be shown if no course video is '
-            'specified.'))
-        homepage_opts.add_property(schema_fields.SchemaField(
-            'course:main_image:alt_text', 'Alternate Text', 'string',
-            optional=True,
-            description='Alt text for the preview image on the course '
-            'homepage.'))
-        homepage_opts.add_property(schema_fields.SchemaField(
-            'base:privacy_terms_url', 'Privacy Terms URL', 'string',
-            optional=True, description='Link to your privacy policy '
-            'and terms of service'))
-        registration_opts = reg.add_sub_registry(
-            Course.SCHEMA_SECTION_REGISTRATION, 'Registration')
-#        registration_opts.add_property(schema_fields.SchemaField(
-#            'reg_form:can_register', 'Enable Registrations', 'boolean',
-#            description='Checking this box allows new students to register for '
-#            'the course.'))
-        registration_opts.add_property(schema_fields.SchemaField(
-            'reg_form:header_text', 'Welcome Text', 'string', optional=True,
-            description='Text shown to students at the top of the registration '
-            'page encouraging them to sign up for the course.'))
-        registration_opts.add_property(schema_fields.SchemaField(
-            'reg_form:additional_registration_fields', 'Additional Fields',
-            'html', description='Additional registration text or questions.'))
-        registration_opts.add_property(schema_fields.SchemaField(
-            'course:allowlist', 'Allowlisted Students', 'text', optional=True,
-            i18n=False,
-            description='List of email addresses of students who may register.'
-            'Syntax: Entries may be separated with any combination of '
-            'tabs, spaces, commas, or newlines.  Existing values using "[" and '
-            '"]" around email addresses continues to be supported.  '
-            'Regular expressions are not supported.'))
-        registration_opts.add_property(schema_fields.SchemaField(
-            'course:send_welcome_notifications',
-            'Send welcome notifications', 'boolean', description='If enabled, '
-            'welcome notifications will be sent when new users register for '
-            'the course. Must also set "Welcome notifications sender" for '
-            'messages to be sent successfully, and you must have both the '
-            'notifications and unsubscribe modules active (which is the '
-            'default)'))
-        registration_opts.add_property(schema_fields.SchemaField(
-            'course:welcome_notifications_sender',
-            'Welcome notifications sender', 'string', optional=True,
-            i18n=False,
-            description='The "From:" email address used on outgoing '
-            'notifications. If "Send welcome notifications" is enabled, you '
-            'must set this to a valid value for App Engine email or outgoing '
-            'messages will fail. Note that you cannot use the user in session. '
-            'See https://developers.google.com/appengine/docs/python/mail/'
-            'emailmessagefields for details'))
-        registration_opts.add_property(schema_fields.SchemaField(
-            'course:welcome_notifications_subject',
-            'Welcome notifications subject', 'string', optional=True,
-            description='The subject line in welcome notifications emails for '
-            'this course. Use the string {{student_name}} to include the name '
-            'of the student in the subject line and {{course_title}} to '
-            'include the course title.'))
-        registration_opts.add_property(schema_fields.SchemaField(
-            'course:welcome_notifications_body',
-            'Welcome notifications body', 'html', optional=True,
-            description='The body of welcome emails to this course. Use the '
-            'string {{student_name}} to include the name of the student in the '
-            'message and use {{course_title}} to include the course title. To '
-            'avoid spamming, you should always include the string '
-            '{{unsubscribe_url}} in your message to include a link which the '
-            'recipient can use to unsubscribe from future mailings.'))
+                common.tags.EditorBlacklists.COURSE_SCOPE}))
+
+        opts.add_property(schema_fields.SchemaField(
+            'course:main_image:url', 'Image or Video', 'string',
+            description=services.help_urls.make_learn_more_message(
+                messages.IMAGE_OR_VIDEO_DESCRIPTION, 'course:main_image:url'),
+            extra_schema_dict_values={'_type': 'url', 'showMsg': True},
+            optional=True))
+
+        opts.add_property(schema_fields.SchemaField(
+            'course:main_image:alt_text', 'Image Description', 'string',
+            description=messages.IMAGE_DESCRIPTION_DESCRIPTION, optional=True))
+
+        opts.add_property(schema_fields.SchemaField(
+            'base:show_gplus_button', 'Show G+ Button', 'boolean',
+            description=messages.HOMEPAGE_SHOW_GPLUS_BUTTON_DESCRIPTION,
+            optional=True))
+        opts.add_property(schema_fields.SchemaField(
+            'course:show_exam_registration_button', 'Show Exam Registration Button', 'boolean',
+            description="If checked, an exam registration button will be shown on the course page",
+            optional=True))
+        opts.add_property(schema_fields.SchemaField(
+            'course:google_analytics_id', 'Google Analytics ID', 'string',
+            optional=True, i18n=False,
+            description=services.help_urls.make_learn_more_message(
+                messages.COURSE_GOOGLE_ANALYTICS_ID_DESCRIPTION,
+                'course:google_analytics_id')))
+        opts.add_property(schema_fields.SchemaField(
+            'course:google_tag_manager_id', 'Google Tag Manager ID',
+            'string', optional=True, i18n=False,
+            description=services.help_urls.make_learn_more_message(
+                messages.COURSE_GOOGLE_TAG_MANAGER_ID_DESCRIPTION,
+                'course:google_tag_manager_id')))
 
         # Course-level Google API configuration settings.
-        if COURSES_CAN_USE_GOOGLE_APIS.value:
-            course_opts.add_property(schema_fields.SchemaField(
-                CONFIG_KEY_GOOGLE_API_KEY, 'Google API Key', 'string',
-                optional=True, i18n=False, description='Google API Key'))
-            course_opts.add_property(schema_fields.SchemaField(
-                CONFIG_KEY_GOOGLE_CLIENT_ID, 'Google Client Id', 'string',
-                optional=True, i18n=False, description='Google Client Id'))
+        opts.add_property(schema_fields.SchemaField(
+            CONFIG_KEY_GOOGLE_API_KEY, 'Google API Key', 'string',
+            description=services.help_urls.make_learn_more_message(
+                messages.COURSE_GOOGLE_API_KEY_DESCRIPTION,
+                CONFIG_KEY_GOOGLE_API_KEY),
+            i18n=False, optional=True))
+        opts.add_property(schema_fields.SchemaField(
+            CONFIG_KEY_GOOGLE_CLIENT_ID, 'Google Client ID', 'string',
+            description=services.help_urls.make_learn_more_message(
+                messages.COURSE_GOOGLE_CLIENT_ID_DESCRIPTION,
+                CONFIG_KEY_GOOGLE_CLIENT_ID),
+            i18n=False, optional=True))
+        opts.add_property(schema_fields.SchemaField(
+            CONFIG_KEY_GOOGLE_CLIENT_SECRET, 'Google Client Secret',
+            'string',
+            description=services.help_urls.make_learn_more_message(
+                messages.COURSE_GOOGLE_CLIENT_SECRET_DESCRIPTION,
+                CONFIG_KEY_GOOGLE_CLIENT_SECRET),
+            i18n=False, optional=True))
+        return opts
 
+    @classmethod
+    def create_registration_settings_schema(cls, reg):
+        opts = reg.add_sub_registry(
+            Course.SCHEMA_SECTION_REGISTRATION,
+            Course.get_schema_section_title(Course.SCHEMA_SECTION_REGISTRATION),
+            extra_schema_dict_values={
+                'className': 'inputEx-Group hidden-header'
+            })
+        opts.add_property(schema_fields.SchemaField(
+            'reg_form:header_text', 'Introduction', 'string', optional=True,
+            description=messages.REGISTRATION_INTRODUCTION))
+        opts.add_property(schema_fields.SchemaField(
+            # Note: Not directly user-editable; now controlled as part of a
+            # cluster of settings from modules/courses/availability.py
+            'reg_form:can_register', 'Enable Registrations', 'boolean',
+            description='Checking this box allows new students to register for '
+            'the course.',
+            optional=True, hidden=False, editable=False, i18n=False))
+        opts.add_property(schema_fields.SchemaField(
+            'reg_form:additional_registration_fields', 'Registration Form',
+            'html', description=services.help_urls.make_learn_more_message(
+                messages.REGISTRATION_REGISTRATION_FORM,
+                'reg_form:additional_registration_fields'), optional=True))
+        opts.add_property(schema_fields.SchemaField(
+            # Note: Not directly user-editable; now controlled as part of a
+            # cluster of settings from modules/courses/availability.py
+            'course:whitelist', 'Whitelisted Students', 'text',
+            description='A list of email addresses of students who may register'
+            '.  Separate email addresses by commas or spaces.',
+            optional=True, hidden=True, editable=False, i18n=False))
+        opts.add_property(schema_fields.SchemaField(
+            'course:send_welcome_notifications',
+            'Send Welcome Email', 'boolean',
+            description=services.help_urls.make_learn_more_message(
+                messages.REGISTRATION_SEND_WELCOME_EMAIL,
+                'course:send_welcome_notifications'),
+            extra_schema_dict_values={'showMsg': True}, optional=True))
+        opts.add_property(schema_fields.SchemaField(
+            'course:welcome_notifications_sender',
+            'Email Sender', 'string', optional=True,
+            i18n=False,
+            description=services.help_urls.make_learn_more_message(
+                messages.REGISTRATION_EMAIL_SENDER,
+                'course:welcome_notifications_sender')))
+        opts.add_property(schema_fields.SchemaField(
+            'course:welcome_notifications_subject',
+            'Email Subject', 'string', optional=True,
+            description=messages.REGISTRATION_EMAIL_SUBJECT))
+        opts.add_property(schema_fields.SchemaField(
+            'course:welcome_notifications_body',
+            'Email Body', 'html', optional=True,
+            extra_schema_dict_values={
+                'supportCustomTags': common.tags.CAN_USE_DYNAMIC_TAGS.value,
+                'excludedCustomTags':
+                common.tags.EditorBlacklists.COURSE_SCOPE},
+            description=messages.REGISTRATION_EMAIL_BODY))
+        return opts
+
+    @classmethod
+    def create_unit_settings_schema(cls, reg):
         # Unit level settings.
-        unit_opts = reg.add_sub_registry(
-            Course.SCHEMA_SECTION_UNITS_AND_LESSONS, 'Units and Lessons')
-        unit_opts.add_property(schema_fields.SchemaField(
+        opts = reg.add_sub_registry(
+            Course.SCHEMA_SECTION_UNITS_AND_LESSONS,
+            Course.get_schema_section_title(
+                Course.SCHEMA_SECTION_UNITS_AND_LESSONS),
+            extra_schema_dict_values={
+                'className': 'inputEx-Group hidden-header'
+            })
+        opts.add_property(schema_fields.SchemaField(
             'unit:hide_lesson_navigation_buttons',
-            'Hide Lesson Navigation Buttons',
-            'boolean', description='Whether to hide the \'Previous Page\' and '
-            ' \'Next Page\' buttons below lesson and activity pages'))
-        unit_opts.add_property(schema_fields.SchemaField(
-            'unit:hide_assessment_navigation_buttons',
-            'Hide Assessment Navigation Buttons',
-            'boolean', description='Whether to hide the \'Previous Page\' and '
-            ' \'Next Page\' buttons below pre/post assessments within units'))
-        unit_opts.add_property(schema_fields.SchemaField(
-            'unit:show_unit_links_in_leftnav', 'Show Units in Side Bar',
-            'boolean', description='Whether to show the unit links in the side '
-            'navigation bar.'))
-        unit_opts.add_property(schema_fields.SchemaField(
+            'Hide Lesson Nav', 'boolean',
+            description=messages.UNIT_HIDE_LESSON_NAV, optional=True))
+        opts.add_property(schema_fields.SchemaField(
+            'unit:show_unit_links_in_leftnav', 'Show Unit Link',
+            'boolean', description=messages.UNIT_SHOW_UNIT_LINK,
+            optional=True))
+        opts.add_property(schema_fields.SchemaField(
             'course:display_unit_title_without_index',
-            'Display Unit Title Without Index', 'boolean',
-            description='Omit the unit number when displaying unit titles.'))
+            'Hide Unit Numbers', 'boolean',
+            description=messages.UNIT_HIDE_UNIT_NUMBERS, optional=True))
+        opts.add_property(schema_fields.SchemaField(
+            'course:show_lessons_in_syllabus', 'Show Lessons in Syllabus',
+            'boolean',
+            description='If checked, show lesson titles in course syllabus.',
+            optional=True, i18n=False))
+        return opts
 
+    @classmethod
+    def create_assessment_settings_schema(cls, reg):
         def must_contain_one_string_substitution(value, errors):
             if value and len(re.findall(r'%s', value)) != 1:
                 errors.append(
                     'Value must contain exactly one string substitution '
                     'marker "%s".')
 
-        assessment_opts = reg.add_sub_registry(
-            Course.SCHEMA_SECTION_ASSESSMENT, 'Assessments')
-        assessment_opts.add_property(schema_fields.SchemaField(
-            'assessment_confirmations:result_text:pass', 'Pass', 'string',
-            optional=True,
-            description='Text shown to the student on a passing result.',
+        opts = reg.add_sub_registry(
+            Course.SCHEMA_SECTION_ASSESSMENT,
+            Course.get_schema_section_title(
+                Course.SCHEMA_SECTION_ASSESSMENT),
+        )
+        opts.add_property(schema_fields.SchemaField(
+            'assessment_confirmations:result_text:pass',
+            'Final Assessment Passing Text', 'string',
+            description=messages.ASSESSMENT_PASSING_TEXT, optional=True,
             validator=must_contain_one_string_substitution))
-        assessment_opts.add_property(schema_fields.SchemaField(
-            'assessment_confirmations:result_text:fail', 'Fail', 'string',
-            optional=True,
-            description='Text shown to the student on a failing result.',
+        opts.add_property(schema_fields.SchemaField(
+            'assessment_confirmations:result_text:fail',
+            'Final Assessment Failing Text', 'string',
+            description=messages.ASSESSMENT_FAILING_TEXT, optional=True,
             validator=must_contain_one_string_substitution))
+        opts.add_property(schema_fields.SchemaField(
+            'unit:hide_assessment_navigation_buttons',
+            'Hide Assessment Nav', 'boolean',
+            description=messages.UNIT_HIDE_ASSESSMENT_NAV,
+            optional=True))
+        return opts
 
-
-        deleted_assessment_field_registry = schema_fields.FieldRegistry(
-            'Assesment Reporting Optins')
-
-        extra_tab_type = schema_fields.FieldRegistry('Include Deleted Assesments',
-            'deleted_assessments',
-            extra_schema_dict_values={'className': 'settings-list-item'})
-
-        extra_tab_type.add_property(schema_fields.SchemaField(
-            'deleted_assesment_name', 'Assesment Name', 'string', optional=False,
-            description=''))
-        extra_tab_type.add_property(schema_fields.SchemaField(
-            'deleted_assesment_id', 'Assesment ID', 'integer', optional=False,
-            description=''))
-        deleted_assessment_field_array = schema_fields.FieldArray(
-            'deleted_assessment_options:items', 'Deleted Assesment',
-            item_type=extra_tab_type,
-            description=(''),
+    @classmethod
+    def create_translation_settings_schema(cls, reg):
+        opts = reg.add_sub_registry(
+            Course.SCHEMA_SECTION_I18N,
+            Course.get_schema_section_title(Course.SCHEMA_SECTION_I18N),
             extra_schema_dict_values={
-                'className': 'settings-list wide',
-                'listAddLabel': 'Add Assesment to reporting',
-                'listRemoveLabel': 'Remove Assesment from reporting'})
-
-        deleted_assessment_field_registry.add_property(deleted_assessment_field_array)
-        deleted_assessment_opts = reg.add_sub_registry(
-            Course.SCHEMA_SECTION_ASSESSMENT_REPORTING, 'Deleted Assessments',
-            registry=deleted_assessment_field_registry)
-
-        i18n_opts = reg.add_sub_registry(
-            Course.SCHEMA_SECTION_I18N, 'I18N')
-        i18n_opts.add_property(schema_fields.SchemaField(
-            'course:can_student_change_locale', 'Let Student Change Locale',
-            'boolean', optional=True,
-            description='Allow student to change locale at any time '
-            'during the course. If True, a language picker is shown to the '
-            'student and locale changes are allowed at any time. If False, a '
-            'language picker is not shown to the student and the desired '
-            'locale must be assigned during registration process via Locale '
-            'Labels. Current locale for any request is determined by looking '
-            'into student Locale Labels first, and then (if this value here '
-            'is set to True) into student preferences set by the language '
-            'picker.'))
+                'className': 'inputEx-Group hidden-header'
+            })
+        opts.add_property(schema_fields.SchemaField(
+            'course:can_student_change_locale', 'Show Language Picker',
+            'boolean',
+            description=services.help_urls.make_learn_more_message(
+                messages.TRANSLATIONS_SHOW_LANGUAGE_PICKER,
+                'course:can_student_change_locale'),
+            optional=True))
         locale_data_for_select = [
             (loc, locales.get_locale_display_name(loc))
             for loc in locales.get_system_supported_locales()]
-        i18n_opts.add_property(schema_fields.SchemaField(
-            'course:locale', 'Base Locale', 'string', i18n=False,
-            select_data=locale_data_for_select))
+        opts.add_property(schema_fields.SchemaField(
+            'course:locale', 'Base language', 'string',
+            description=messages.TRANSLATIONS_BASE_LANGUAGE, i18n=False,
+            select_data=locale_data_for_select,
+            optional=True))
         locale_type = schema_fields.FieldRegistry(
-            'Locale',
+            'Language',
             extra_schema_dict_values={'className': 'settings-list-item'})
         locale_type.add_property(schema_fields.SchemaField(
-            'locale', 'Locale', 'string', optional=True, i18n=False,
+            'locale', 'Language', 'string', optional=True, i18n=False,
             select_data=locale_data_for_select))
         select_data = [
             (
@@ -2624,44 +3083,75 @@ class Course(object):
         locale_type.add_property(schema_fields.SchemaField(
             cls.SCHEMA_LOCALE_AVAILABILITY, 'Availability',
             'boolean', optional=True, select_data=select_data))
-        i18n_opts.add_property(schema_fields.FieldArray(
-            'extra_locales', 'Extra locales',
-            item_type=locale_type,
-            description=(
-                'Locales which are listed here and marked as available can be '
-                'selected by students as their preferred locale.'),
+        opts.add_property(schema_fields.FieldArray(
+            'extra_locales', 'Other Languages', item_type=locale_type,
+            description=messages.TRANSLATIONS_OTHER_LANGUAGES,
             extra_schema_dict_values={
                 'className': 'settings-list',
-                'listAddLabel': 'Add a locale',
-                'listRemoveLabel': 'Delete locale'}))
-        i18n_opts.add_property(schema_fields.SchemaField(
-            'course:prevent_translation_edits',
-            'Prevent Translation Edits',
-            'boolean', optional=True,
-            description='Prevent editing of translations. If False, '
-            'translations can be edited. If True, editing of translations is '
-            'not allowed, while advance caching and performance boost logic'
-            'is applied.'))
+                'listAddLabel': 'Add a language',
+                'listRemoveLabel': 'Delete language'},
+            optional=True))
+        opts.add_property(schema_fields.SchemaField(
+            'course:prevent_translation_edits', 'Prevent Edits', 'boolean',
+            optional=True, description=messages.TRANSLATIONS_PREVENT_EDITS))
+        return opts
+
+    @classmethod
+    def create_base_settings_schema(cls, course):
+        """Create the registry for course properties."""
+
+        reg = schema_fields.FieldRegistry('Settings',
+            extra_schema_dict_values={
+                'className': 'inputEx-Group new-form-layout hidden-header'})
+
+        cls.create_forum_settings_schema(reg)
+        cls.create_course_settings_schema(reg, course)
+        cls.create_registration_settings_schema(reg)
+        cls.create_unit_settings_schema(reg)
+        cls.create_assessment_settings_schema(reg)
+        cls.create_translation_settings_schema(reg)
         return reg
 
     @classmethod
+    def get_schema_section_title(cls, schema_section):
+        return cls.OPTIONS_SCHEMA_PROVIDER_TITLES.get(
+            schema_section, schema_section.replace('_', ' ').title())
+
+    @classmethod
     def create_common_settings_schema(cls, course):
-        reg = cls.create_base_settings_schema()
+        reg = cls.create_base_settings_schema(course)
         for schema_section in cls.OPTIONS_SCHEMA_PROVIDERS:
             sub_registry = reg.get_sub_registry(schema_section)
             if not sub_registry:
+                schema_title = cls.get_schema_section_title(schema_section)
                 sub_registry = reg.add_sub_registry(
-                    schema_section,
-                    schema_section.replace('_', ' ').title())
+                    schema_section, schema_title,
+                    extra_schema_dict_values={
+                        'className': 'inputEx-Group hidden-header'
+                    })
             for schema_provider in cls.OPTIONS_SCHEMA_PROVIDERS[schema_section]:
                 sub_registry.add_property(schema_provider(course))
         return reg
 
-    def get_course_setting(self, name):
-        course_settings = self.get_environ(self._app_context).get('course')
-        if not course_settings:
-            return None
-        return course_settings.get(name)
+    def get_course_setting(self, name, default=None):
+        return self.get_named_course_setting_from_environ(
+            name, self.get_environ(self._app_context), default=default)
+
+    @classmethod
+    def get_named_course_setting_from_environ(cls, name, env, default=None):
+        return cls.get_course_settings_from_environ(env).get(name, default)
+
+    @classmethod
+    def set_named_course_setting_in_environ(cls, name, env, value):
+        cls.course_settings_in_environ(env)[name] = value
+
+    @classmethod
+    def clear_named_course_setting_in_environ(cls, name, env):
+        cls.course_settings_in_environ(env).pop(name, None)
+
+    @property
+    def lessons(self):
+        return self._model.lessons
 
     @classmethod
     def validate_course_yaml(cls, raw_string, course):
@@ -2778,7 +3268,7 @@ class Course(object):
 
         for hook in self.POST_LOAD_HOOKS:
             try:
-                hook(self)
+                hook(self, app_context=self._app_context)
             except Exception:  # pylint: disable=broad-except
                 logging.exception('Error in post-load hook')
 
@@ -2797,6 +3287,11 @@ class Course(object):
     @property
     def title(self):
         return self._app_context.get_title()
+
+    def can_enroll_current_user(self):
+        return (
+            self._app_context.now_available and
+            roles.Roles.is_user_whitelisted(self._app_context))
 
     def to_json(self):
         return self._model.to_json()
@@ -2832,6 +3327,14 @@ class Course(object):
                         cu.visible_url(unit)))
         return units
 
+
+    def get_children_order(self):
+        return self._model.get_children_order()
+
+    def create_default_children_order(self):
+        self._model.create_default_children_order()
+        self.children_order = self._model.children_order
+
     def get_subunits(self, unit_id):
         units = self._model.get_subunits(unit_id)
         for unit in units:
@@ -2846,8 +3349,32 @@ class Course(object):
         return [unit for unit in self.get_units() if unit_type == unit.type]
 
     def get_track_matching_student(self, student):
-        return models.LabelDAO.apply_course_track_labels_to_student_labels(
-            self, student, self.get_units())
+        """Copy of units and lessons as modified for a particular student.
+
+        Be particularly careful to only use these items in read-only contexts
+        (i.e., student-facing views, not admin dashboards).  This function
+        returns a view that is customized based on the identity of the current
+        user, so you should *not* save these objects back to the course, or
+        you run the risk of overwriting the base course view with the view
+        appropriate to a specific student.
+
+        Args:
+          student: The current student.  May be a transient student or None.
+        Returns:
+          A list of all course units and all course lessons.  Callers should
+          respect the availability settings applied to these.
+        """
+
+        units = [copy.deepcopy(unit) for unit in self.get_units()]
+        lessons = [copy.deepcopy(lesson)
+                   for lesson in self.get_lessons_for_all_units()]
+        models.LabelDAO.apply_course_track_labels_to_student_labels(
+            self, student, units)
+        models.LabelDAO.apply_course_track_labels_to_student_labels(
+            self, student, lessons)
+        common_utils.run_hooks(self.COURSE_ELEMENT_STUDENT_VIEW_HOOKS,
+                               self, units, lessons)
+        return units, lessons
 
     def get_unit_track_labels(self, unit):
         all_track_ids = models.LabelDAO.get_set_of_ids_of_type(
@@ -2871,6 +3398,14 @@ class Course(object):
             for lesson in self.get_lessons(unit.unit_id):
                 if lesson.lesson_id == the_lesson.lesson_id:
                     return unit
+
+        # If the lesson has not been found in self.get_lessons,
+        # directly fetch the unit using lesson.unit_id
+        logging.error('Faulty children_order: lesson %s not found in any unit.',
+                      str(the_lesson.lesson_id))
+        for unit in self.get_units():
+            if str(unit.unit_id) == str(the_lesson.unit_id):
+                return unit
         return None
 
     def get_unit_lessons_dict(self):
@@ -2905,24 +3440,28 @@ class Course(object):
         for current_unit in reversed(self.get_units()):
             if current_unit.type == verify.UNIT_TYPE_ASSESSMENT:
                 return current_unit.unit_id == unit.unit_id
-            elif current_unit.type == verify.UNIT_TYPE_UNIT:
-                if current_unit.post_assessment:
-                    return current_unit.post_assessment == unit.unit_id
-                if current_unit.pre_assessment:
-                    return current_unit.pre_assessment == unit.unit_id
         return False
 
     def add_unit(self):
         """Adds new unit to a course."""
-        return self._model.add_unit('U', 'New Unit', None)
+        ret = self._model.add_unit('U', 'New Unit', None)
+        if self.get_course_availability() != COURSE_AVAILABILITY_PRIVATE:
+            ret.availability = AVAILABILITY_UNAVAILABLE
+        return ret
 
     def add_link(self, punit):
         """Adds new link (other) to a course."""
-        return self._model.add_unit('O', 'New Link', punit)
+        ret = self._model.add_unit('O', 'New Link', punit)
+        if self.get_course_availability() != COURSE_AVAILABILITY_PRIVATE:
+            ret.availability = AVAILABILITY_UNAVAILABLE
+        return ret
 
     def add_assessment(self,punit):
         """Adds new assessment to a course."""
-        return self._model.add_unit('A', 'New Assessment',punit)
+        ret = self._model.add_unit('A', 'New Assessment', punit)
+        if self.get_course_availability() != COURSE_AVAILABILITY_PRIVATE:
+            ret.availability = AVAILABILITY_UNAVAILABLE
+        return ret
 
     def add_lesson(self, unit):
         return self._model.add_lesson(unit, 'New Lesson')
@@ -2935,6 +3474,8 @@ class Course(object):
             verify.UNIT_TYPE_CUSTOM, 'New %s' % cu.name, punit,
             custom_unit_type=unit_type)
         cu.add_unit(self, unit)
+        if self.get_course_availability() != COURSE_AVAILABILITY_PRIVATE:
+            unit.availability = AVAILABILITY_UNAVAILABLE
         return unit
 
     def update_unit(self, unit):
@@ -2988,8 +3529,7 @@ class Course(object):
 
     def update_final_grades(self, student):
         """Updates the final grades of the student."""
-        if (models.CAN_SHARE_STUDENT_PROFILE.value and
-            self.is_course_complete(student)):
+        if self.is_course_complete(student):
             overall_score = self.get_overall_score(student)
             models.StudentProfileDAO.update(
                 student.user_id, student.email, final_grade=overall_score)
@@ -3004,7 +3544,7 @@ class Course(object):
         # string.
         return 'pass' if score >= 70 else 'fail'
 
-    def get_all_scores(self, student, list_not_available_assesments=False, include_deleted_assessments=False):
+    def get_all_scores(self, student, list_not_available_assesments=False):
         """Gets all score data for a student.
 
         Args:
@@ -3044,7 +3584,7 @@ class Course(object):
                 completed = progress_tracker.is_custom_unit_completed(
                     student_progress, unit.unit_id)
 
-            # If a human-reviewed assessment is completed, ensure that the
+            # If a peer-reviewed assessment is completed, ensure that the
             # required reviews have also been completed.
             if completed and self.needs_human_grader(unit):
                 reviews = self.get_reviews_processor().get_review_steps_by(
@@ -3072,22 +3612,6 @@ class Course(object):
                 'score': (scores[str(unit.unit_id)]
                           if str(unit.unit_id) in scores else 0),
             })
-
-        if include_deleted_assessments:
-            env = self.get_environ(self._app_context)
-            if env.has_key('deleted_assessment_options'):
-                deleted_assesments = env['deleted_assessment_options']
-                if deleted_assesments.has_key('items'):
-                    for deleted_assesment in deleted_assesments['items']:
-                        assessment_score_list.append({
-                            'id': str(deleted_assesment['deleted_assesment_id']),
-                            'title': deleted_assesment['deleted_assesment_name'],
-                            'attempted': str(deleted_assesment['deleted_assesment_id']) in scores,
-                            'show_scores': True,
-                            'score': (scores[str(deleted_assesment['deleted_assesment_id'])]
-                                      if str(deleted_assesment['deleted_assesment_id']) in scores else 0),
-                        })
-
 
         return assessment_score_list
 
@@ -3125,7 +3649,7 @@ class Course(object):
     def get_parent_unit(self, unit_id):
         return self._model.get_parent_unit(unit_id)
 
-    def get_components(self, unit_id, lesson_id):
+    def get_components(self, unit_id, lesson_id, use_lxml=True):
         """Returns a list of dicts representing the components in a lesson.
 
         Args:
@@ -3143,7 +3667,8 @@ class Course(object):
         if not lesson.objectives:
             return []
 
-        return common.tags.get_components_from_html(lesson.objectives)
+        return common.tags.get_components_from_html(
+            lesson.objectives, use_lxml)
 
     def get_content_as_dict_safe(self, unit, errors, kind='assessment'):
         """Validate the assessment or review script and return as a dict."""
@@ -3151,6 +3676,7 @@ class Course(object):
             if kind == 'assessment':
                 r = self._model.get_assessment_content(unit)
             else:
+                # Not being used anymore
                 r = self._model.get_review_content(unit)
             return r['assessment']
         except verify.SchemaException as e:
@@ -3237,21 +3763,15 @@ class Course(object):
         def _add_to_map(component, unit, lesson=None):
             try:
                 if component.get('cpt_name') == 'question':
-                    quid = component.get('quid')
-                    if quid:
-                        compononent_locations = qulocations.setdefault(
-			    long(quid), {'lessons': {}, 'assessments': {}}
-                        )
-                    else:
-                        return
+                    compononent_locations = qulocations.setdefault(
+                        long(component.get('quid')),
+                        {'lessons': {}, 'assessments': {}}
+                    )
                 elif component.get('cpt_name') == 'question-group':
-                    qgid = component.get('qgid')
-                    if qgid:
-                        compononent_locations = qglocations.setdefault(
-			    long(qgid), {'lessons': {}, 'assessments': {}}
-			)
-                    else:
-                        return
+                    compononent_locations = qglocations.setdefault(
+                        long(component.get('qgid')),
+                        {'lessons': {}, 'assessments': {}}
+                    )
                 else:
                     return
             except ValueError:
@@ -3306,6 +3826,7 @@ class Course(object):
 
     def get_review_content(self, unit):
         """Returns the schema for a review form as a Python dict."""
+        # Not being used anymore
         return self._model.get_review_content(unit)
 
     def set_assessment_content(self, unit, assessment_content, errors=None):
@@ -3361,21 +3882,6 @@ class Course(object):
 
         return None, None
 
-    def get_course_announcement_list_email(self):
-        """Get Announcement email address for the course."""
-        course_env = self.get_environ(self._app_context)
-        if not course_env:
-            return None
-        if 'course' not in course_env:
-            return None
-        course_dict = course_env['course']
-        if 'announcement_list_email' not in course_dict:
-            return None
-        announcement_list_email = course_dict['announcement_list_email']
-        if announcement_list_email:
-            return announcement_list_email
-        return None
-
     def init_new_course_settings(self, title, admin_email):
         """Initializes new course.yaml file if it does not yet exists."""
         fs = self.app_context.fs.impl
@@ -3395,10 +3901,13 @@ course:
         self.app_context.clear_per_request_cache()
         return True
 
-
     def get_course_announcement_list_email(self):
         """Get Announcement email address for the course."""
-        return self.get_value_from_course_dict('announcement_list_email')
+        email = self.get_value_from_course_dict('announcement_list_email')
+        if email and isinstance(email, basestring):
+            return email.strip()
+        else:
+            return email
 
     def should_automatically_subscribe_to_forum(self):
         """Get Announcement email address for the course."""
@@ -3423,6 +3932,323 @@ course:
             return value
         return None
 
+    def get_course_availability(self):
+        return self.get_course_availability_from_app_context(self.app_context)
+
+    @classmethod
+    def course_settings_in_environ(cls, env):
+        """Retrieves from or creates 'course' dict in supplied env dict."""
+        return env.setdefault('course', {})
+
+    @classmethod
+    def get_course_settings_from_environ(cls, env):
+        """Like course_settings_in_environ(), but do not create if missing."""
+        return env.get('course', {})
+
+    @classmethod
+    def publish_in_environ(cls, env):
+        """Retrieves from or creates 'publish' dict in supplied env dict."""
+        return env.setdefault('publish', {})
+
+    @classmethod
+    def get_publish_from_environ(cls, env):
+        """Like publish_in_environ(), but do not create if missing."""
+        return env.get('publish', {})
+
+    @classmethod
+    def reg_form_in_environ(cls, env):
+        """Retrieves from or creates 'reg_form' dict in supplied env dict."""
+        return env.setdefault('reg_form', {})
+
+    @classmethod
+    def get_reg_form_from_environ(cls, env):
+        """Like reg_form_in_environ(), but do not create if missing."""
+        return env.get('reg_form', {})
+
+    @classmethod
+    def get_named_reg_setting_from_environ(cls, name, env, default=None):
+        return cls.get_reg_form_from_environ(env).get(name, default)
+
+    @classmethod
+    def set_named_reg_setting_in_environ(cls, name, env, value):
+        cls.reg_form_in_environ(env)[name] = value
+
+    @classmethod
+    def get_course_availability_from_environ(cls, env):
+        """Derive course availability policy based on other supplied env dict.
+
+        Args:
+          env: an environ dict such as that returned by the get_environ()
+            method of an app_context.
+
+        Returns:
+          A string indicating the availability policy; one of the keys from
+          COURSE_AVAILABILITY_POLICIES, or None if no policy matches the
+          course state found in the supplied env dict.
+        """
+        details = cls.get_course_settings_from_environ(env)
+        now_available = details.get(
+            'now_available', DEFAULT_COURSE_NOW_AVAILABLE)
+        browsable = details.get('browsable', DEFAULT_BROWSABLE)
+        reg_form = cls.get_reg_form_from_environ(env)
+        can_register = reg_form.get('can_register', DEFAULT_CAN_REGISTER)
+
+        for name, setting in COURSE_AVAILABILITY_POLICIES.iteritems():
+            if  can_register == setting['can_register'] and now_available == setting['now_available'] and browsable == setting['browsable']:
+                print str(name)
+                return name
+
+
+        return None
+
+    @classmethod
+    def get_course_availability_from_app_context(cls, app_context):
+        """Get derived course availability policy based on other settings.
+
+        Note that this method is class-static, so as to avoid having to
+        instantiate a Course object (and thereby affect course caching) in
+        contexts where we either don't have a Course as a formal parameter,
+        but we do have an application context, or especially in contexts where
+        we are iterating over all courses and don't want to fill the cache
+        with junk.
+
+        Returns:
+          A string indicating the availability policy; one of the keys from
+          COURSE_AVAILABILITY_POLICIES, or None if no policy matches the
+          current course state.
+        """
+        env = app_context.get_environ()
+        return cls.get_course_availability_from_environ(env)
+
+    @classmethod
+    def get_element_displayability(
+        cls, course_availability, student_is_transient, can_see_drafts,
+        course_element):
+        """Determine whether an element is visible and/or linkable.
+
+        Here, we are relying on a behavior of the rest of this class, to wit:
+        If the parent is not displayable, then this function is not called to
+        establish displayability of any contents.  E.g., suppose we have a
+        registration-required course, and a unit that is private, and does not
+        permit display of its title on the syllabus.  No lesson or pre/post
+        assessment in that unit can have its title displayed since the unit
+        is suppressed.  Rather than writing some seriously nasty convoluted
+        logic here, we just presume the rest of the world will be wise enough
+        to just not call us to ask about it.
+
+        Args:
+          course_elment: A unit or lesson object.  Anything that can respond to
+              .availability -> public, private, use-course and
+              .shown_when_unavailable -> True/False
+          parent_element: Displayability instance, as determined by this
+              function, for the parent of the element, or None if there is no
+              parent.
+        Returns:
+          A Displayability instance.
+        """
+
+        # TODO(psimakov): add dedicated tests for this function;
+        # for now the functionality here is implicitly tested in:
+        # modules.courses.courses_tests.AvailabilityTests
+
+        is_name_visible = False
+        is_content_available = False
+        is_available_to_students = False
+        is_available_to_visitors = False
+
+        # Course being set to private trumps permissions in units.  This
+        # is because we need to have one single place where we can force
+        # the course offline without any "well, except when...." cases.
+        if course_availability == COURSE_AVAILABILITY_PRIVATE:
+            pass
+
+        # If course is browse-only or browse-available, every element which
+        # does not explicitly make itself private is available.
+        elif course_availability in (
+            COURSE_AVAILABILITY_REGISTRATION_OPTIONAL,
+            COURSE_AVAILABILITY_PUBLIC):
+
+            if course_element.availability == AVAILABILITY_UNAVAILABLE:
+                if course_element.shown_when_unavailable:
+                    is_name_visible = True
+                    is_content_available = False
+                    is_available_to_students = False
+                    is_available_to_visitors = False
+            if course_element.availability in (AVAILABILITY_AVAILABLE,
+                                               AVAILABILITY_COURSE):
+                is_name_visible = True
+                is_content_available = True
+                is_available_to_students = True
+                is_available_to_visitors = True
+
+        # If course is registration-only, then availablity is conditional on
+        # whether the current student is registered.
+        elif course_availability in (
+            COURSE_AVAILABILITY_REGISTRATION_REQUIRED,
+            COURSE_AVAILABILITY_REGISTRATION_CLOSED):
+            if course_element.availability == AVAILABILITY_UNAVAILABLE:
+                if course_element.shown_when_unavailable:
+                    is_name_visible = True
+                    is_content_available = False
+                    is_available_to_students = False
+                    is_available_to_visitors = False
+
+            elif course_element.availability == AVAILABILITY_AVAILABLE:
+                is_name_visible = True
+                is_content_available = True
+                is_available_to_students = True
+                is_available_to_visitors = True
+
+            elif course_element.availability == AVAILABILITY_COURSE:
+                if student_is_transient:
+                    is_name_visible = True
+                    is_content_available = False
+                    is_available_to_students = True
+                    is_available_to_visitors = False
+                else:
+                    is_name_visible = True
+                    is_content_available = True
+                    is_available_to_students = True
+                    is_available_to_visitors = False
+
+        # Users with this permission (which includes course and site admins)
+        # can always see and navigate to every item in student-view contexts.
+        # This trumps even the course being private, since admins need to be
+        # able to actually see what students _would_ see if they could.
+        if can_see_drafts:
+            is_name_visible = True
+            is_content_available = True
+
+        return Displayability(is_name_visible,
+                              is_content_available,
+                              is_available_to_students,
+                              is_available_to_visitors)
+
+    @classmethod
+    def is_course_browsable(cls, app_context):
+        return cls.get_named_course_setting_from_environ(
+            'browsable', app_context.get_environ(), default=False)
+
+    @classmethod
+    def is_course_available(cls, app_context):
+        return cls.get_named_course_setting_from_environ(
+            'now_available', app_context.get_environ(), default=False)
+
+    @classmethod
+    def get_whitelist(cls, app_context):
+        return cls.get_whitelist_from_environ(app_context.get_environ())
+
+    @classmethod
+    def get_whitelist_from_environ(cls, env, default=''):
+        reg_form_whitelist = cls.get_whitelist_from_reg_form(
+            env, default=default)
+        if reg_form_whitelist:
+            return reg_form_whitelist
+        legacy_whitelist = cls.get_whitelist_from_settings(
+            env, default=default)
+        return legacy_whitelist
+
+    @classmethod
+    def get_whitelist_from_settings(cls, env, default=''):
+        return cls.get_named_course_setting_from_environ(
+            'whitelist', env, default=default)
+
+    @classmethod
+    def get_whitelist_from_reg_form(cls, env, default=''):
+        return cls.get_named_reg_setting_from_environ(
+            'whitelist', env, default=default)
+
+    @classmethod
+    def set_whitelist_into_environ(cls, whitelist, env):
+        """Sets the supplied whitelist into the supplied env dict.
+
+        Args:
+          whitelist: this value is set into the supplied settings as the new
+            registration whitelist (an empty string is used if None).
+          env: an environ dict, altered in-place, such as that returned by
+            the get_environ() method of an app_context.
+        """
+        reg_form = cls.reg_form_in_environ(env)
+        reg_form['whitelist'] = '' if whitelist is None else whitelist
+
+    @classmethod
+    def _get_course_availability_policy_from_name(cls, name):
+        if name not in COURSE_AVAILABILITY_POLICIES:
+            raise ValueError(
+                'Expected course availability policy name to be one '
+                'of: %s, but was "%s"' %
+                (' '.join(COURSE_AVAILABILITY_POLICIES.keys()), name))
+
+        return COURSE_AVAILABILITY_POLICIES[name]
+
+    @classmethod
+    def _apply_course_availability_policy_to_environ(cls, policy, env):
+        """Expand a course availability policy into the supplied environ.
+
+        Multiple values within the supplied environ are altered in-place to
+        implement overall course availability policy.
+
+        Args:
+          policy: one of the COURSE_AVAILABILITY_POLICIES values.
+          env: an environ dict, altered in-place, such as that returned by
+            the get_environ() method of an app_context.
+        """
+        details = cls.course_settings_in_environ(env)
+        reg_form = cls.reg_form_in_environ(env)
+
+        # If, for some odd reason, policy is missing a policy property,
+        # the get_course_availability() default value is used.
+        details['now_available'] = policy.get(
+            'now_available', DEFAULT_COURSE_NOW_AVAILABLE)
+        details['browsable'] = policy.get(
+            'browsable', DEFAULT_BROWSABLE)
+        reg_form['can_register'] = policy.get(
+            'can_register', DEFAULT_CAN_REGISTER)
+
+    @classmethod
+    def set_course_availability_into_environ(cls, name, env):
+        """Set policies in supplied settings for a named course availability.
+
+        Args:
+          name: A string naming the availability policy.  Must be one of the
+            keys from COURSE_AVAILABILITY_POLICIES.  (If name is any value
+            that evaluates to False, e.g. None or the empty string, this
+            method silently returns, leaving settings unaltered.)
+          env: an environ dict, altered in-place, such as that returned by
+            the get_environ() method of an app_context.
+        """
+        if name:
+            cls._apply_course_availability_policy_to_environ(
+                cls._get_course_availability_policy_from_name(name), env)
+
+    def set_course_availability(self, name):
+        """Configure course availability policy into course settings and save.
+
+        Args:
+          name: A string naming the availability policy.  Must be one of the
+              keys from COURSE_AVAILABILITY_POLICIES.
+        """
+        # Check that named course availability policy exists before getting
+        # the app_context environment.
+        policy = self._get_course_availability_policy_from_name(name)
+        env = self.app_context.get_environ()
+        self._apply_course_availability_policy_to_environ(policy, env)
+        self.save_settings(env)
+
+    def is_unit_available(self, unit):
+        unit = copy.deepcopy(unit)
+        common_utils.run_hooks(self.COURSE_ELEMENT_STUDENT_VIEW_HOOKS,
+                               self, [unit], [])
+        return self._model.is_unit_available(unit)
+
+    def is_lesson_available(self, unit, lesson):
+        unit = copy.deepcopy(unit)
+        lesson = copy.deepcopy(lesson)
+        common_utils.run_hooks(self.COURSE_ELEMENT_STUDENT_VIEW_HOOKS,
+                               self, [unit], [lesson])
+        return self._model.is_lesson_available(unit, lesson)
+
+
     def get_or_create_bot_student(self):
         """
         Creates/returns one bot user with an invalid email unique for a
@@ -3430,7 +4256,7 @@ course:
         """
         email = 'bot@invalid_domain'
         user_id = 'fake:invalid_id_XYZ123'
-        student = models.Student.get_by_email(email)
+        student, unique = models.Student.get_first_by_email(email)
         if not student:
             student = models.Student(key_name=email, user_id=user_id)
             student.put()

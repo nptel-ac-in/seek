@@ -23,8 +23,6 @@ Here is how to use the script:
       google_appengine/lib/jinja2-2.6, google_appengine/lib/webapp2-2.5.1 and
       the 'coursebuilder' directory itself
     - invoke this test suite from the command line:
-          # Automatically find and run all Python tests in tests/*.
-          python tests/suite.py  --pattern test*.py
           # Run test method baz in unittest.TestCase Bar found in tests/foo.py.
           python tests/suite.py --test_class_name tests.foo.Bar.baz
     - review the output to make sure there are no errors or warnings
@@ -35,15 +33,12 @@ Good luck!
 __author__ = 'Sean Lip'
 
 import argparse
+import cStringIO
 import logging
 import os
+import pdb
 import shutil
-import signal
-import socket
-import stat
-import subprocess
 import sys
-import time
 import unittest
 
 import task_queue
@@ -59,22 +54,16 @@ from google.appengine.ext import testbed
 
 _PARSER = argparse.ArgumentParser()
 _PARSER.add_argument(
-    '--pattern', default='*.py',
-    help='shell pattern for discovering files containing tests', type=str)
-_PARSER.add_argument(
     '--test_class_name',
     help='optional dotted module name of the test(s) to run', type=str)
 _PARSER.add_argument(
-    '--integration_server_start_cmd',
-    help='script to start an external CB server', type=str)
+    '--pdb',
+    action='store_true',
+    help='Automatically enter a debugger when an error occurs.')
 
-# Base filesystem location for test data.
-if 'COURSEBUILDER_RESOURCES' in os.environ:
-    TEST_DATA_BASE = os.path.join(
-        os.environ['COURSEBUILDER_RESOURCES'], 'test-data/')
-else:
-    TEST_DATA_BASE = os.path.join(
-        os.environ['HOME'], 'coursebuilder_resources/test-data/')
+# Direct key access so we'll throw if os.environ is misconfigured.
+TEST_DATA_BASE = os.path.join(
+    os.environ['COURSEBUILDER_RESOURCES'], 'test-data')
 
 
 def empty_environ():
@@ -103,24 +92,64 @@ def iterate_tests(test_suite_or_case):
 class TestBase(unittest.TestCase):
     """Base class for all Course Builder tests."""
 
-    REQUIRES_INTEGRATION_SERVER = 'REQUIRES_INTEGRATION_SERVER'
-    REQUIRES_TESTING_MODULES = 'REQUIRES_TESTING_MODULES'
     INTEGRATION_SERVER_BASE_URL = 'http://localhost:8081'
     ADMIN_SERVER_BASE_URL = 'http://localhost:8000'
 
     STOP_AFTER_FIRST_FAILURE = False
     HAS_PENDING_FAILURE = False
 
+    # Log level for all tests in this test case. Override if you need to test
+    # against different logging levels. Be very careful when setting this to
+    # logging.DEBUG: downstream code is sometimes very chatty at logging.DEBUG,
+    # and can generate enough logging data that tests run out of memory.
+    LOG_LEVEL = logging.ERROR
+
     def setUp(self):
         if TestBase.STOP_AFTER_FIRST_FAILURE:
             assert not TestBase.HAS_PENDING_FAILURE
         super(TestBase, self).setUp()
+        self._set_up_logging()
         # e.g. TEST_DATA_BASE/tests/functional/tests/MyTestCase.
         self.test_tempdir = os.path.join(
             TEST_DATA_BASE, self.__class__.__module__.replace('.', os.sep),
             self.__class__.__name__)
         self.reset_filesystem()
         self._originals = {}  # Map of object -> {symbol_string: original_value}
+
+    def _set_up_logging(self):
+        self._log = cStringIO.StringIO()
+        self._stream_handler = logging.StreamHandler(self._log)
+        self._stream_handler.setFormatter(
+            logging.Formatter(fmt='%(levelname)s: %(message)s'))
+        self._logger = logging.getLogger()
+        self._logger.addHandler(self._stream_handler)
+        self._logger.setLevel(self.LOG_LEVEL)
+
+    def tearDown(self):
+        self._unswap_all()
+        self.reset_filesystem(remove_only=True)
+        self._tear_down_logging()
+        super(TestBase, self).tearDown()
+
+    def _tear_down_logging(self):
+        self._logger.removeHandler(self._stream_handler)
+        self._log.close()
+
+    def get_log(self):
+        self._log.flush()
+        return self._log.getvalue()
+
+    def assertLogContains(self, message):
+        self.assertIn(message, self.get_log())
+
+    def assertLogDoesNotContain(self, message):
+        self.assertNotIn(message, self.get_log())
+
+    def reset_filesystem(self, remove_only=False):
+        if os.path.exists(self.test_tempdir):
+            shutil.rmtree(self.test_tempdir)
+        if not remove_only:
+            os.makedirs(self.test_tempdir)
 
     def run(self, result=None):
         if not result:
@@ -129,16 +158,10 @@ class TestBase(unittest.TestCase):
         if not result.wasSuccessful():
             TestBase.HAS_PENDING_FAILURE = True
 
-    def tearDown(self):
-        self._unswap_all()
-        self.reset_filesystem(remove_only=True)
-        super(TestBase, self).tearDown()
-
-    def reset_filesystem(self, remove_only=False):
-        if os.path.exists(self.test_tempdir):
-            shutil.rmtree(self.test_tempdir)
-        if not remove_only:
-            os.makedirs(self.test_tempdir)
+    def shortDescription(self):
+        """Additional information logged during unittest invocation."""
+        # Suppress default logging of docstrings. Instead log name/status only.
+        return None
 
     def swap(self, source, symbol, new):  # pylint: disable=invalid-name
         """Swaps out source.symbol for a new value.
@@ -169,11 +192,6 @@ class TestBase(unittest.TestCase):
         for source, symbol_to_value in self._originals.iteritems():
             for symbol, value in symbol_to_value.iteritems():
                 setattr(source, symbol, value)
-
-    def shortDescription(self):
-        """Additional information logged during unittest invocation."""
-        # Suppress default logging of docstrings. Instead log name/status only.
-        return None
 
 
 class FunctionalTestBase(TestBase):
@@ -206,7 +224,7 @@ class AppEngineTestBase(FunctionalTestBase):
         self.testbed.init_user_stub()
         self.testbed.init_memcache_stub()
         self.testbed.init_datastore_v3_stub(consistency_policy=policy)
-        self.testbed.init_taskqueue_stub()
+        self.testbed.init_taskqueue_stub(root_path=os.environ['SOURCE_DIR'])
         self.taskq = self.testbed.get_stub(testbed.TASKQUEUE_SERVICE_NAME)
         self.testbed.init_urlfetch_stub()
         self.testbed.init_files_stub()
@@ -218,6 +236,9 @@ class AppEngineTestBase(FunctionalTestBase):
             'search', simple_search_stub.SearchServiceStub())
         self.task_dispatcher = task_queue.TaskQueueHandlerDispatcher(
             self.testapp, self.taskq)
+
+        # Handle for testing sent mail.
+        self.mail_stub = self.testbed.get_stub(testbed.MAIL_SERVICE_NAME)
 
     def tearDown(self):
         self.testbed.deactivate()
@@ -240,84 +261,10 @@ def create_test_suite(parsed_args):
         unittest.TestSuite. The test suite populated with all tests to run.
     """
     loader = unittest.TestLoader()
-    if parsed_args.test_class_name:
-        return loader.loadTestsFromName(parsed_args.test_class_name)
-    else:
-        return loader.discover(
-            os.path.dirname(__file__), pattern=parsed_args.pattern)
-
-
-def ensure_port_available(port_number):
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        s.bind(('localhost', port_number))
-    except socket.error, ex:
-        logging.error(
-            '''==========================================================
-            Failed to bind to port %d.
-            This probably means another CourseBuilder server is
-            already running.  Be sure to shut down any manually
-            started servers before running tests.
-            ==========================================================''',
-            port_number)
-        raise ex
-    s.close()
-
-
-def start_integration_server(integration_server_start_cmd, modules):
-    if modules:
-        _fn = os.path.join(appengine_config.BUNDLE_ROOT, 'custom.yaml')
-        _st = os.stat(_fn)
-        os.chmod(_fn, _st.st_mode | stat.S_IWUSR)
-        fp = open(_fn, 'w')
-        fp.writelines([
-            'env_variables:\n',
-            '  GCB_REGISTERED_MODULES_CUSTOM:\n'])
-        fp.writelines(['    %s\n' % module.__name__ for module in modules])
-        fp.close()
-
-    logging.info('Starting external server: %s', integration_server_start_cmd)
-    server = subprocess.Popen(integration_server_start_cmd)
-    time.sleep(3)  # Wait for server to start up
-    return server
-
-
-def stop_integration_server(server, modules):
-    server.kill()  # dev_appserver.py itself.
-
-    # The new dev appserver starts a _python_runtime.py process that isn't
-    # captured by start_integration_server and so doesn't get killed. Until it's
-    # done, our tests will never complete so we kill it manually.
-    (stdout, unused_stderr) = subprocess.Popen(
-        ['pgrep', '-f', '_python_runtime.py'], stdout=subprocess.PIPE
-    ).communicate()
-
-    # If tests are killed partway through, runtimes can build up; send kill
-    # signals to all of them, JIC.
-    pids = [int(pid.strip()) for pid in stdout.split('\n') if pid.strip()]
-    for pid in pids:
-        os.kill(pid, signal.SIGKILL)
-
-    if modules:
-        fp = open(
-            os.path.join(appengine_config.BUNDLE_ROOT, 'custom.yaml'), 'w')
-        fp.writelines([
-            '# Add configuration for your application here to avoid\n'
-            '# potential merge conflicts with new releases of the main\n'
-            '# app.yaml file.  Modules registered here should support the\n'
-            '# standard CourseBuilder module config.  (Specifically, the\n'
-            '# imported Python module should provide a method\n'
-            '# "register_module()", taking no parameters and returning a\n'
-            '# models.custom_modules.Module instance.\n'
-            '#\n'
-            'env_variables:\n'
-            '#  GCB_REGISTERED_MODULES_CUSTOM:\n'
-            '#    modules.my_extension_module\n'
-            '#    my_extension.modules.widgets\n'
-            '#    my_extension.modules.blivets\n'
-            ])
-        fp.close()
+    if not parsed_args.test_class_name:
+        raise Exception('Expected --test_class_name to be specified.')
+    os.environ['GCB_TEST_MODE'] = 'true'
+    return loader.loadTestsFromName(parsed_args.test_class_name)
 
 
 def fix_sys_path():
@@ -352,36 +299,33 @@ def fix_sys_path():
     sys.path.insert(0, appengine_config.BUNDLE_ROOT)
 
 
+class DebugTestResult(unittest.TextTestResult):
+
+    def addError(self, test, err):
+        pdb.post_mortem(err[2])
+        super(DebugTestResult, self).addError(test, err)
+
+    def addFailure(self, test, err):
+        pdb.post_mortem(err[2])
+        super(DebugTestResult, self).addFailure(test, err)
+
+
 def main():
     """Starts in-process server and runs all test cases in this module."""
     fix_sys_path()
+
     etl._set_env_vars_from_app_yaml()
     parsed_args = _PARSER.parse_args()
     test_suite = create_test_suite(parsed_args)
 
-    all_tags = {}
-    for test in iterate_tests(test_suite):
-        if hasattr(test, 'TAGS'):
-            for tag in test.TAGS:
-                if isinstance(test.TAGS[tag], set) and tag in all_tags:
-                    all_tags[tag].update(test.TAGS[tag])
-                else:
-                    all_tags[tag] = test.TAGS[tag]
+    kwargs = {
+        'verbosity': 2,
+    }
 
-    server = None
-    if TestBase.REQUIRES_INTEGRATION_SERVER in all_tags:
-        ensure_port_available(8081)
-        ensure_port_available(8000)
-        server = start_integration_server(
-            parsed_args.integration_server_start_cmd,
-            all_tags.get(TestBase.REQUIRES_TESTING_MODULES, set()))
+    if parsed_args.pdb:
+        kwargs['resultclass'] = DebugTestResult
 
-    result = unittest.TextTestRunner(verbosity=2).run(test_suite)
-
-    if server:
-        stop_integration_server(
-            server, all_tags.get(TestBase.REQUIRES_TESTING_MODULES, set()))
-
+    result = unittest.TextTestRunner(**kwargs).run(test_suite)
     if result.errors or result.failures:
         raise Exception(
             'Test suite failed: %s errors, %s failures of '

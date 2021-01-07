@@ -1,21 +1,5 @@
-/**
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-var COURSE_SORTABLE_SELECTOR = 'div.course-outline.editable ol.course';
-var UNIT_SORTABLE_SELECTOR = 'div.course-outline.editable ol.unit';
+var COURSE_SORTABLE_SELECTOR = 'div.course-outline.reorderable ol.course';
+var UNIT_SORTABLE_SELECTOR = 'div.course-outline.reorderable ol.unit';
 var UNIT_LESSON_TITLE_REST_HANDLER_URL = 'rest/course/outline';
 var UNIT_LESSON_TITLE_XSRF_TOKEN = $('.course-outline')
     .data('unitLessonTitleXsrfToken');
@@ -28,13 +12,16 @@ function parseJson(s) {
 }
 function zebraStripeList() {
   $('.course-outline li > div').each(function(i, elt) {
-    $(elt).removeClass('even odd').addClass(i % 2 == 0 ? 'even' : 'odd')
+    $(elt).removeClass('gcb-list__row--dark-stripe')
+    if (i % 2 == 0) {
+      $(elt).addClass('gcb-list__row--dark-stripe')
+    }
   });
 }
 function addNumbering() {
-  $('.course-outline ol.course > li > div.row.unit').each(function(i) {
+  $('.course-outline ol.course > li > .gcb-list__row.unit').each(function(i) {
     var unitIndex = i + 1;
-    var titleEl = $(this).find('> div.left-matter > div.name > a');
+    var titleEl = $(this).find('.name > a');
     var title = UNIT_TITLE_TEMPLATE
         .replace('%(index)s', unitIndex)
         .replace('%(title)s', titleEl.data('title'))
@@ -44,7 +31,7 @@ function addNumbering() {
     $(this).parent().find('ol.unit:not(.pre, .post) > li').each(function() {
       if ($(this).data('autoIndex') == 'True') {
         var titleEl = $(this)
-            .find('> div.row.lesson > div.left-matter > div.name > a');
+            .find('> .gcb-list__row.lesson .name > a');
         titleEl.text(lessonIndex + '. ' + titleEl.data('title'));
         ++lessonIndex;
       }
@@ -57,33 +44,23 @@ function getCourseOutlineData() {
   var courseOrderData = [];
   $('.course-outline ol.course > li').each(function() {
     var unitId = $(this).data('unitId');
-    var lessons = []
+    var children = []
 
-    // The table presents pre-assessments as part of the containing unit, but
-    // we need to assign them a position in the list of units. So insert this
-    // unit's pre-assessment (if any) immediately above the unit itself.
-    $(this).find('ol.unit.pre > li').each(function() {
-      courseOrderData.push({
-        id: $(this).data('unitId'),
-        title: '',
-        lessons: []
-      });
-    });
 
-    // Insert the unit with all its lessons into the list of unit data
-    $(this).find('ol.unit:not(.pre, .post) > li').each(function() {
-      var lessonId = $(this).data('lessonId');
-      lessons.push({id: lessonId, title: ''});
-    });
-    courseOrderData.push({id: unitId, title: '', lessons: lessons});
+    // Insert the unit with all its lessons and sub units into the list of unit data
+    $(this).find('ol.unit > li').each(function() {
+      var child_lessonId = $(this).data('lessonId');
+      var child_unitId = $(this).data('unitId');
+      if(child_lessonId){
+        children.push({id: child_lessonId, title: '', section:'lesson'});
+      }else if(child_unitId){
+        children.push({id: child_unitId, title: '', section:'sub_unit'});
+        courseOrderData.push({id:child_unitId,title: '', children: [] });
+      }
 
-    // Finally insert the unit's post-assessment (if any) after the unit.
-    $(this).find('ol.unit.post > li:not(.add-lesson)').each(function() {
-      courseOrderData.push({
-        id: $(this).data('unitId'),
-        title: '',
-        lessons: []});
     });
+    courseOrderData.push({id: unitId, title: '', children: children});
+
   });
   return courseOrderData;
 }
@@ -145,14 +122,14 @@ function bindSortableBehavior() {
   $(COURSE_SORTABLE_SELECTOR).sortable({
     cancel: '.add-lesson, .pre-assessment, .post-assessment',
     handle: '.reorder',
-    placeholder: 'placeholder unit',
+    placeholder: 'placeholder unit gcb-list__row',
     update: onUpdate
   }).disableSelection();
   $(UNIT_SORTABLE_SELECTOR).sortable({
     cancel: '.add-lesson, .pre-assessment, .post-assessment',
     connectWith: 'ol.unit:not(.pre, .post)',
     handle: '.reorder',
-    placeholder: 'placeholder lesson',
+    placeholder: 'placeholder lesson gcb-list__row',
     update: onUpdate
   }).disableSelection();
 }

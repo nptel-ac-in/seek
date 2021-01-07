@@ -1,4 +1,4 @@
-# Copyright 2012 Google Inc. All Rights Reserved.
+# Copyright 2015 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,80 +17,93 @@
 __author__ = 'Pavel Simakov (psimakov@google.com)'
 
 from common import resource
-from controllers import assessments
-from controllers import lessons
 from controllers import utils
 from models import content
 from models import resources_display
 from models import custom_modules
 from models import roles
+from models import student_labels
+from modules.courses import admin_preferences_editor
+from modules.courses import assets
+from modules.courses import availability
+from modules.courses import availability_cron
+from modules.courses import constants
+from modules.courses import graphql
+from modules.courses import lessons
+from modules.courses import outline
+from modules.courses import roles as course_roles
+from modules.courses import settings
+from modules.courses import unit_lesson_editor
+from modules.courses import course_categories
 from tools import verify
-
-
-All_LOCALES_PERMISSION = 'can_pick_all_locales'
-All_LOCALES_DESCRIPTION = 'Can pick all locales, including unavailable ones.'
-
-SEE_DRAFTS_PERMISSION = 'can_see_draft_content'
-SEE_DRAFTS_DESCRIPTION = 'Can see lessons and assessments with draft status.'
 
 
 custom_module = None
 
 
-def can_pick_all_locales(app_context):
-    return roles.Roles.is_user_allowed(
-        app_context, custom_module, All_LOCALES_PERMISSION)
-
-
-def can_see_drafts(app_context):
-    return roles.Roles.is_user_allowed(
-        app_context, custom_module, SEE_DRAFTS_PERMISSION)
-
-
 def register_module():
     """Registers this module in the registry."""
 
+    permissions = []
+
+    def permissions_callback(unused_application_context):
+        return permissions
+
     def on_module_enabled():
-        roles.Roles.register_permissions(custom_module, permissions_callback)
         resource.Registry.register(resources_display.ResourceCourseSettings)
         resource.Registry.register(resources_display.ResourceUnit)
         resource.Registry.register(resources_display.ResourceAssessment)
         resource.Registry.register(resources_display.ResourceLink)
         resource.Registry.register(resources_display.ResourceLesson)
+        resource.Registry.register(resources_display.ResourceSAQuestion)
+        resource.Registry.register(resources_display.ResourceMCQuestion)
+        resource.Registry.register(resources_display.ResourceQuestionGroup)
         resource.Registry.register(utils.ResourceHtmlHook)
 
-    def permissions_callback(unused_app_context):
-        return [
-            roles.Permission(All_LOCALES_PERMISSION, All_LOCALES_DESCRIPTION),
-            roles.Permission(SEE_DRAFTS_PERMISSION, SEE_DRAFTS_DESCRIPTION)
-        ]
+        outline.on_module_enabled(custom_module)
+        assets.on_module_enabled()
+        admin_preferences_editor.on_module_enabled()
+        availability.on_module_enabled(custom_module, permissions)
+        course_roles.on_module_enabled(custom_module, permissions)
+        graphql.notify_module_enabled()
+        lessons.on_module_enabled(custom_module)
+        settings.on_module_enabled(custom_module, permissions)
+        unit_lesson_editor.on_module_enabled(custom_module, permissions)
+
+        roles.Roles.register_permissions(custom_module, permissions_callback)
+        course_categories.on_module_enabled(custom_module, permissions)
 
     # provide parser to verify
     verify.parse_content = content.parse_string_in_scope
 
+    global_handlers = [
+        (availability_cron.StartAvailabilityJobs.URL,
+         availability_cron.StartAvailabilityJobs),
+    ]
+    global_handlers += course_categories.get_global_handlers()
     # setup routes
     courses_routes = [
-        ('/', lessons.CourseHandler),
-        ('/activity', lessons.UnitHandler),
-        ('/answer', assessments.AnswerHandler),
-        ('/assessment', lessons.AssessmentHandler),
-        ('/course', lessons.CourseHandler),
         ('/forum', utils.ForumHandler),
-        ('/preview', utils.PreviewHandler),
         ('/register', utils.RegisterHandler),
         ('/rest/locale', utils.StudentLocaleRESTHandler),
-        ('/review', lessons.ReviewHandler),
-        ('/reviewdashboard', lessons.ReviewDashboardHandler),
+        ('/preview', utils.PreviewHandler),
         ('/student/editstudent', utils.StudentEditStudentHandler),
         ('/student/settracks', utils.StudentSetTracksHandler),
         ('/student/home', utils.StudentProfileHandler),
         ('/student/unenroll', utils.StudentUnenrollHandler),
-        ('/unit', lessons.UnitHandler)]
+        ]
+    courses_routes += admin_preferences_editor.get_namespaced_handlers()
+    courses_routes += availability.get_namespaced_handlers()
+    courses_routes += settings.get_namespaced_handlers()
+    courses_routes += unit_lesson_editor.get_namespaced_handlers()
+    courses_routes += student_labels.get_namespaced_handlers()
+    courses_routes += lessons.get_namespaced_handlers()
+    courses_routes += course_categories.get_namespaced_handlers()
 
     global custom_module  # pylint: disable=global-statement
     custom_module = custom_modules.Module(
-        'Course',
+        constants.MODULE_NAME,
         'A set of pages for delivering an online course.',
-        [], courses_routes,
+        global_handlers, courses_routes,
         notify_module_enabled=on_module_enabled)
     return custom_module

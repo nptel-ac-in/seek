@@ -16,13 +16,12 @@
 
 __author__ = 'Thejesh GN (tgn@google.com)'
 
-from common import tags
 from common.schema_fields import FieldArray
 from common.schema_fields import FieldRegistry
 from common.schema_fields import SchemaField
 from models import courses
-from modules.dashboard import tabs
 from modules.mentor import base
+from modules.courses import settings as course_settings
 
 
 def mentor_key(key):
@@ -47,8 +46,8 @@ class MentorSettings(base.MentorBase):
             'enable_mentor_support': False }
         courses.Course.OPTIONS_SCHEMA_PROVIDERS[
             cls.MENTOR_SECTION] += cls.get_fields()
-        tabs.Registry.register('settings', 'mentor', 'Mentor', cls.MENTOR_SECTION)
-
+        course_settings.CourseSettingsHandler.register_settings_section(
+                                        cls.MENTOR_SECTION, title='Mentor')   
     @classmethod
     def unregister(cls):
         for field in cls.get_fields():

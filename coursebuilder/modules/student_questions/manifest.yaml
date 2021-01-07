@@ -1,0 +1,7 @@
+registration:
+  main_module: modules.student_questions.student_questions
+
+files:
+  - modules/student_questions/__init__.py
+  - modules/student_questions/manifest.yaml
+  - modules/student_questions/student_questions.py

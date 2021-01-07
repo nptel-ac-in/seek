@@ -17,7 +17,6 @@
 __author__ = 'Mike Gainer (mgainer@google.com)'
 
 import cgi
-import os
 import re
 import urllib
 
@@ -26,14 +25,14 @@ from common import utils as common_utils
 from controllers import sites
 from controllers import utils
 from models import courses
+from models import model_caching
 from models import models
 from models import transforms
-from modules.dashboard import course_settings
+from modules.courses import settings
 from modules.dashboard import filer
 from modules.i18n_dashboard import i18n_dashboard
 from tests.functional import actions
 from tests.functional.actions import assert_contains
-from tests.functional.actions import assert_does_not_contain
 
 COURSE_NAME = 'admin_settings'
 COURSE_TITLE = 'Admin Settings'
@@ -41,11 +40,11 @@ ADMIN_EMAIL = 'admin@foo.com'
 NAMESPACE = 'ns_%s' % COURSE_NAME
 BASE_URL = '/' + COURSE_NAME
 ADMIN_SETTINGS_URL = '/%s%s' % (
-    COURSE_NAME, course_settings.HtmlHookRESTHandler.URI)
+    COURSE_NAME, settings.HtmlHookRESTHandler.URI)
 TEXT_ASSET_URL = '/%s%s' % (
     COURSE_NAME, filer.TextAssetRESTHandler.URI)
 STUDENT_EMAIL = 'student@foo.com'
-SETTINGS_URL = '/%s/dashboard?action=settings&tab=admin_prefs' % COURSE_NAME
+SETTINGS_URL = '/%s/dashboard?action=settings_admin_prefs' % COURSE_NAME
 
 
 class AdminSettingsTests(actions.TestBase):
@@ -56,7 +55,7 @@ class AdminSettingsTests(actions.TestBase):
         actions.login(ADMIN_EMAIL)
 
     def test_defaults(self):
-        prefs = models.StudentPreferencesDAO.load_or_create()
+        prefs = models.StudentPreferencesDAO.load_or_default()
         self.assertEquals(False, prefs.show_hooks)
 
 
@@ -81,69 +80,15 @@ class WelcomePageTests(actions.TestBase):
         response = self.get('/admin/welcome?action=welcome')
         assert_contains('Welcome to Course Builder', response.body)
         assert_contains('action="/admin/welcome"', response.body)
-        assert_contains('Create Empty Course', response.body)
-        assert_contains('Explore Sample Course', response.body)
-        assert_contains('Configure Settings', response.body)
+        assert_contains('Start Using Course Builder', response.body)
 
-    def test_explore_sample_course(self):
+    def test_welcome_page_button(self):
         actions.login(ADMIN_EMAIL, is_admin=True)
-        response = self.post(
-            '/admin/welcome?action=explore_sample',
-            params={'xsrf_token': crypto.XsrfTokenManager.create_xsrf_token(
-                'explore_sample')})
-        self.assertEqual(response.status_int, 302)
-        assert_contains('/dashboard', response.headers['location'])
-        response = self.get(response.headers['location'])
-        assert_contains('Power Searching with Google', response.body)
-        assert_does_not_contain('explore_sample', response.body)
-
-    def test_create_new_course(self):
-        actions.login(ADMIN_EMAIL, is_admin=True)
-        response = self.post(
-            '/admin/welcome?action=add_first_course',
-            params={'xsrf_token': crypto.XsrfTokenManager.create_xsrf_token(
-                'add_first_course')})
+        response = self.post('/admin/welcome', {})
         self.assertEqual(response.status_int, 302)
         self.assertEqual(
             response.headers['location'],
-            'http://localhost/first/dashboard')
-        response = self.get('/first/dashboard')
-        assert_contains('My First Course', response.body)
-        response = self.get('/admin/welcome?action=welcome')
-        assert_does_not_contain('Create Empty Course', response.body)
-
-    def test_configure_settings(self):
-        actions.login(ADMIN_EMAIL, is_admin=True)
-        response = self.post(
-            '/admin/welcome?action=configure_settings',
-            params={'xsrf_token': crypto.XsrfTokenManager.create_xsrf_token(
-                'configure_settings')})
-        self.assertEqual(302, response.status_int)
-        self.assertEqual(
-            response.headers['location'], 'http://localhost/admin/global')
-
-    def test_explore_sample_course_not_idempotent(self):
-        for uid in ['sample', 'sample_%s' % os.environ[
-            'GCB_PRODUCT_VERSION'].replace('.', '_')]:
-            self.test_explore_sample_course()
-            response = self.get('/')
-            self.assertEqual(response.status_int, 302)
-            self.assertEqual(
-                response.headers['location'],
-                'http://localhost/%s/course?use_last_location=true' % uid)
-
-        self.test_create_new_course()
-
-    def test_create_new_course_idempotent(self):
-        self.test_create_new_course()
-        self.test_create_new_course()
-
-        self.test_explore_sample_course()
-        response = self.get('/')
-        self.assertEqual(response.status_int, 302)
-        self.assertEqual(
-            response.headers['location'],
-            'http://localhost/first/course?use_last_location=true')
+            'http://localhost/modules/admin')
 
 
 class HtmlHookTest(actions.TestBase):
@@ -156,20 +101,20 @@ class HtmlHookTest(actions.TestBase):
         self.course = courses.Course(None, self.app_context)
         actions.login(ADMIN_EMAIL, is_admin=True)
         self.xsrf_token = crypto.XsrfTokenManager.create_xsrf_token(
-            course_settings.HtmlHookRESTHandler.XSRF_ACTION)
+            settings.HtmlHookRESTHandler.XSRF_ACTION)
 
     def tearDown(self):
-        settings = self.course.get_environ(self.app_context)
-        settings.pop('foo', None)
-        settings['html_hooks'].pop('foo', None)
-        self.course.save_settings(settings)
+        the_settings = self.course.get_environ(self.app_context)
+        the_settings.pop('foo', None)
+        the_settings['html_hooks'].pop('foo', None)
+        self.course.save_settings(the_settings)
         super(HtmlHookTest, self).tearDown()
 
     def test_hook_edit_button_presence(self):
 
         # Turn preference on; expect to see hook editor button
         with common_utils.Namespace(NAMESPACE):
-            prefs = models.StudentPreferencesDAO.load_or_create()
+            prefs = models.StudentPreferencesDAO.load_or_default()
             prefs.show_hooks = True
             models.StudentPreferencesDAO.save(prefs)
         response = self.get(BASE_URL)
@@ -177,7 +122,7 @@ class HtmlHookTest(actions.TestBase):
 
         # Turn preference off; expect editor button not present.
         with common_utils.Namespace(NAMESPACE):
-            prefs = models.StudentPreferencesDAO.load_or_create()
+            prefs = models.StudentPreferencesDAO.load_or_default()
             prefs.show_hooks = False
             models.StudentPreferencesDAO.save(prefs)
 
@@ -187,7 +132,7 @@ class HtmlHookTest(actions.TestBase):
     def test_non_admin_permissions_failures(self):
         actions.login(STUDENT_EMAIL)
         student_xsrf_token = crypto.XsrfTokenManager.create_xsrf_token(
-            course_settings.HtmlHookRESTHandler.XSRF_ACTION)
+            settings.HtmlHookRESTHandler.XSRF_ACTION)
 
         response = self.get(ADMIN_SETTINGS_URL)
         self.assertEquals(200, response.status_int)
@@ -392,7 +337,7 @@ class HtmlHookTest(actions.TestBase):
     def test_student_admin_hook_visibility(self):
         actions.login(STUDENT_EMAIL, is_admin=False)
         with common_utils.Namespace(NAMESPACE):
-            prefs = models.StudentPreferencesDAO.load_or_create()
+            prefs = models.StudentPreferencesDAO.load_or_default()
             prefs.show_hooks = True
             models.StudentPreferencesDAO.save(prefs)
 
@@ -401,7 +346,7 @@ class HtmlHookTest(actions.TestBase):
 
         actions.login(ADMIN_EMAIL, is_admin=True)
         with common_utils.Namespace(NAMESPACE):
-            prefs = models.StudentPreferencesDAO.load_or_create()
+            prefs = models.StudentPreferencesDAO.load_or_default()
             prefs.show_hooks = True
             models.StudentPreferencesDAO.save(prefs)
         response = self.get(BASE_URL)
@@ -441,7 +386,7 @@ class HtmlHookTest(actions.TestBase):
 
         # Set preference to translated language, and check that that's there.
         with common_utils.Namespace(NAMESPACE):
-            prefs = models.StudentPreferencesDAO.load_or_create()
+            prefs = models.StudentPreferencesDAO.load_or_default()
             prefs.locale = 'de'
             models.StudentPreferencesDAO.save(prefs)
 
@@ -457,7 +402,8 @@ class HtmlHookTest(actions.TestBase):
         with common_utils.Namespace(NAMESPACE):
             i18n_dashboard.ResourceBundleDAO.delete(
                 i18n_dashboard.ResourceBundleDTO(str(hook_key), hook_bundle))
-        i18n_dashboard.ProcessScopedResourceBundleCache.instance().clear()
+        model_caching.CacheFactory.get_cache_instance(
+            i18n_dashboard.RESOURCE_BUNDLE_CACHE_NAME).clear()
 
         response = self.get(BASE_URL)
         dom = self.parse_html_string(response.body)
@@ -470,9 +416,9 @@ class HtmlHookTest(actions.TestBase):
             'baz', utils.HtmlHooks.get_content(self.course, 'foo.bar'))
 
     def test_insert_on_page_and_hook_content_found_using_old_separator(self):
-        settings = self.course.get_environ(self.app_context)
-        settings['html_hooks']['foo'] = {'bar': 'baz'}
-        self.course.save_settings(settings)
+        the_settings = self.course.get_environ(self.app_context)
+        the_settings['html_hooks']['foo'] = {'bar': 'baz'}
+        self.course.save_settings(the_settings)
         hooks = utils.HtmlHooks(self.course)
         content = hooks.insert('foo:bar')
         self.assertEquals('<div class="gcb-html-hook" id="foo-bar">baz</div>',
@@ -524,14 +470,14 @@ class JinjaContextTest(actions.TestBase):
 
     def _get_jinja_context_text(self, response):
         root = self.parse_html_string(response.text)
-        div = root.find('body/div[last()]')
+        div = root.find('body/div[last()-1]')
         return ''.join(div.itertext())
 
-    def test_show_jina_context_presence(self):
+    def test_show_jinja_context_presence(self):
 
         # Turn preference on; expect to see context dump.
         with common_utils.Namespace(NAMESPACE):
-            prefs = models.StudentPreferencesDAO.load_or_create()
+            prefs = models.StudentPreferencesDAO.load_or_default()
             prefs.show_jinja_context = True
             models.StudentPreferencesDAO.save(prefs)
         self.assertIn('is_read_write_course:',
@@ -539,7 +485,7 @@ class JinjaContextTest(actions.TestBase):
 
         # Turn preference off; expect context dump not present.
         with common_utils.Namespace(NAMESPACE):
-            prefs = models.StudentPreferencesDAO.load_or_create()
+            prefs = models.StudentPreferencesDAO.load_or_default()
             prefs.show_jinja_context = False
             models.StudentPreferencesDAO.save(prefs)
         self.assertNotIn('is_read_write_course:',
@@ -549,7 +495,7 @@ class JinjaContextTest(actions.TestBase):
 
         actions.login(STUDENT_EMAIL, is_admin=False)
         with common_utils.Namespace(NAMESPACE):
-            prefs = models.StudentPreferencesDAO.load_or_create()
+            prefs = models.StudentPreferencesDAO.load_or_default()
             prefs.show_jinja_context = True
             models.StudentPreferencesDAO.save(prefs)
         self.assertNotIn('is_read_write_course:',
@@ -564,13 +510,11 @@ class ExitUrlTest(actions.TestBase):
         actions.login(ADMIN_EMAIL, is_admin=True)
 
     def test_exit_url(self):
-        base_url = '/%s/dashboard?action=settings&tab=data_pump' % COURSE_NAME
+        base_url = '/%s/dashboard?action=settings_data_pump' % COURSE_NAME
         url = base_url + '&' + urllib.urlencode({
             'exit_url': 'dashboard?%s' % urllib.urlencode({
-                'action': 'analytics',
-                'tab': 'data_pump'})})
+                'action': 'data_pump'})})
         response = self.get(url)
         self.assertIn(
-            'cb_global.exit_url = \'dashboard?action=analytics'
-            '\\u0026tab=data_pump\'',
+            'cb_global.exit_url = \'dashboard?action=data_pump',
             response.body)

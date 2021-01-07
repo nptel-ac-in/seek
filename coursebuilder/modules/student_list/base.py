@@ -16,28 +16,25 @@
 
 __author__ = 'Rishav Thakker (rthakker@google.com)'
 
+import logging
+from google.appengine.ext import db
 from models import models
 from models import transforms
 
 class StudentListBase(object):
-    NAME = 'Students'
+    NAME = 'Manage Students'
     DASHBOARD_NAV = 'student_list'
     DASHBOARD_TAB = 'student_list'
+    DASHBOARD_CATEGORY = 'analytics'
     DETAILS_ACTION = 'student_details'
     ENROLL_ACTION = 'student_details_enroll'
     UNENROLL_ACTION = 'student_details_unenroll'
+    ADMIN_NAME = 'Manage Student Profiles'
     ADMIN_TAB = 'student_list_admin'
+    ADMIN_NAV = 'student_list_admin'
+    ADMIN_CATEGORY = 'analytics'
+    ADMIN_SUBGROUP = 'advanced'
     ADMIN_DETAILS_ACTION = 'student_details_admin'
-
-
-    @classmethod
-    def get_reverse_order(cls, order):
-        if not order:
-            return None
-        if order[0] == '-':
-            return order[1:]
-        else:
-            return '-' + order
 
     @classmethod
     def add_new_student_from_profile(cls, profile, handler, labels=None):
@@ -46,7 +43,7 @@ class StudentListBase(object):
         additional_fields = transforms.dumps({
             'form01': profile.nick_name
         })
-        student_by_uid = models.Student.get_student_by_user_id(profile.user_id)
+        student_by_uid = models.Student.get_by_user_id(profile.user_id)
         is_valid_student = (
             student_by_uid is None or student_by_uid.user_id == profile.user_id)
         assert is_valid_student, ('Student\'s profile and user id do not match')

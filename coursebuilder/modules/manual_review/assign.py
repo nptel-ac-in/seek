@@ -291,31 +291,39 @@ class CalculateFinalScore(jobs.MapReduceJob):
 
     @staticmethod
     def map(entity):
-        if entity.completed_count == 0:
-            return
+        try:
+            if entity.completed_count == 0:
+                return
 
-        # Get the scoring method
-        namespace = namespace_manager.get_namespace()
-        app_context = sites.get_app_context_for_namespace(namespace)
-        course = courses.Course.get(app_context)
-        unit = course.find_unit_by_id(entity.unit_id)
-        content = question.SubjectiveAssignmentRESTHandler.get_content(
-            course, unit)
-        method = content.get('scoring_method')
+            # Get the scoring method
+            namespace = namespace_manager.get_namespace()
+            app_context = sites.get_app_context_for_namespace(namespace)
+            course = courses.Course.get(app_context)
+            unit = course.find_unit_by_id(entity.unit_id)
+            content = question.SubjectiveAssignmentRESTHandler.get_content(
+                course, unit)
+            method = content.get('scoring_method')
 
-        # Get the manual evaluation steps
-        steps = staff.ManualEvaluationStep.all().filter(
-            'manual_evaluation_summary_key =', entity.key()
-        ).filter('state =', staff.REVIEW_STATE_COMPLETED
-        ).filter('removed =', False)
+            # Get the manual evaluation steps
+            steps = staff.ManualEvaluationStep.all().filter(
+                'manual_evaluation_summary_key =', entity.key()
+            ).filter('state =', staff.REVIEW_STATE_COMPLETED
+            ).filter('removed =', False)
 
-        # Calculate final score
-        final_score = manage.Manager.calculate_final_score(steps, method)
-        if final_score is None:
-            return
-        student = models.Student.get(entity.reviewee_key)
-        utils.set_score(student, str(entity.unit_id), final_score)
-        student.put()
+            # Calculate final score
+            final_score = manage.Manager.calculate_final_score(steps, method)
+            if final_score is None:
+                return
+            student = models.Student.get(entity.reviewee_key)
+            if not student:
+                logging.error('Student not found %s', entity.reviewee_key)
+                return
+            utils.set_score(student, str(entity.unit_id), final_score)
+            student.put()
+        except Exception as e:
+            from modules.nptel import utils as nptel_utils
+            logging.error('Exception occured while running CalculateFinalScore')
+            nptel_utils.print_exception_with_line_number(e)
 
     @staticmethod
     def reduce(key, data_list):
@@ -363,7 +371,7 @@ class FixMissingManualEvaluationSummary(jobs.MapReduceJob):
             summary_key_name)
         if not summary:
             # Create the ManualEvaluationSummary object
-            student = models.Student.get_student_by_user_id(
+            student = models.Student.get_by_user_id(
                 entity.reviewee_key.name())
             manage.Manager.submit_for_evaluation(course, unit, student)
 
@@ -466,6 +474,14 @@ class CalculateFinalScoreHandler(BaseHandler):
 
     def get(self):
         namespace = self.request.get('namespace')
+        if namespace == 'all':
+            app_contexts = sites.get_all_courses(include_closed=False)
+            for ac in app_contexts:
+                job = CalculateFinalScore(ac)
+                job.submit()
+                self.response.write(
+                    'Started job for namespace %s<br/>\n\n' % ac.namespace)
+            return
         if namespace:
             app_context = sites.get_app_context_for_namespace(namespace)
             if app_context:

@@ -1,19 +1,3 @@
-/**
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 (function(){var k,n=this;
 function aa(a){var b=typeof a;if("object"==b)if(a){if(a instanceof Array)return"array";if(a instanceof Object)return b;var c=Object.prototype.toString.call(a);if("[object Window]"==c)return"object";if("[object Array]"==c||"number"==typeof a.length&&"undefined"!=typeof a.splice&&"undefined"!=typeof a.propertyIsEnumerable&&!a.propertyIsEnumerable("splice"))return"array";if("[object Function]"==c||"undefined"!=typeof a.call&&"undefined"!=typeof a.propertyIsEnumerable&&!a.propertyIsEnumerable("call"))return"function"}else return"null";else if("function"==
 b&&"undefined"==typeof a.call)return"object";return b}function p(a,b){function c(){}c.prototype=b.prototype;a.ca=b.prototype;a.prototype=new c;a.prototype.constructor=a;a.ia=function(a,c,e){return b.prototype[c].apply(a,Array.prototype.slice.call(arguments,2))}};var ba=String.prototype.trim?function(a){return a.trim()}:function(a){return a.replace(/^[\s\xa0]+|[\s\xa0]+$/g,"")};function q(a,b){return a<b?-1:a>b?1:0};function ca(a,b){a.sort(b||da)}function da(a,b){return a>b?1:a<b?-1:0};var r;a:{var ea=n.navigator;if(ea){var ha=ea.userAgent;if(ha){r=ha;break a}}r=""};function ia(a){var b=[],c=0,d;for(d in a)b[c++]=a[d];return b};var ja=-1!=r.indexOf("Opera")||-1!=r.indexOf("OPR"),u=-1!=r.indexOf("Trident")||-1!=r.indexOf("MSIE"),v=-1!=r.indexOf("Gecko")&&-1==r.toLowerCase().indexOf("webkit")&&!(-1!=r.indexOf("Trident")||-1!=r.indexOf("MSIE")),ka=-1!=r.toLowerCase().indexOf("webkit");function la(){var a=n.document;return a?a.documentMode:void 0}

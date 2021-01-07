@@ -81,9 +81,9 @@ def _get_schema_field(property_type):
 def get_schema_for_entity(clazz):
     """Get schema matching entity returned by BaseEntity.for_export()."""
 
-    assert issubclass(clazz, entities.BaseEntity)  # Must have denylist.
+    assert issubclass(clazz, entities.BaseEntity)  # Must have blacklist.
     # Treating as module-protected. pylint: disable=protected-access
-    return _get_schema_for_entity(clazz, clazz._get_export_denylist())
+    return _get_schema_for_entity(clazz, clazz._get_export_blacklist())
 
 
 def get_schema_for_entity_unsafe(clazz):

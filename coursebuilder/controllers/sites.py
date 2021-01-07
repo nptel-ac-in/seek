@@ -108,40 +108,53 @@ import logging
 import mimetypes
 import os
 import posixpath
+import random
 import re
 import threading
 import traceback
+import urllib
 import urlparse
+import uuid
 import zipfile
+import json
 
 import utils
 import webapp2
 from webapp2_extras import i18n
+from webob import exc
 
 import appengine_config
+
 from common import caching
 from common import safe_dom
 from models import course_list
+from common import users
+from common import user_routes
+from common import utils as common_utils
+from models import courses
+from models import messages
 from models import models
+from models import custom_modules
 from models import transforms
 from models.config import ConfigProperty
 from models.config import ConfigPropertyEntity
 from models.config import Registry
 from models.counters import PerfCounter
 from models.courses import Course
+from models.entities import BaseEntity
 from models.roles import Roles
 from models.vfs import AbstractFileSystem
 from models.vfs import DatastoreBackedFileSystem
 from models.vfs import LocalReadOnlyFileSystem
-from modules.courses import courses as courses_module
 
 from google.appengine.api import namespace_manager
-from google.appengine.api import users
 from google.appengine.ext import db
+from google.appengine.ext.db import metadata
 from google.appengine.ext import zipserve
+from google.appengine.runtime import apiproxy_errors
 
 USE_COURSE_LIST = ConfigProperty(
-    'use_course_list', bool, 'Use Course List', False)
+    'use_course_list', bool, 'Use Course List', True)
 
 
 # base name for all course namespaces
@@ -215,6 +228,22 @@ HTTP_STATUS_500 = PerfCounter(
 COUNTER_BY_HTTP_CODE = {
     200: HTTP_STATUS_200, 300: HTTP_STATUS_300, 400: HTTP_STATUS_400,
     500: HTTP_STATUS_500}
+
+_NAMESPACE_MAX_LENGTH = 100
+
+# name of the response header used to transmit handler class name
+GCB_HANDLER_CLASS_HEADER_NAME = 'gcb-handler-class'
+
+TEMPLATES_DIR = os.path.join(
+    appengine_config.BUNDLE_ROOT, 'controllers', 'templates')
+
+# URLs to Appengine documentation for failure diagnostics.
+APPENGINE_DOC_QUOTAS_URL = 'https://cloud.google.com/appengine/docs/quotas'
+
+
+class BaseZipHandler(zipserve.ZipHandler, utils.StarRouteHandlerMixin):
+    """Base class for zip handlers."""
+    pass
 
 
 def count_stats(handler):
@@ -310,8 +339,31 @@ def unprefix(path, prefix):
     return path
 
 
+def can_handle_course_requests(context=None, course_list_obj=None):
+    """Reject all, but authors requests, to an unpublished course."""
+    if context:
+        return ((context.now_available and Roles.is_user_whitelisted(context))
+                or Roles.is_course_admin(context)
+                or Roles.in_any_role(context))
+    elif course_list_obj:
+        return ((course_list_obj.now_available
+                and Roles.is_user_whitelisted(course_list_obj=course_list_obj))
+                or Roles.is_course_admin(course_list_obj=course_list_obj)
+                or Roles.in_any_role(course_list_obj=course_list_obj))
+    else:
+        raise ValueError(
+            "Must provide either app_context or course_list_obj")
+
+
+def _add_handler_to_headers(handler):
+    if users.is_current_user_admin() or not appengine_config.PRODUCTION_MODE:
+        handler.response.headers[
+            GCB_HANDLER_CLASS_HEADER_NAME] = handler.__class__.__name__
+
+
 def set_static_resource_cache_control(handler):
     """Properly sets Cache-Control for a WebOb/webapp2 response."""
+    _add_handler_to_headers(handler)
     handler.response.cache_control.no_cache = None
     handler.response.cache_control.must_revalidate = True
     handler.response.cache_control.public = DEFAULT_CACHE_CONTROL_PUBLIC
@@ -322,6 +374,7 @@ def set_static_resource_cache_control(handler):
 
 def set_default_response_headers(handler):
     """Sets the default headers for outgoing responses."""
+    _add_handler_to_headers(handler)
 
     # This conditional is needed for the unit tests to pass, since their
     # handlers do not have a response attribute.
@@ -340,10 +393,111 @@ def set_default_response_headers(handler):
         handler.response.pragma = DEFAULT_PRAGMA
 
 
+def diagnose_datastore():
+    """Performs read and write operations on datastore to detect failures.
+
+    Returns: A DOM tree of diagnostics findings.
+    """
+    has_errors = False
+    diagnostics = safe_dom.Element('ul')
+
+    # Dummy model class for write test.
+    class DummyModel(db.Model):
+        dummy_int = db.IntegerProperty()
+
+    # Tests write operation.
+    try:
+        DummyModel(key_name='_dummy_entity',
+                   dummy_int=random.randint(0, 65535)).put()
+    except apiproxy_errors.OverQuotaError:
+        has_errors = True
+        diagnostics.append(
+            safe_dom.Element('li').add_text(
+                'Write operation blocked due to a lack of available quota.'
+            ).append(safe_dom.Element('br')).add_text(
+                'Please refer to the ').append(
+                    safe_dom.A(href=APPENGINE_DOC_QUOTAS_URL).add_text(
+                        'Appengine quotas documentation.')))
+    except Exception, e:  # pylint: disable=broad-except
+        has_errors = True
+        diagnostics.append(
+            safe_dom.Element('li').add_text(
+                'Write operation failed due to an unexpected error: %s.' % e))
+
+    # Tests read operation.
+    try:
+        test_entity = BaseEntity.all().fetch(1)
+    except apiproxy_errors.OverQuotaError:
+        has_errors = True
+        diagnostics.append(
+            safe_dom.Element('li').add_text(
+                'Read operation blocked due to a lack of available quota.'
+                ).append(safe_dom.Element('br')).add_text(
+                    'Please refer to the ').append(
+                        safe_dom.A(href=APPENGINE_DOC_QUOTAS_URL).add_text(
+                            'Appengine quotas documentation.')))
+    except Exception, e:  # pylint: disable=broad-except
+        has_errors = True
+        diagnostics.append(
+            safe_dom.Element('li').add_text(
+                'Read operation failed due to an unexpected error: %s.' % e))
+
+    return safe_dom.NodeList().append(diagnostics) if has_errors else None
+
+
+def diagnose_memcache():
+    """Runs test operations against memcache, reports eventual failures.
+
+    Returns: A DOM tree of diagnostics findings.
+    """
+    has_errors = False
+    diagnostics = safe_dom.Element('ul')
+
+    memcache_manager = models.MemcacheManager()
+    try:
+        memcache_manager.set(
+            '_test', random.randint(0, 100), propagate_exceptions=True)
+        value = memcache_manager.get('_test')
+        memcache_manager.delete('_test')
+    except Exception, e:  # pylint: disable=broad-except
+        has_errors = True
+        diagnostics.append(
+            safe_dom.Element('li').add_text(
+                'Write operation failed due to an unexpected error: %s.' % e))
+
+    return safe_dom.NodeList().append(diagnostics) if has_errors else None
+
+
+def diagnose_services():
+    """Runs test operations against services, reports eventual failures.
+
+    Returns: A DOM tree of diagnostics findings.
+    """
+    diagnostics = safe_dom.Element('ul')
+
+    datastore_diagnostics = diagnose_datastore()
+    if datastore_diagnostics is not None:
+        diagnostics.append(
+          safe_dom.Element('li').append(
+              safe_dom.Element('b').add_text('Datastore Diagnostics: ')
+              ).add_children(
+                  datastore_diagnostics))
+
+    memcache_diagnostics = diagnose_memcache()
+    if memcache_diagnostics is not None:
+        diagnostics.append(
+            safe_dom.Element('li').append(
+                safe_dom.Element('b').add_text('Memcache Diagnostics: ')
+                ).add_children(
+                    memcache_diagnostics))
+
+    return safe_dom.NodeList().append(diagnostics)
+
+
 def make_zip_handler(zipfilename):
     """Creates a handler that serves files from a zip file."""
 
-    class CustomZipHandler(zipserve.ZipHandler):
+    class CustomZipHandler(BaseZipHandler):
         """Custom ZipHandler that properly controls caching."""
 
         MAX_AGE = DEFAULT_CACHE_CONTROL_MAX_AGE
@@ -376,7 +530,7 @@ def make_zip_handler(zipfilename):
     return CustomZipHandler
 
 
-class CssComboZipHandler(zipserve.ZipHandler):
+class CssComboZipHandler(BaseZipHandler):
     """A handler which combines a files served from a zip file.
 
     The paths for the files within the zip file are presented
@@ -421,13 +575,14 @@ class CssComboZipHandler(zipserve.ZipHandler):
             try:
                 content = zipfile_object.read(name)
                 if content_type == 'text/css':
-                    content = self._fix_css_paths(
+                    content = self.fix_css_paths(
                         name, content, static_file_handler)
                 self.response.out.write(content)
             except (KeyError, RuntimeError), err:
                 logging.error('Not found %s in %s', name, zipfilename)
 
-    def _fix_css_paths(self, path, css, static_file_handler):
+    @classmethod
+    def fix_css_paths(cls, path, css, static_file_handler):
         """Transform relative url() settings in CSS to absolute.
 
         This is necessary because a url setting, e.g., url(foo.png), is
@@ -453,7 +608,8 @@ class CssComboZipHandler(zipserve.ZipHandler):
         """
         base = static_file_handler + posixpath.split(path)[0] + '/'
         css = css.decode('utf-8')
-        css = re.sub(r'url\(([^http|^https]\S+)\)', r'url(%s\1)' % base, css)
+        css = re.sub(
+            r'url\(((?!(http:|https:|data:))\S+)\)', r'url(%s\1)' % base, css)
         return css
 
 
@@ -499,7 +655,7 @@ class AssetHandler(utils.BaseHandler):
                 return
             set_static_resource_cache_control(self)
             self.response.headers['Content-Type'] = self.get_mime_type(
-                self.filename)
+               self.filename)
             self.response.write(stream.read())
         finally:
             models.MemcacheManager.end_readonly()
@@ -513,9 +669,14 @@ class CourseIndex(object):
     @appengine_config.timeandlog('CourseIndex.init', duration_only=True)
     def __init__(self, all_contexts):
         self._all_contexts = all_contexts
+        self._generate_visible_contexts_from_all_contexts()
         self._namespace2app_context = {}
         self._slug_parts2app_context = {}
         self._reindex()
+
+    def _generate_visible_contexts_from_all_contexts(self):
+        self._visible_contexts = [
+            ac for ac in self._all_contexts if ac.now_available]
 
     @classmethod
     def _slug_to_parts(cls, path):
@@ -583,6 +744,9 @@ class CourseIndex(object):
 
     def get_all_courses(self):
         return self._all_contexts
+
+    def get_visible_courses(self):
+        return self._visible_contexts
 
     def _get_course_for_path_linear(self, path):
         for app_context in self._all_contexts:
@@ -713,8 +877,7 @@ class ApplicationContext(object):
     def now_available(self):
         if self._course_list_item:
             return self._course_list_item.visible
-        course = self.get_environ().get('course')
-        return course and course.get('now_available')
+        return Course.is_course_available(self)
 
     @property
     def title(self):
@@ -734,8 +897,8 @@ class ApplicationContext(object):
     def closed(self):
         if self._course_list_item:
             return self._course_list_item.closed
-        explorer = self.get_environ().get('explorer')
-        return explorer and explorer.get('closed', False)
+        course_settings = self.get_environ().get('course')
+        return course_settings and course_settings.get('closed', False)
 
     @property
     def can_register(self):
@@ -758,10 +921,18 @@ class ApplicationContext(object):
 
     @property
     def should_list(self):
+        # TODO(rthakker) Remove this, is obsolete
         if self._course_list_item:
             return self._course_list_item.should_list
         explorer = self.get_environ().get('explorer')
         return explorer and explorer.get('list_in_explorer')
+
+    @property
+    def show_in_explorer(self):
+        if self._course_list_item:
+            return self._course_list_item.show_in_explorer
+        course_environ = self.get_environ().get('course')
+        return course_environ and course_environ.get('show_in_explorer')
 
     @property
     def blurb(self):
@@ -781,22 +952,59 @@ class ApplicationContext(object):
     def featured(self):
         if self._course_list_item:
             return self._course_list_item.featured
-        explorer = self.get_environ().get('explorer')
-        return explorer.get('featured') if explorer else False
+        course_settings = self.get_environ().get('explorer')
+        return course_settings.get('featured') if explorer else False
 
     @property
-    def allowlist(self):
+    def spoc_mentor(self):
         if self._course_list_item:
-            return self._course_list_item.allowlist if self._course_list_item.allowlist else ''
-        course = self.get_environ().get('course')
-        return '' if not course else course.get('allowlist', '')
+            return self._course_list_item.spoc_mentor
+        explorer = self.get_environ().get('explorer')
+        return explorer.get('spoc_mentor') if explorer else False
+
+    @property
+    def availability(self):
+        if self._course_list_item:
+            return self._course_list_item.availability
+        return courses.Course.get_course_availability_from_environ(
+            self.get_environ())
+
+    @property
+    def start_date(self):
+        if self._course_list_item:
+            return self._course_list_item.start_date
+
+    @property
+    def end_date(self):
+        if self._course_list_item:
+            return self._course_list_item.end_date
+
+
+    @property
+    def whitelist(self):
+        if self._course_list_item:
+            return self._course_list_item.whitelist if self._course_list_item.whitelist else ''
+        return Course.get_whitelist(self)
 
     @property
     def course_admin_email(self):
         if self._course_list_item:
-            return self._course_list_item.course_admin_email if self._course_list_item.course_admin_email else ''
+            return self._course_list_item.course_admin_email if self._course_list_item.course_admin_email else []
         course = self.get_environ().get('course')
-        return '' if not course else course.get('admin_user_emails', '')
+        emails = '' if not course else course.get('admin_user_emails', '')
+        return common_utils.text_to_list(
+            emails, common_utils.BACKWARD_COMPATIBLE_SPLITTER)
+
+
+    def permissions(self):
+        if self._course_list_item:
+            if not self._course_list_item.permissions:
+                return {}
+            if json.loads(self._course_list_item.permissions):
+                return json.loads(self._course_list_item.permissions)
+            return {}
+        else:
+            return Roles.load_permissions_map(self)
 
     @property
     def last_announcement(self):
@@ -821,6 +1029,8 @@ class ApplicationContext(object):
 
     @property
     def default_locale(self):
+        if self._course_list_item:
+            return self._course_list_item.locale
         course_settings = self.get_environ().get('course')
         if not course_settings:
             return None
@@ -867,7 +1077,7 @@ class ApplicationContext(object):
         path = abspath(self.get_home_folder(), GCB_DATA_FOLDER_NAME)
         return path
 
-    def gettext(self, text):
+    def gettext(self, text, log_exception=True):
         """Render localized text in the default locale.
 
         This method should be used in place of gettext.gettext, as it will
@@ -884,7 +1094,8 @@ class ApplicationContext(object):
             translator.set_locale(self.get_current_locale())
             return translator.gettext(text)
         except Exception:  # pylint: disable=broad-except
-            logging.exception('Unable to translate %s', text)
+            if log_exception:
+                logging.exception('Unable to translate %s', text)
             return text
 
     def get_template_environ(self, locale, additional_dirs):
@@ -903,7 +1114,7 @@ class ApplicationContext(object):
         return self._fs.impl.__class__ == DatastoreBackedFileSystem
 
     def can_pick_all_locales(self):
-        return courses_module.can_pick_all_locales(self)
+        return custom_modules.can_pick_all_locales(self)
 
     def get_allowed_locales(self):
         environ = self.get_environ()
@@ -1020,8 +1231,9 @@ def _build_app_context_from_course_list_item(item, create_vfs=True):
          course_list_item=item)
 
 
-def _build_course_list_from_db(create_vfs=True):
-    courses = course_list.CourseListDAO.get_course_list()
+def _build_course_list_from_db(create_vfs=True, include_closed=True):
+    courses = course_list.CourseListDAO.get_course_list(
+        include_closed=include_closed)
     if not courses:
         return []
     slugs = {}
@@ -1122,11 +1334,11 @@ def _build_course_list_from(rules_text, create_vfs=True):
     _validate_appcontext_list(all_contexts)
     return all_contexts
 
-
-def get_course_index(rules_text=None):
+def get_course_index(rules_text=None, include_closed=True):
     """Build course index given a text of course definition rules."""
     if USE_COURSE_LIST.value:
-        return CourseIndex(_build_course_list_from_db())
+        return CourseIndex(_build_course_list_from_db(
+            include_closed=include_closed))
 
     if not rules_text:
         rules_text = GCB_COURSES_CONFIG.value
@@ -1148,7 +1360,6 @@ def get_course_index(rules_text=None):
     ApplicationContext._COURSE_INDEX_CACHE = {rules_text: course_index}
     return course_index
 
-
 def get_app_context_for_namespace(namespace):
     """Chooses the app_context that matches a namespace."""
     if USE_COURSE_LIST.value:
@@ -1162,6 +1373,12 @@ def get_app_context_for_namespace(namespace):
     if not app_context:
         debug('No app_context in namespace: %s' % namespace)
     return app_context
+
+
+def get_app_context_for_current_request():
+    if namespace_manager.get_namespace() == appengine_config.DEFAULT_NAMESPACE_NAME:
+        return None
+    return get_app_context_for_namespace(namespace_manager.get_namespace())
 
 
 def get_course_for_path(path):
@@ -1188,9 +1405,14 @@ def get_course_for_current_request():
     return get_course_for_path(get_path_info())
 
 
-def get_all_courses(rules_text=None):
-    course_index = get_course_index(rules_text)
+def get_all_courses(rules_text=None, include_closed=True):
+    course_index = get_course_index(rules_text, include_closed=include_closed)
     return course_index.get_all_courses()
+
+
+def get_visible_courses(rules_text=None, include_closed=True):
+    course_index = get_course_index(rules_text, include_closed=include_closed)
+    return course_index.get_visible_courses()
 
 
 def _courses_config_validator(rules_text, errors, expect_failures=True):
@@ -1208,69 +1430,24 @@ def _courses_config_validator(rules_text, errors, expect_failures=True):
 
 def validate_new_course_entry_attributes(name, title, admin_email, errors):
     """Validates new course attributes."""
-    if not name or len(name) < 3:
+    if not name or len(name) < 2:
         errors.append(
-            'The unique name associated with the course must be at least '
-            'three characters long.')
-    if not re.match('[_a-z0-9]+$', name, re.IGNORECASE):
+            'The URL component must be at least two characters long.')
+
+    if not re.match('[_a-z0-9-]+$', name):
         errors.append(
-            'The unique name associated with the course should contain only '
+            'The URL component should contain only '
             'lowercase letters, numbers, or underscores.')
 
-    if not title or len(title) < 3:
-        errors.append('The course title is too short.')
+    if len(name) >= _NAMESPACE_MAX_LENGTH:
+        errors.append(
+            'The URL component cannot be longer than 99 characters.')
+
+    if not title or len(title) < 2:
+        errors.append('The title is too short.')
 
     if not admin_email or '@' not in admin_email:
         errors.append('Please enter a valid email address.')
-
-
-@db.transactional()
-def _add_new_course_entry_to_persistent_configuration(raw):
-    """Adds new raw course entry definition to the datastore settings.
-
-    This loads all current datastore course entries and adds a new one. It
-    also find the best place to add the new entry at the further down the list
-    the better, because entries are applied in the order of declaration.
-
-    Args:
-        raw: The course entry rule: 'course:/foo::ns_foo'.
-
-    Returns:
-        True if added, False if not. False almost always means a duplicate rule.
-    """
-
-    # Get all current entries from a datastore.
-    entity = ConfigPropertyEntity.get_by_key_name(GCB_COURSES_CONFIG.name)
-    if not entity:
-        entity = ConfigPropertyEntity(key_name=GCB_COURSES_CONFIG.name)
-        entity.is_draft = False
-    if not entity.value:
-        entity.value = GCB_COURSES_CONFIG.value
-        if entity.value == GCB_COURSES_CONFIG.default_value:
-            entity.value = ''
-
-    lines = entity.value.splitlines()
-
-    # Add new entry to the rest of the entries. Since entries are matched
-    # in the order of declaration, try to find insertion point further down.
-    final_lines_text = None
-    for index in reversed(range(0, len(lines) + 1)):
-        # Create new rule list putting new item at index position.
-        new_lines = lines[:]
-        new_lines.insert(index, raw)
-        new_lines_text = '\n'.join(new_lines)
-
-        # Validate the rule list definition.
-        if _courses_config_validator(new_lines_text, [], expect_failures=True):
-            final_lines_text = new_lines_text
-            break
-
-    # Save updated course entries.
-    if final_lines_text:
-        entity.value = final_lines_text
-        entity.put()
-        return True
-    return False
 
 
 def add_new_course_entry(unique_name, title, admin_email, errors):
@@ -1282,72 +1459,52 @@ def add_new_course_entry(unique_name, title, admin_email, errors):
     if errors:
         return
 
-    # Create new entry and check it is valid.
-    raw = 'course:/%s::ns_%s' % (unique_name, unique_name)
-    try:
-        get_all_courses(rules_text=raw)
-    except Exception as e:  # pylint: disable=broad-except
-        errors.append('Failed to add entry: %s.\n%s' % (raw, e))
-    if errors:
-        return
+    namespace = 'ns_%s' % unique_name
 
-    course_list.CourseListDAO.add_new_course(
-         'ns_%s' % unique_name, '/%s' % unique_name, title, errors)
+    with common_utils.Namespace(namespace):
+        if metadata.Kind.all().get():
+            errors.append(
+                'Unable to add new entry "%s": the corresponding namespace, '
+                '"%s" is not empty.  If you are certain it should be, you '
+                'can use the App Engine Dashboard to manually remove all '
+                'database entities from it.' % (unique_name, namespace))
+            return
+
+
+    course_list.CourseListDAO.add_new_course(namespace=namespace,
+        path='/%s' % unique_name, title=title, course_admin_email=[admin_email] ,errors=errors)
+
+    return True
     # Add new entry to persistence.
-    if not _add_new_course_entry_to_persistent_configuration(raw):
-        errors.append(
-            'Unable to add new entry \'%s\'. Entry with the '
-            'same name \'%s\' already exists.' % (raw, unique_name))
-        return
-    return raw
+    #TODO (rthakker, thej)  Check why this is there
+    # if not _add_new_course_entry_to_persistent_configuration(raw):
+    #     errors.append(
+    #         'Unable to add new entry \'%s\'. Entry with the '
+    #         'same name \'%s\' already exists.' % (raw, unique_name))
+    #     return
+    # return raw
+
+
+@db.transactional()
+def _remove_course_from_persistent_configuration(app_context):
+    return True
+
+def remove_course(app_context):
+    with common_utils.Namespace(appengine_config.DEFAULT_NAMESPACE_NAME):
+        course_list.CourseListDAO.delete_course(app_context.get_namespace_name())
+        get_course_index()
 
 
 GCB_COURSES_CONFIG = ConfigProperty(
-    'gcb_courses_config', str,
-    safe_dom.NodeList().append(
-        safe_dom.Element('p').add_text("""
-A newline separated list of course entries. Each course entry has
-four parts, separated by colons (':'). The four parts are:""")
-    ).append(
-        safe_dom.Element('ol').add_child(
-            safe_dom.Element('li').add_text(
-                'The word \'course\', which is a required element.')
-        ).add_child(
-            safe_dom.Element('li').add_text("""
-A unique course URL prefix. Examples could be '/cs101' or '/art'.
-Default: '/'""")
-        ).add_child(
-            safe_dom.Element('li').add_text("""
-A file system location of course asset files. If location is left empty,
-the course assets are stored in a datastore instead of the file system. A course
-with assets in a datastore can be edited online. A course with assets on file
-system must be re-deployed to Google App Engine manually.""")
-        ).add_child(
-            safe_dom.Element('li').add_text("""
-A course datastore namespace where course data is stored in App Engine.
-Note: this value cannot be changed after the course is created."""))
-    ).append(
-        safe_dom.Text(
-            'For example, consider the following two course entries:')
-    ).append(safe_dom.Element('br')).append(
-        safe_dom.Element('blockquote').add_text(
-            'course:/cs101::ns_cs101'
-        ).add_child(
-            safe_dom.Element('br')
-        ).add_text('course:/:/')
-    ).append(
-        safe_dom.Element('p').add_text("""
-Assuming you are hosting Course Builder on http:/www.example.com, the first
-entry defines a course on a http://www.example.com/cs101 and both its assets
-and student data are stored in the datastore namespace 'ns_cs101'. The second
-entry defines a course hosted on http://www.example.com/, with its assets
-stored in the '/' folder of the installation and its data stored in the default
-empty datastore namespace.""")
-    ).append(
-        safe_dom.Element('p').add_text("""
-A line that starts with '#' is ignored. Course entries are applied in the
-order they are defined.""")
-    ), 'course:/:/:', multiline=True, validator=_courses_config_validator)
+    'gcb_courses_config', str, messages.SITE_SETTINGS_COURSE_URLS,
+    'course:/:/:', label='Course URLs', multiline=True)
+    # temporarily remove validator validator=_courses_config_validator)
+
+
+class _Route(object):
+
+    def __init__(self, handler_method):
+        self.handler_method = handler_method
 
 
 class ApplicationRequestHandler(webapp2.RequestHandler):
@@ -1360,6 +1517,10 @@ class ApplicationRequestHandler(webapp2.RequestHandler):
 
     # the name of the impersonation header
     IMPERSONATE_HEADER_NAME = 'Gcb-Impersonate'
+
+    # custom global and namespaced error handlers; specify your methods here
+    GLOBAL_ERROR_HANDLER = None
+    NAMESPACED_ERROR_HANDLER = None
 
     def dispatch(self):
         if self.CAN_IMPERSONATE:
@@ -1400,12 +1561,17 @@ class ApplicationRequestHandler(webapp2.RequestHandler):
         """Recursively builds a map from a list of (URL, Handler) tuples."""
         for url in urls:
             path_prefix = url[0]
-            handler = url[1]
-            urls_map[path_prefix] = handler
-
+            handler_class = url[1]
+            if path_prefix in urls_map and (
+                    handler_class != urls_map[path_prefix] and
+                    not issubclass(handler_class, utils.RebindableMixin)):
+                raise Exception(
+                    'Path prefix %s defined by %s is being redefined by %s' % (
+                        path_prefix, urls_map[path_prefix], handler_class))
+            urls_map[path_prefix] = handler_class
             # add child handlers
-            if hasattr(handler, 'get_child_routes'):
-                cls.bind_to(handler.get_child_routes(), urls_map)
+            if hasattr(handler_class, 'get_child_routes'):
+                cls.bind_to(handler_class.get_child_routes(), urls_map)
 
     @classmethod
     def bind(cls, urls):
@@ -1413,7 +1579,7 @@ class ApplicationRequestHandler(webapp2.RequestHandler):
         cls.bind_to(urls, urls_map)
         cls.urls_map = urls_map
 
-    def get_handler(self):
+    def get_handler(self, verb, path):
         """Finds a course suitable for handling this request."""
         course = get_course_for_current_request()
         if not course:
@@ -1422,14 +1588,35 @@ class ApplicationRequestHandler(webapp2.RequestHandler):
         path = get_path_info()
         if not path:
             return None
+        path = unprefix(path, course.get_slug())
 
-        return self.get_handler_for_course_type(
-            course, unprefix(path, course.get_slug()))
+        handler = self.get_handler_for_course_type(course, path)
+        if handler:
+            handler.route = _Route(verb)
+            handler.request = self.request
+            handler.response = self.response
+            handler.app_context = course
 
-    def can_handle_course_requests(self, context):
-        """Reject all, but authors requests, to an unpublished course."""
-        return ((context.now_available and Roles.is_user_allowlisted(context))
-                or Roles.is_course_admin(context))
+            # This variable represents the path after the namespace prefix is
+            # removed. The full path is still stored in self.request.path. For
+            # example, if self.request.path is '/new_course/foo/bar/baz/...',
+            # the path_translated would be '/foo/bar/baz/...'.
+            handler.path_translated = path
+
+        return handler
+
+    def can_handle_course_requests(self, context=None, course_list_obj=None):
+        if context:
+            return can_handle_course_requests(context)
+        elif course_list_obj:
+            return can_handle_course_requests(course_list_obj=course_list_obj)
+        else:
+            raise ValueError(
+                "Must provide either app_context or course_list_obj")
+
+    def is_star_route(self, handler):
+        return isinstance(handler, utils.StarRouteHandlerMixin) or (
+            issubclass(handler, utils.StarRouteHandlerMixin))
 
     def _get_handler_factory_for_path(self, path):
         """Picks a handler to handle the path."""
@@ -1437,8 +1624,9 @@ class ApplicationRequestHandler(webapp2.RequestHandler):
         if path in ApplicationRequestHandler.urls_map:
             return ApplicationRequestHandler.urls_map[path]
 
-        # Check if partial path maps. For now, let only zipserve.ZipHandler
-        # handle partial matches. We want to find the longest possible match.
+        # Check if partial path maps. For now, let only classes of type
+        # utils.StarRouteHandlerMixin handle partial matches. We want to find
+        # the longest possible match if alternatives exist.
         parts = path.split('/')
         candidate = None
         partial_path = ''
@@ -1447,47 +1635,39 @@ class ApplicationRequestHandler(webapp2.RequestHandler):
                 partial_path += '/' + part
                 if partial_path in ApplicationRequestHandler.urls_map:
                     handler = ApplicationRequestHandler.urls_map[partial_path]
-                    if (
-                            isinstance(handler, zipserve.ZipHandler) or
-                            issubclass(handler, zipserve.ZipHandler)):
+                    if self.is_star_route(handler):
                         candidate = handler
+
+        # check if root handler exists; it will not be matched above as it's
+        # the least specific of all
+        if not candidate:
+            handler = ApplicationRequestHandler.urls_map.get('/')
+            if handler and self.is_star_route(handler):
+                candidate = handler
 
         return candidate
 
     def get_handler_for_course_type(self, context, path):
         """Gets the right handler for the given context and path."""
-
         if not self.can_handle_course_requests(context):
             return None
 
-        # TODO(psimakov): Add docs (including args and returns).
-        norm_path = os.path.normpath(path)
-
         # Handle static assets here.
+        norm_path = os.path.normpath(path)
         if norm_path.startswith(GCB_ASSETS_FOLDER_NAME):
             abs_file = abspath(context.get_home_folder(), norm_path)
             handler = AssetHandler(self, abs_file)
-            handler.request = self.request
-            handler.response = self.response
-            handler.app_context = context
             STATIC_HANDLER_COUNT.inc()
             return handler
 
         # Handle all dynamic handlers here.
-        handler_factory = self._get_handler_factory_for_path(path)
+        # pylint: disable=protected-access
+        handler_factory = (
+            user_routes._get_handler_for_path(context, path) or
+            self._get_handler_factory_for_path(path))
+        # pylint: enable=protected-access
         if handler_factory:
             handler = handler_factory()
-            handler.app_context = context
-            handler.request = self.request
-            handler.response = self.response
-
-            # This variable represents the path after the namespace prefix is
-            # removed. The full path is still stored in self.request.path. For
-            # example, if self.request.path is '/new_course/foo/bar/baz/...',
-            # the path_translated would be '/foo/bar/baz/...'.
-            handler.path_translated = path
-
-            debug('Handler: %s > %s' % (path, handler.__class__.__name__))
             DYNAMIC_HANDLER_COUNT.inc()
             return handler
 
@@ -1504,36 +1684,214 @@ class ApplicationRequestHandler(webapp2.RequestHandler):
 
     @appengine_config.timeandlog('invoke_http_verb')
     def invoke_http_verb(self, verb, path, no_handler):
-        """Sets up the environemnt and invokes HTTP verb on the self.handler."""
+        """Set up environment, find appropriate handler and dispatch to it."""
+
+        # make sure this response has not been dispatched yet
+        if self.response.status_code != 200 or self.response.body:
+            self.finalize_response(
+                self.request, self.response, self.response.status_code)
+            return
+
+        # setup context and dispatch
         try:
             set_path_info(path)
-            handler = self.get_handler()
-            if not handler:
-                no_handler(path)
+            handler = self.get_handler(verb.lower(), path)
+            if handler:
+                self._dispatch(handler, verb, path)
             else:
-                set_default_response_headers(handler)
-                self.before_method(handler, verb, path)
-                try:
-                    getattr(handler, verb.lower())()
-                finally:
-                    self.after_method(handler, verb, path)
+                no_handler(path)
         finally:
             count_stats(self)
             unset_path_info()
 
+    @classmethod
+    def get_status_code_from_dispatch_exception(cls, verb, path, e):
+        if isinstance(e, webapp2.HTTPException):
+            status_code = e.code
+        else:
+            status_code = 500
+        if status_code >= 500:
+            logging.error(
+                'Error dispatching %s to %s: %s\n%s',
+                verb, path, e, traceback.format_exc())
+        return status_code
+
+    def _dispatch(self, handler, verb, path):
+        """Dispatch the verb, path to a given handler."""
+        # these need to be empty, or dispatch() will attempt to use them; we
+        # don't want them to be set or used because routing phase if over by now
+        self.request.route_args = []
+        self.request.route_kwargs = {}
+        set_default_response_headers(handler)
+
+        self.before_method(handler, verb, path)
+        try:
+            status_code = None
+            try:
+                handler.dispatch()
+                status_code = handler.response.status_code
+            except exc.HTTPRedirection as e:
+                raise e
+            except Exception as e:  # pylint: disable=broad-except
+                status_code = self.get_status_code_from_dispatch_exception(
+                    verb, path, e)
+            self._finalize_namespaced_response(
+                handler.app_context,
+                handler.request, handler.response, status_code)
+        finally:
+            self.after_method(handler, verb, path)
+
+    @classmethod
+    def _needs_error_handler(cls, request, response, status_code):
+        """Checks if response has an error, which need to be handled."""
+        is_rest_handler = issubclass(cls, utils.RESTHandlerMixin)
+        has_pending_content = response and len(response.body) > 0
+        is_suitable_error_code = status_code >= 400
+        return (
+            is_suitable_error_code and
+            not has_pending_content and
+            not is_rest_handler)
+
+    @classmethod
+    def finalize_response(cls, request, response, status_code):
+        if cls._needs_error_handler(request, response, status_code):
+            error_handler = cls.GLOBAL_ERROR_HANDLER
+            if not error_handler:
+                error_handler = cls._default_error_handler
+            error_handler(request, response, status_code)
+
+    @classmethod
+    def _finalize_namespaced_response(
+        cls, app_context, request, response, status_code):
+        assert app_context
+        if cls._needs_error_handler(request, response, status_code):
+            error_handler = cls.NAMESPACED_ERROR_HANDLER
+            if not error_handler:
+                error_handler = cls._default_namespaced_error_handler
+            error_handler(app_context, request, response, status_code)
+
+    @classmethod
+    def _default_error_handler(cls, request, response, status_code):
+        """Render default global error page."""
+        response.status_code = status_code
+
+        if status_code == 404:
+            cls._404_handler(request, response)
+        elif status_code < 500:
+            response.out.write(
+                'Unable to access requested page. '
+                'HTTP status code: %s.' % status_code)
+        elif status_code >= 500:
+            cls._5xx_handler(request, response, status_code)
+        else:
+            msg = 'Server error. HTTP status code: %s.' % status_code
+            logging.error(msg)
+            response.out.write(msg)
+
+    @classmethod
+    def _default_namespaced_error_handler(
+        cls, app_context, request, response, status_code):
+        """Render default namespaced error page."""
+        response.status_code = status_code
+        if status_code == 404:
+            cls._404_handler(request, response)
+        elif status_code < 500:
+            response.out.write(
+                'Unable to access requested page in the course %s. '
+                'HTTP status code: '
+                '%s.' % (app_context.slug, status_code))
+        elif status_code >= 500:
+            cls._5xx_handler(request, response, status_code)
+        else:
+            msg = (
+                'Server error accessing the course %s. '
+                'HTTP status code: '
+                '%s.' % (app_context.slug, status_code))
+            logging.error(msg)
+            response.out.write(msg)
+
+    @classmethod
+    def _404_handler(cls, request, response):
+        # See if our current path corresponds to a course.  If not, then
+        # just 404; the requested item does not correspond to any known
+        # content, and helping the user log in is not going to change
+        # anything.
+        must_clear_path_info = False
+        app_context = None
+        try:
+            if not has_path_info():
+                must_clear_path_info = True
+                set_path_info(request.path)
+            app_context = get_course_for_current_request()
+        finally:
+            if must_clear_path_info:
+                unset_path_info()
+        if not app_context:
+            text = (u'Unable to access requested page. HTTP status code: 404.')
+            if users.is_current_user_admin():
+                text += diagnose_services().sanitized
+            response.status_int = 404
+            response.out.write(text)
+            return
+
+        # Give the person seeing this page a little information and present
+        # them with the option to log in as another user.  This needs to be
+        # I18N'd, but does not necessarily need to be super-nice looking, so
+        # we skip the templating layer (so as to skip a lot of copy/paste to
+        # support just this one odd use case)
+        user = users.get_current_user()
+        login_url = users.create_login_url(request.uri)
+        add_session_url = ('https://accounts.google.com/AddSession?' +
+                           urllib.urlencode({'continue': login_url}))
+        clear_url = ClearCookiesHandler.URL + '?' + urllib.urlencode(
+            {ClearCookiesHandler.CONTINUE_ARG:
+             add_session_url if appengine_config.PRODUCTION_MODE else login_url}
+        )
+        template_values = {
+            'user': users.get_current_user(),
+            'clear_url': clear_url,
+            'course_title': app_context.get_title(),
+            'course_slug': app_context.get_slug(),
+        }
+        if not appengine_config.PRODUCTION_MODE:
+            template_values['page_uuid'] = str(uuid.uuid1())
+
+        course = courses.Course.get(app_context)
+        courses.Course.set_current(course)
+        models.MemcacheManager.begin_readonly()
+        try:
+            template_environ = app_context.get_template_environ(
+                app_context.get_current_locale(), [TEMPLATES_DIR])
+            template = template_environ.get_template('404.html')
+            text = template.render(template_values, autoescape=True)
+        finally:
+            models.MemcacheManager.end_readonly()
+            courses.Course.clear_current()
+
+        if users.is_current_user_admin():
+            text += diagnose_services().sanitized
+
+        response.status_int = 404
+        response.out.write(text)
+
+    @classmethod
+    def _5xx_handler(cls, request, response, status_code):
+        """Generic 5xx error handler."""
+        text = u'Server error. HTTP status code: %s.' % status_code
+
+        if users.is_current_user_admin():
+            text += diagnose_services().sanitized
+
+        response.status_int = status_code
+        response.out.write(text)
+
     def _error_404(self, path):
         """Fail with 404."""
         self.error(404)
-
-    def _login_or_404(self, path):
-        """If no user, offer login page, otherwise fail 404."""
-        if not users.get_current_user():
-            self.redirect(users.create_login_url(path))
-        else:
-            self.error(404)
+        self.finalize_response(self.request, self.response, 404)
 
     def get(self, path):
-        self.invoke_http_verb('GET', path, self._login_or_404)
+        self.invoke_http_verb('GET', path, self._error_404)
 
     def post(self, path):
         self.invoke_http_verb('POST', path, self._error_404)
@@ -1543,6 +1901,103 @@ class ApplicationRequestHandler(webapp2.RequestHandler):
 
     def delete(self, path):
         self.invoke_http_verb('DELETE', path, self._error_404)
+
+
+def handle_exception(request, response, e):
+    # This function can return a WSGI application and webapp2 will render it.
+    # Webob exceptions are WSGI applications.
+    if isinstance(e, exc.HTTPRedirection):
+        return e
+
+    method = None
+    path = None
+    if request:
+        method = request.method.lower()
+        path = request.path
+    status_code = (
+        ApplicationRequestHandler.get_status_code_from_dispatch_exception(
+            method, path, e))
+    if status_code >= 500:
+        logging.error(e)
+    ApplicationRequestHandler.finalize_response(
+        request, response, status_code)
+
+
+class SmartRoute(webapp2.SimpleRoute):
+    """A route that can dynamically choose whether it's active or not."""
+
+    def is_active(self, handler, route, method, path):
+        try:
+            if callable(handler.can_handle_route_method_path_now):
+                return handler.can_handle_route_method_path_now(
+                    route, method, path)
+        except AttributeError:
+            pass
+        return True
+
+    def match(self, request):
+        candidate = super(SmartRoute, self).match(request)
+        if not candidate:
+            return None
+        elif self.is_active(
+                self.handler, self.template, request.method, request.path):
+            return candidate
+        else:
+            return None
+
+class WSGIRouter(webapp2.Router):
+    """Router that provides finalizaton."""
+
+    def __init__(self, routes):
+        assert routes and isinstance(routes, list), 'Expected a list'
+        self.route_class = SmartRoute
+        super(WSGIRouter, self).__init__(routes)
+
+    def dispatch(self, request, response):
+        result = super(WSGIRouter, self).dispatch(request, response)
+        if result:
+            response = result
+
+        # pylint: disable=protected-access
+        ApplicationRequestHandler.finalize_response(
+            request, response, response.status_code)
+
+        return response
+
+
+class ClearCookiesHandler(webapp2.RequestHandler):
+    """This handler allows logout for a single identity.
+
+    When a user is multiply logged in, and wants to use a different identity
+    in the current window, we need to get the user to the login page.
+    However, if we don't clear their cookies, sending the browser to the login
+    page is a no-op - that page sees valid cookies, and thinks we don't need
+    to log the user in again, so doesn't enter the login flow.  Thus, here we
+    clobber cookies.  Since the set of cookies for identity is not trustably
+    always going to be the same, we just clear all.
+
+    The alternative implementation would be to forward the user's session
+    through the logout URL, but that has pretty significant consequences: All
+    currently logged-in identities are then logged out.  This only forces
+    logout for the identity that App Engine sees as current in that session.
+    """
+
+    URL = '/clear_cookies'
+    CONTINUE_ARG = 'continue'
+
+    def get(self):
+        for cookie in self.request.cookies:
+            self.response.delete_cookie(cookie)
+        location = str(self.request.get(self.CONTINUE_ARG))
+        if not location:
+            self.error(400)
+        self.redirect(location)
+
+
+def get_global_handlers():
+    return [
+        (ClearCookiesHandler.URL, ClearCookiesHandler),
+        ]
 
 
 def assert_mapped(src, dest):
@@ -1566,7 +2021,7 @@ def assert_handled(src, target_handler):
         # of course.now_available flag value. Here we patch for that.
         app_handler.can_handle_course_requests = lambda context: True
 
-        handler = app_handler.get_handler()
+        handler = app_handler.get_handler(None, None)
         if handler is None and target_handler is None:
             return None
         assert isinstance(handler, target_handler)
@@ -1606,8 +2061,8 @@ def test_unprefix():
 
 def test_rule_validations():
     """Test rules validator."""
-    courses = get_all_courses(rules_text='course:/:/')
-    assert 1 == len(courses)
+    _courses = get_all_courses(rules_text='course:/:/')
+    assert 1 == len(_courses)
 
     # Check comments.
     setup_courses('course:/a:/nsa, course:/b:/nsb')
@@ -1712,71 +2167,72 @@ def test_url_to_rule_mapping():
 
 def build_index_for_rules_text(rules_text):
     Registry.test_overrides[GCB_COURSES_CONFIG.name] = rules_text
-    courses = get_all_courses()
+    _courses = get_all_courses()
     index = get_course_index()
-    return courses, index
+    return _courses, index
 
 
 def test_get_course_for_path_impl():
     # pylint: disable=protected-access
-    courses, index = build_index_for_rules_text('course:/::ns_x')
-    expected = {None: courses[0]}
+    _courses, index = build_index_for_rules_text('course:/::ns_x')
+    expected = {None: _courses[0]}
     assert expected == index._slug_parts2app_context
     for path in ['', '/course', '/a/b']:
-        assert courses[0] == get_course_for_path(path)
+        assert _courses[0] == get_course_for_path(path)
 
-    courses, index = build_index_for_rules_text('course:/a::ns_x')
-    expected = {'a': {None: courses[0]}}
+    _courses, index = build_index_for_rules_text('course:/a::ns_x')
+    expected = {'a': {None: _courses[0]}}
     assert expected == index._slug_parts2app_context
     for path in ['/a', '/a/course', '/a/b/c']:
-        assert courses[0] == get_course_for_path(path)
+        assert _courses[0] == get_course_for_path(path)
     for path in ['', '/', '/course']:
         assert not get_course_for_path(path)
 
-    courses, index = build_index_for_rules_text(
+    _courses, index = build_index_for_rules_text(
         'course:/a::ns_x\ncourse:/b::ns_y')
-    expected = {'a': {None: courses[0]}, 'b': {None: courses[1]}}
+    expected = {'a': {None: _courses[0]}, 'b': {None: _courses[1]}}
     assert expected == index._slug_parts2app_context
     for path in ['/a', '/a/course', '/a/b/c']:
-        assert courses[0] == get_course_for_path(path)
+        assert _courses[0] == get_course_for_path(path)
     for path in ['/b', '/b/course', '/b/a/c']:
-        assert courses[1] == get_course_for_path(path)
+        assert _courses[1] == get_course_for_path(path)
     for path in ['', '/', '/course']:
         assert not get_course_for_path(path)
 
-    courses, index = build_index_for_rules_text('course:/a/b::ns_x')
-    expected = {'a': {'b': {None: courses[0]}}}
+    _courses, index = build_index_for_rules_text('course:/a/b::ns_x')
+    expected = {'a': {'b': {None: _courses[0]}}}
     assert expected == index._slug_parts2app_context
     for path in ['/a/b', '/a/b/course', '/a/b/c']:
-        assert courses[0] == get_course_for_path(path)
+        assert _courses[0] == get_course_for_path(path)
     for path in ['', '/a', '/a/course', '/a/c']:
         assert not get_course_for_path(path)
 
-    courses, index = build_index_for_rules_text(
+    _courses, index = build_index_for_rules_text(
         'course:/a/c::ns_x\ncourse:/b/d::ns_y')
-    expected = {'a': {'c': {None: courses[0]}}, 'b': {'d': {None: courses[1]}}}
+    expected = {'a': {'c': {None: _courses[0]}},
+                'b': {'d': {None: _courses[1]}}}
     assert expected == index._slug_parts2app_context
     for path in ['/a/c', '/a/c/course', '/a/c/d']:
-        assert courses[0] == get_course_for_path(path)
+        assert _courses[0] == get_course_for_path(path)
     for path in ['/b/d', '/b/d/course', '/b/d/c']:
-        assert courses[1] == get_course_for_path(path)
+        assert _courses[1] == get_course_for_path(path)
     for path in ['', '/', '/course', '/a', '/b']:
         assert not get_course_for_path(path)
 
     try:
-        courses, index = build_index_for_rules_text(
+        _courses, index = build_index_for_rules_text(
             'course:/a::ns_x\ncourse:/a/b::ns_y')
     except Exception as e:  # pylint: disable=broad-except
         assert 'reorder course entries' in e.message
 
-    courses, index = build_index_for_rules_text(
+    _courses, index = build_index_for_rules_text(
         'course:/a/b::ns_x\ncourse:/a::ns_y')
-    expected = {'a': {'b': {None: courses[0]}, None: courses[1]}}
+    expected = {'a': {'b': {None: _courses[0]}, None: _courses[1]}}
     assert expected == index._slug_parts2app_context
     for path in ['/a/b', '/a/b/c', '/a/b/c/course', '/a/b/c/d']:
-        assert courses[0] == get_course_for_path(path)
+        assert _courses[0] == get_course_for_path(path)
     for path in ['/a', '/a/c', '/a/course', '/a/c/d']:
-        assert courses[1] == get_course_for_path(path)
+        assert _courses[1] == get_course_for_path(path)
     for path in ['/', '/course', '/b']:
         assert not get_course_for_path(path)
     # pylint: enable=protected-access
@@ -1807,19 +2263,19 @@ def test_url_to_handler_mapping_for_course_type():
         def __init__(self):
             self.app_context = None
 
-    class FakeHandler2(zipserve.ZipHandler):
+    class FakeHandler2(BaseZipHandler):
 
         def __init__(self):
             super(FakeHandler2, self).__init__()
             self.app_context = None
 
-    class FakeHandler3(zipserve.ZipHandler):
+    class FakeHandler3(BaseZipHandler):
 
         def __init__(self):
             super(FakeHandler3, self).__init__()
             self.app_context = None
 
-    class FakeHandler4(zipserve.ZipHandler):
+    class FakeHandler4(BaseZipHandler):
 
         def __init__(self):
             super(FakeHandler4, self).__init__()
@@ -1931,6 +2387,65 @@ def test_path_construction():
                 os.path.normpath('/a/b/d'))
 
 
+def test_star_handler():
+    """Tests a handler that is mapped to a route with '*'."""
+
+    class FakeHandler0(object):
+
+        def __init__(self):
+            self.app_context = None
+
+    class FakeHandler1(utils.StarRouteHandlerMixin):
+
+        def __init__(self):
+            super(FakeHandler1, self).__init__()
+            self.app_context = None
+
+    class FakeHandler2(object):
+
+        def __init__(self):
+            super(FakeHandler2, self).__init__()
+            self.app_context = None
+
+    handler0 = FakeHandler0
+    handler1 = FakeHandler1
+    handler2 = FakeHandler2
+    urls = [('/', handler0), ('/1', handler1), ('/2', handler2)]
+    ApplicationRequestHandler.bind(urls)
+
+    setup_courses('course:/a/b:/c/d, course:/e/f:/g/h')
+
+    assert_handled('/a/b/1', FakeHandler1)
+    assert_handled('/a/b/1/', FakeHandler1)
+    assert_handled('/a/b/1/bar', FakeHandler1)
+    assert_handled('/a/b/1/bar/', FakeHandler1)
+    assert_handled('/a/b/1/bar/baz', FakeHandler1)
+    assert_handled('/a/b/1/bar/baz/', FakeHandler1)
+    assert_handled('/a/b/1/bar/baz?alive=1&john=2', FakeHandler1)
+
+    assert_handled('/a/b/2', FakeHandler2)
+    assert_handled('/a/b/2/', None)
+    assert_handled('/a/b/2/bar', None)
+    assert_handled('/a/b/2/bar/', None)
+    assert_handled('/a/b/2/bar/baz', None)
+    assert_handled('/a/b/2/bar/baz/', None)
+    assert_handled('/a/b/2/bar/baz?alive=1&john=2', None)
+
+
+def test_css_combo_fix_css_paths():
+    def assert_fixed_css(expected_css, orig_css):
+        assert (
+            expected_css
+            == CssComboZipHandler.fix_css_paths(
+                'a/b/c/foo.css', orig_css, '/yui/'))
+
+    assert_fixed_css('url(/yui/a/b/c/foo.png)', 'url(foo.png)')
+    assert_fixed_css('url(/yui/a/b/c/d/e/foo.png)', 'url(d/e/foo.png)')
+    assert_fixed_css('url(http://x.org/foo.png)', 'url(http://x.org/foo.png)')
+    assert_fixed_css('url(https://x.org/foo.png)', 'url(https://x.org/foo.png)')
+    assert_fixed_css('url(data:00001111)', 'url(data:00001111)')
+
+
 def run_all_unit_tests():
     assert not ApplicationRequestHandler.CAN_IMPERSONATE
 
@@ -1945,6 +2460,8 @@ def run_all_unit_tests():
     test_url_to_handler_mapping_for_course_type()
     test_path_construction()
     test_rule_validations()
+    test_star_handler()
+    test_css_combo_fix_css_paths()
 
 if __name__ == '__main__':
     run_all_unit_tests()

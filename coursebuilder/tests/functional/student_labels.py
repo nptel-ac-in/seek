@@ -17,6 +17,7 @@
 __author__ = 'Mike Gainer (mgainer@google.com)'
 
 from common import crypto
+from common import users
 from common import utils as common_utils
 from models import models
 from models import transforms
@@ -31,7 +32,7 @@ REGISTERED_STUDENT_NAME = 'John Smith'
 UNREGISTERED_STUDENT_EMAIL = 'bar@bar.com'
 STUDENT_LABELS_URL = '/%s/rest/student/labels' % COURSE_NAME
 STUDENT_SETTRACKS_URL = '/%s/student/settracks' % COURSE_NAME
-ANALYTICS_URL = '/%s/dashboard?action=analytics&tab=students' % COURSE_NAME
+ANALYTICS_URL = '/%s/dashboard?action=analytics_students' % COURSE_NAME
 LABELS_STUDENT_EMAIL = 'labels@bar.com'
 
 
@@ -225,9 +226,10 @@ class StudentLabelsTest(actions.TestBase):
     def _add_broken_label_references(self):
         # Add some broken references to student's labels list.
         actions.login(REGISTERED_STUDENT_EMAIL)
+        user = users.get_current_user()
         student = (
-            models.StudentProfileDAO.get_enrolled_student_by_email_for(
-                REGISTERED_STUDENT_EMAIL, FakeContext(NAMESPACE)))
+            models.StudentProfileDAO.get_enrolled_student_by_user_for(
+                user, FakeContext(NAMESPACE)))
         student.labels = '123123123 456456456 %d' % self.foo_id
         student.put()
 
@@ -336,15 +338,22 @@ class StudentLabelsTest(actions.TestBase):
     def test_register_with_labels(self):
         student_name = 'John Smith from Back East'
         actions.login(LABELS_STUDENT_EMAIL)
+        user = users.get_current_user()
         response = actions.view_registration(self, COURSE_NAME)
         register_form = actions.get_form_by_action(response, 'register')
         self.post('/%s/%s' % (COURSE_NAME, register_form.action), {
             'form01': student_name,
+            'mobile_number': '9945244496',
+            'age_group': '20-30',
+            'country_of_residence': 'IN',
+            'profession': 'other',
+            'graduationyear':'1990',
+            'terms':True,
+            'honor_code':True,
             'xsrf_token': register_form['xsrf_token'].value,
             'labels': common_utils.list_to_text([self.bar_id, self.baz_id])})
         self._verify_labels(self.get(STUDENT_LABELS_URL), [self.bar_id,
                                                            self.baz_id])
         with common_utils.Namespace(NAMESPACE):
-            student = models.Student.get_enrolled_student_by_email(
-                LABELS_STUDENT_EMAIL)
+            student = models.Student.get_enrolled_student_by_user(user)
             self.assertEquals(student.name, student_name)

@@ -20,7 +20,7 @@ from common.schema_fields import FieldArray
 from common.schema_fields import FieldRegistry
 from common.schema_fields import SchemaField
 from models import courses
-from modules.dashboard import tabs
+from modules.courses import settings as course_settings
 from modules.programming_assignments import base
 
 
@@ -65,8 +65,7 @@ class ProgrammingAssignmentSettings(base.ProgAssignment):
         programming_settings_fields.add(lambda c: cls.allowed_languages)
         courses.Course.OPTIONS_SCHEMA_PROVIDERS[
             cls.SETTINGS_SECTION] += programming_settings_fields
-        tabs.Registry.register('settings', cls.DASHBOARD_NAV, cls.NAME,
-                               cls.SETTINGS_SECTION)
+        course_settings.CourseSettingsHandler.register_settings_section(base.ProgAssignment.SETTINGS_SECTION, title=base.ProgAssignment.NAME)
 
     @classmethod
     def unregister(cls):

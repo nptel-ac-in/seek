@@ -28,8 +28,40 @@ from models import transforms
 from models import models
 from models import course_list
 from modules.student_list import base
+from modules.student_list import handlers
 
-class StudentListBaseAdminHandler(base.StudentListBase):
+
+class StudentListBaseAdminHandler(base.StudentListBase,
+                                  handlers.InteractiveTableHandler):
+
+    LIST_ACTION = 'admin?action=' + base.StudentListBase.ADMIN_TAB
+    DETAILS_ACTION = 'admin?action=%s&tab=%s' % (
+        base.StudentListBase.ADMIN_DETAILS_ACTION,
+        base.StudentListBase.ADMIN_TAB)
+    IN_ACTION = base.StudentListBase.ADMIN_TAB
+
+    TEMPLATE_FILE = 'templates/profile_list.html'
+    TEMPLATE_DIRS = [os.path.dirname(__file__)]
+
+    SEARCH_STR_PARAM = 'email'
+    DEFAULT_ORDER = 'email'
+    TARGET_NAMESPACE = appengine_config.DEFAULT_NAMESPACE_NAME
+
+    # TODO(rthakker) make search by user_id default.
+    # Also need to edit the templates accordingly.
+    # if not search_str:
+    #     search_str = handler.request.get('email')
+    #     get_by_search_str_fn = models.StudentProfileDAO.get_profile_by_email
+
+    @classmethod
+    def get_by_search_str(cls, email):
+        return models.StudentProfileDAO.get_profile_by_email(email)
+
+    @classmethod
+    def run_query(cls, cursor=None):
+        if cursor:
+            return db.Query(models.PersonalProfile, cursor=cursor)
+        return db.Query(models.PersonalProfile)
 
     @classmethod
     def get_student_list(cls, handler):
@@ -43,76 +75,7 @@ class StudentListBaseAdminHandler(base.StudentListBase):
             })
             return
 
-        try:
-            cursor = handler.request.get('cursor')
-            old_cursor = handler.request.get('old_cursor')
-            no_of_entries = int(handler.request.get('num', '50'))
-            reverse_query = handler.request.get('reverse_query')
-        except ValueError:
-            handler.error(400)
-            handler.render_page({
-                'page_title': cls.NAME,
-                'main_content': 'Invalid parameters'
-            })
-
-        order = handler.request.get('order', 'email')
-
-        template_value = dict()
-
-        # Get a list of student profiles
-        student_profiles = None
-        query = None
-        new_cursor = None
-
-        namespace_manager.set_namespace(appengine_config.DEFAULT_NAMESPACE_NAME)
-
-        try:
-            if cursor:
-                query = db.Query(models.PersonalProfile, cursor=cursor)
-            else:
-                query = db.Query(models.PersonalProfile)
-
-            if reverse_query:
-                query = query.order(cls.get_reverse_order(order))
-            else:
-                query = query.order(order)
-
-            student_profiles = query.fetch(no_of_entries)
-
-            if reverse_query:
-                student_profiles.reverse()
-                new_cursor = cursor
-                cursor = query.cursor()
-            else:
-                new_cursor = query.cursor()
-        except db.PropertyError:
-            handler.error(400)
-            handler.render_page({
-                'page_title': cls.NAME,
-                'main_content': 'Invalid parameters'
-            })
-
-        template_value['student_profiles'] = student_profiles
-
-        template_value['new_cursor'] = new_cursor
-        template_value['cursor'] = cursor
-        template_value['no_of_entries'] = no_of_entries
-        template_value['order'] = order.replace('-', '')
-        template_value['invert_order'] = order[0] == '-'
-
-        template_value['list_action'] = '/admin/global?tab=' + cls.ADMIN_TAB
-        template_value['details_action'] = '/admin/global?action=%s&tab=%s' % (
-            cls.ADMIN_DETAILS_ACTION, cls.ADMIN_TAB)
-
-        content = jinja2.utils.Markup(
-            handler.get_template(
-                'templates/profile_list.html',
-                [os.path.dirname(__file__)]).render(template_value))
-
-        handler.render_page({
-            'page_title': cls.NAME,
-            'main_content': content
-        })
+        cls.classmethod_render_table(handler, dict())
 
     @classmethod
     def get_student_details(cls, handler):
@@ -156,10 +119,11 @@ class StudentListBaseAdminHandler(base.StudentListBase):
         template_value['profile'] = profile
 
         # List of all Courses
-        courses = course_list.CourseList.all().fetch(None)
+        courses = course_list.CourseListDAO.get_course_list(
+            include_closed=True)
         template_value['courses'] = courses
 
-        template_value['back_action'] = '/admin/global?tab=' + cls.ADMIN_TAB
+        template_value['back_action'] = '/modules/admin?tab=' + cls.ADMIN_TAB
 
         content = jinja2.utils.Markup(
             handler.get_template(
@@ -169,5 +133,4 @@ class StudentListBaseAdminHandler(base.StudentListBase):
         handler.render_page({
             'page_title': handler.format_title(cls.NAME),
             'main_content': content},
-            in_action=cls.ADMIN_DETAILS_ACTION,
-            in_tab=cls.ADMIN_TAB)
+            in_action=cls.ADMIN_DETAILS_ACTION)

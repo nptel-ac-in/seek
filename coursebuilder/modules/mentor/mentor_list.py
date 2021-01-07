@@ -36,7 +36,7 @@ class MentorListHandler(base.MentorBase):
     def display_html(cls, handler):
         """Adds mentors for the instance."""
         template_values = {}
-        template_values['page_title'] = handler.format_title('Mentors')
+        template_values['page_title'] = handler.format_title('Mentor List')
         possible_mentor_list = Mentor.get_all_mentors()
         if len(possible_mentor_list) > 0:
             template_values['mentors'] = possible_mentor_list
@@ -75,13 +75,11 @@ class AddMentorHandler(base.MentorBase):
 
     @classmethod
     def get_add_mentors_page(cls, handler):
+        template_values = {}
+        template_values['page_title'] = handler.format_title('Add Mentor')
         content = cls.display_html(handler)
-        handler.render_page(
-            {
-                'page_title': handler.format_title(cls.NAME),
-                'main_content': content},
-            in_action=cls.DASHBOARD_NAV,
-            in_tab=cls.DASHBOARD_SHOW_LIST_TAB)
+        template_values['main_content'] = content
+        handler.render_page(template_values)
 
     @classmethod
     def parse_mentor_csv(cls, mentor_csv_text):
@@ -115,14 +113,14 @@ class AddMentorHandler(base.MentorBase):
 
             if not email:
                 continue
-            p = Student.get_by_email(email)
-            if (p is None or (college_id and
+            mentor_student, is_unique = Student.get_first_by_email(email)
+            if (mentor_student is None or (college_id and
                     local_chapter_model.LocalChapterDAO
                     .get_local_chapter_by_key(
                     college_id) is None)):
                 not_found_mentors.append(email)
             else:
-                mentor = Mentor.get_or_create(user_id=p.user_id)
+                mentor = Mentor.get_or_create(user_id=mentor_student.user_id)
                 if college_id:
                     mentor.local_chapter = True
                     mentor.college_id = college_id
@@ -157,5 +155,4 @@ class AddMentorHandler(base.MentorBase):
             {
                 'page_title': handler.format_title(cls.NAME),
                 'main_content': content},
-            in_action=cls.DASHBOARD_NAV,
-            in_tab=cls.DASHBOARD_SHOW_LIST_TAB)
+            in_action=cls.DASHBOARD_NAV)

@@ -1,0 +1,102 @@
+
+
+<dom-module id="profile-page">
+  <template>
+    <style include="nptel-pwa-css"></style>
+        <paper-spinner-lite class="spinner" active alt="Loading content.."></paper-spinner-lite>
+        <div class="matCard">
+          <paper-input label="Mobile No" readonly  name="mobile"></paper-input>
+          <paper-input label="Email Id" type="email" readonly  name="email"></paper-input>
+          <paper-input label="Age" readonly  name="age"></paper-input>
+          <paper-input label="Country residing in currently" readonly  name="country"></paper-input>
+          <paper-input label="Profession" readonly  name="profession"></paper-input>
+          <paper-input label="State" readonly  name="state"></paper-input>
+          <paper-input label="City" readonly  name="city"></paper-input>
+          <paper-input label="College Name" readonly  name="college"></paper-input>
+          <paper-input label="College Roll No" readonly name="college_roll_no"></paper-input>
+          <paper-input label="Year of Graduation" type="number" readonly name="graduationYear"></paper-input>
+        </div>
+    </template>
+    <script>
+      /**
+       * @customElement
+       * @polymer
+       */
+      class ProfilePage extends Polymer.Element {
+        static get is() { return 'profile-page'; }
+        static get properties() {
+          return {
+            header :{
+              type : String,
+              value:"User Name",
+              notify : true
+            },
+            route : {
+              observer : '_isProfileSelected'
+            },
+            enrolled : {
+              type : String,
+              value : false,
+              notify : true
+            },
+            login : {
+              type : Boolean,
+              notify: true,
+            },
+          };
+        }
+        processResponse(payload){
+          var params = (new URL(document.location)).searchParams;
+          var destURL = params.get("desturl");
+          if (destURL)
+          {
+            var destURLdata = b64DecodeUnicode(destURL);
+            if (destURLdata == 'profile')
+            {
+              this.login = true;
+            }
+          }
+          if (payload)
+          {
+            if(payload.name) {
+              this.header = payload.name;
+              document.getElementsByTagName("nptel-pwa-app")[0].loggedIn = true;
+            }
+            Polymer.dom(this.root).querySelector("paper-input[name=age]").value = payload.age ? payload.age : "None";
+            Polymer.dom(this.root).querySelector("paper-input[name=email]").value = payload.email ? payload.email : "None";
+            Polymer.dom(this.root).querySelector("paper-input[name=state]").value = payload.state ? payload.state : "None";
+            Polymer.dom(this.root).querySelector("paper-input[name=country]").value = payload.country ? payload.country : "None";
+            Polymer.dom(this.root).querySelector("paper-input[name=mobile]").value = payload.mobile ? payload.mobile : "None";
+            Polymer.dom(this.root).querySelector("paper-input[name=college]").value = payload.college ? payload.college : "None";
+            Polymer.dom(this.root).querySelector("paper-input[name=college_roll_no]").value = payload.college_roll_no ? payload.college_roll_no : "None";
+            Polymer.dom(this.root).querySelector("paper-input[name=profession]").value = payload.profession ? payload.profession : "None";
+            Polymer.dom(this.root).querySelector("paper-input[name=city]").value = payload.city ? payload.city : "None";
+            Polymer.dom(this.root).querySelector("paper-input[name=graduationYear]").value = payload.graduationYear ? payload.graduationYear : 0;
+            Polymer.dom(this.root).querySelector(".matCard").style.display = "block";
+          }
+        }
+        _isProfileSelected()
+        {
+          if (Polymer.dom(this.parentElement).node.selected == 'profile')
+          {
+            this.enrolled = false;
+            var main=this; // to access "this" context in the anonymous function
+            var spinner = Polymer.dom(this.root).querySelector('paper-spinner-lite');
+            spinner.active = true;
+            spinner.style.display = "block";
+            fetch('/m/profile',{
+              method: 'GET',
+              credentials: 'include'
+            })
+            .then( obj => {
+              validateResponse(main,obj);
+            })
+            .catch( obj =>{
+              logError(obj);
+            });
+          }
+        }
+      }
+    window.customElements.define(ProfilePage.is, ProfilePage);
+  </script>
+</dom-module>

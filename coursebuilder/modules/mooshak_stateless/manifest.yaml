@@ -1,0 +1,7 @@
+registration:
+  main_module: modules.mooshak_stateless.mooshak_stateless
+
+files:
+  - modules/mooshak_stateless/__init__.py
+  - modules/mooshak_stateless/mooshak_stateless.py
+  - modules/mooshak_stateless/manifest.yaml

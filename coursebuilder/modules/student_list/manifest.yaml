@@ -1,0 +1,15 @@
+registration:
+  main_module: modules.student_list.register
+
+files:
+  - modules/student_list/register.py
+  - modules/student_list/settings.py
+  - modules/student_list/dashboard.py
+  - modules/student_list/__init__.py
+  - modules/student_list/base.py
+  - modules/student_list/manifest.yaml
+  - modules/student_list/templates/list.html
+  - modules/student_list/templates/profile_list.html
+  - modules/student_list/templates/details.html
+  - modules/student_list/templates/profile_details.html
+  - modules/student_list/templates/profile_fields.html

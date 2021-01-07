@@ -17,42 +17,39 @@
 __author__ = 'Thejesh GN (tgn@google.com)'
 
 
-import yaml
 import StringIO
 import cgi
 import csv
-import os
 import urllib
 
-from common import jinja_utils
 from common import safe_dom
-from common import tags
-from common.schema_fields import FieldArray
 from common.schema_fields import FieldRegistry
 from common.schema_fields import SchemaField
 from controllers.utils import BaseRESTHandler
 from controllers.utils import XsrfTokenManager
-from models import courses
 from models import roles
 from models import transforms
+from models import models
 from modules.oeditor import oeditor
 from modules.local_chapter import base
 from modules.local_chapter import local_chapter_model
-from controllers.utils import ReflectiveRequestHandler
 
 
 class LocalChapterBaseAdminHandler(base.LocalChapterBase):
-
     @classmethod
-    def get_local_chapters(self, handler):
+    def local_chapters(self, handler):
         """Shows a list of all local chapters available on this site."""
+        if not roles.Roles.is_super_admin():
+            handler.error(404)
+            return
+
         template_values = {}
         template_values['page_title'] = handler.format_title('Local Chapters')
 
         content = safe_dom.NodeList()
         content.append(
             safe_dom.Element(
-                'a', id='add_local_chapter', className='gcb-button gcb-pull-right',
+                'a', id='add_local_chapter', style='margin-left: 5px;', className='gcb-button gcb-pull-right',
                 role='button', href='%s?action=add_local_chapter' % handler.LINK_URL
             ).add_text('Add Local Chapter')
         ).append(
@@ -76,6 +73,10 @@ class LocalChapterBaseAdminHandler(base.LocalChapterBase):
                 safe_dom.Element('th').add_text('City')
             ).add_child(
                 safe_dom.Element('th').add_text('State')
+            ).add_child(
+                safe_dom.Element('th').add_text('Org Type')
+            ).add_child(
+                safe_dom.Element('th').add_text('SPoC email')
             )
         )
         count = 0
@@ -97,11 +98,16 @@ class LocalChapterBaseAdminHandler(base.LocalChapterBase):
                     safe_dom.Element('td').add_text(chapter.city)
                 ).add_child(
                     safe_dom.Element('td').add_text(chapter.state)
+                ).add_child(
+                    safe_dom.Element('td').add_text(chapter.org_type)
+                ).add_child(
+                    # TODO(rthakker) make ul instead of str(list)
+                    safe_dom.Element('td').add_text(str(chapter.spoc_emails))
                 ))
 
         table.add_child(
             safe_dom.Element('tr').add_child(
-                safe_dom.Element('td', colspan='5', align='right').add_text(
+                safe_dom.Element('td', colspan='6', align='right').add_text(
                     'Total: %s item(s)' % count)))
         template_values['main_content'] = content
 
@@ -109,13 +115,13 @@ class LocalChapterBaseAdminHandler(base.LocalChapterBase):
 
 
     @classmethod
-    def get_add_local_chapter(self, handler):
+    def add_local_chapter(self, handler):
         """Handles 'get_add_local_chapter' action and renders new course entry editor."""
+        if not roles.Roles.is_super_admin():
+            handler.error(404)
+            return
 
-        if roles.Roles.is_super_admin():
-            exit_url = '%s?tab=local_chapters' % handler.LINK_URL
-        else:
-            exit_url = self.request.referer
+        exit_url = '%s?action=local_chapters' % handler.LINK_URL
         rest_url = AddNewLocalChapterRESTHandler.URI
 
         template_values = {}
@@ -126,16 +132,17 @@ class LocalChapterBaseAdminHandler(base.LocalChapterBase):
             None, rest_url, exit_url,
             auto_return=True,
             save_button_caption='Add New Local Chapter')
-        handler.render_page(template_values, in_tab='local_chapters')
+        handler.render_page(template_values, in_action='local_chapters')
 
 
     @classmethod
-    def get_bulk_add_local_chapter(self,handler):
+    def bulk_add_local_chapter(self,handler):
         """Handles 'get_bulk_add_local_chapter' action and renders new course entry editor."""
-        if roles.Roles.is_super_admin():
-            exit_url = '%s?tab=local_chapters' % handler.LINK_URL
-        else:
-            exit_url = self.request.referer
+        if not roles.Roles.is_super_admin():
+            handler.error(404)
+            return
+
+        exit_url = '%s?action=local_chapters' % handler.LINK_URL
         rest_url = BulkAddNewLocalChapterRESTHandler.URI
 
         template_values = {}
@@ -146,17 +153,17 @@ class LocalChapterBaseAdminHandler(base.LocalChapterBase):
             None, rest_url, exit_url,
             auto_return=True,
             save_button_caption='Upload New Local Chapters')
-        handler.render_page(template_values, in_tab='local_chapters')
+        handler.render_page(template_values, in_action='local_chapters')
 
 
     @classmethod
-    def get_edit_local_chapter(self, handler):
+    def edit_local_chapter(self, handler):
         """Handles 'edit_loal_chapter' action and renders new course entry editor."""
+        if not roles.Roles.is_super_admin():
+            handler.error(404)
+            return
 
-        if roles.Roles.is_super_admin():
-            exit_url = '%s?tab=local_chapters' % handler.LINK_URL
-        else:
-            exit_url = self.request.referer
+        exit_url = '%s?action=local_chapters' % handler.LINK_URL
         rest_url = LocalChapterRESTHandler.URI
         key = handler.request.get('key')
 
@@ -177,7 +184,7 @@ class LocalChapterBaseAdminHandler(base.LocalChapterBase):
             auto_return=True, delete_url=delete_url,
             delete_method='delete',
             save_button_caption='Update Local Chapter')
-        handler.render_page(template_values, in_tab='local_chapters')
+        handler.render_page(template_values, in_action='local_chapters')
 
 
 def create_local_chapter_list_registry():
@@ -216,6 +223,16 @@ def create_local_chapter_list_registry():
         extra_schema_dict_values={
             'className': 'inputEx-Field assessment-dropdown'}))
 
+    reg.add_property(SchemaField(
+        'org_type', 'Org Type', 'string', optional=False, select_data=[('college','College'), ('industry','Industry')],
+        extra_schema_dict_values={
+            'className': 'inputEx-Field assessment-dropdown'}))
+
+
+
+    reg.add_property(SchemaField(
+        'spoc_emails', 'SPoC Email', 'list', optional=True))
+
     return reg
 
 
@@ -242,10 +259,11 @@ class AddNewLocalChapterRESTHandler(BaseRESTHandler):
     def to_dict(self):
         """Assemble a dict with the unit data fields."""
         entity = {
-            'code':'',
+            'code': '',
             'name': '',
             'city': '',
-            'state':''}
+            'state': '',
+        }
         json_entity = dict()
         self.registration().convert_entity_to_json_entity(entity, json_entity)
         return json_entity
@@ -261,13 +279,15 @@ class AddNewLocalChapterRESTHandler(BaseRESTHandler):
         name = entity_dict['name']
         state = entity_dict['state']
         city = entity_dict['city']
+        org_type = entity_dict['org_type']
+        spoc_emails = entity_dict['spoc_emails']
 
         if local_chapter_model.LocalChapterDAO.get_local_chapter_by_key(key):
-                errors.append(
-                   'Local Chpater %s already exists.' % key)
+            errors.append(
+               'Local Chpater %s already exists.' % key)
         else:
             local_chapter_model.LocalChapterDAO.add_new_local_chapter(
-		key, name, city, state, errors)
+		        key, name, city, state, org_type, spoc_emails, errors)
 
     def get(self):
         """A GET REST method shared by all unit types."""
@@ -316,7 +336,7 @@ def create_bulk_local_chapter_list_registry():
         extra_schema_dict_values={
             'className': 'inputEx-Group new-form-layout'})
     reg.add_property(SchemaField(
-        'bulk_addition', 'Bulk Local Chapters (code,name,city,state)', 'text'))
+        'bulk_addition', 'Bulk Local Chapters (code,name,city,state, org_type,spoc_email)', 'text'))
     return reg
 
 class BulkAddNewLocalChapterRESTHandler(BaseRESTHandler):
@@ -342,7 +362,7 @@ class BulkAddNewLocalChapterRESTHandler(BaseRESTHandler):
     def to_dict(self):
         """Assemble a dict with the unit data fields."""
         entity = {
-            'bulk_addition':'code,name,city,state'}
+            'bulk_addition':'code,name,city,state,org_type,spoc_email'}
         json_entity = dict()
         self.registration().convert_entity_to_json_entity(entity, json_entity)
         return json_entity
@@ -354,13 +374,15 @@ class BulkAddNewLocalChapterRESTHandler(BaseRESTHandler):
         name = updated_unit_dict['name']
         state = updated_unit_dict['state']
         city = updated_unit_dict['city']
+        org_type = updated_unit_dict['org_type']
+        spoc_emails = updated_unit_dict['spoc_emails']
 
         if local_chapter_model.LocalChapterDAO.get_local_chapter_by_key(key):
                 errors.append(
                    'Local Chpater %s already exists.' % key)
         else:
             local_chapter_model.LocalChapterDAO.add_new_local_chapter(
-		key, name, city, state, errors)
+		key, name, city, state, org_type, spoc_emails, errors)
 
     def get(self):
         """A GET REST method shared by all unit types."""
@@ -397,14 +419,19 @@ class BulkAddNewLocalChapterRESTHandler(BaseRESTHandler):
         bulk_addition = updated_dict['bulk_addition']
         reader = csv.reader(StringIO.StringIO(bulk_addition), delimiter=',')
         for row in reader:
-            if len(row) != 4:
+            if len(row) < 5 or len(row) > 6:
                 errors.append('Invalid row %s' % row[0])
                 continue
             updated_dict = {}
-            updated_dict['code'] = row[0]
-            updated_dict['name'] = row[1]
-            updated_dict['city'] = row[2]
-            updated_dict['state'] = row[3]
+            updated_dict['code'] = (row[0]).strip()
+            updated_dict['name'] = (row[1]).strip()
+            updated_dict['city'] = (row[2]).strip()
+            updated_dict['state'] = (row[3]).strip()
+            updated_dict['org_type'] =(row[4]).strip().lower()
+            if len(row) == 6:
+               updated_dict['spoc_emails'] = [ (row[5]).strip() ]
+            else:
+               updated_dict['spoc_emails'] = []
             self.apply_updates(updated_dict, errors)
 
         if not errors:
@@ -448,7 +475,9 @@ class LocalChapterRESTHandler(BaseRESTHandler):
             'code':l.code,
             'name': l.name,
             'city': l.city,
-            'state':l.state}
+            'state':l.state,
+            'org_type':l.org_type,
+            'spoc_emails': l.spoc_emails}
         json_entity = dict()
         self.registration().convert_entity_to_json_entity(entity, json_entity)
         return json_entity
@@ -463,10 +492,12 @@ class LocalChapterRESTHandler(BaseRESTHandler):
         name = entity_dict['name']
         city = entity_dict['city']
         state = entity_dict['state']
+        org_type = entity_dict['org_type']
+        spoc_emails = entity_dict['spoc_emails']
 
         if local_chapter_model.LocalChapterDAO.get_local_chapter_by_key(key):
             local_chapter_model.LocalChapterDAO.update_local_chapter(
-		key, name, city, state, errors)
+		key, name, city, state, org_type, spoc_emails, errors)
         else:
              errors.append('Local Chapter not found : %s' % key)
 

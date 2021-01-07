@@ -1,19 +1,3 @@
-<!--
- Copyright 2020 Google LLC
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 {% extends 'base_course.html' %}
 
 {% block gcb_page_info %}
@@ -34,12 +18,13 @@
 {% block top_content %}
 {% endblock %}
 
-{% block main_content %}
+{% block assets %}
+  {{ super() }}
+  <link rel="stylesheet" href="/static/material-design-icons/css/material-design-iconic-font.min.css">
+{% endblock %}
 
-{% if is_read_write_course and is_course_admin %}
-  <a href="dashboard?action=edit_assessment&key={{ unit_id }}"
-    class="gcb-button gcb-button-action gcb-button-author">Edit Assessment</a>
-{% endif %}
+
+{% block main_content %}
 
 {% if model_version == '1.5' %}
   {% import 'assessment_html_content.html' as html_assessment %}
@@ -94,13 +79,21 @@
 
     <hr>
 
-    {% if readonly_review_form is defined %}
-      {# I18N: Header text for a reviewed assignment. #}
-      <h3>{{ gettext('Reviewed assignment') }}</h3>
-    {% else %}
-      {# I18N: Header text for an assignment that a student still needs to review. #}
-      <h3>{{ gettext('Assignment to review') }}</h3>
-    {% endif %}
+    <h3>
+      {% if readonly_review_form is defined %}
+        {# I18N: Header text for a reviewed assignment. #}
+        {{ gettext('Reviewed assignment') }}
+      {% else %}
+        {# I18N: Header text for an assignment that a student still needs to review. #}
+        {{ gettext('Assignment to review') }}
+      {% endif %}
+
+      {% if is_read_write_course and is_course_admin %}
+        <a href="dashboard?action=edit_assessment&key={{ unit_id }}"
+          class="icon md-mode-edit gcb-edit-resource-button">
+        </a>
+      {% endif %}
+    </h3>
 
     {% import 'readonly_assessment.html' as readonly_assessment %}
 
@@ -127,11 +120,11 @@
           {{
             html_assessment.render(
                 unit_id, assessment_xsrf_token, html_review_answers,
-                html_review_form, readonly=True,
-                transient_student=transient_student)
+                html_review_form, is_review_form=True, readonly=True,
+                transient_student=transient_student, review_score=score)
           }}
+          </div>
         {% endif %}
-      </div>
     {% else %}
       {# I18N: Header text for a review form that a student has to complete when reviewing another student's assignment. #}
       <h3>{{ gettext('Review form') }}</h3>
@@ -144,7 +137,7 @@
         html_assessment.render(
             unit_id, assessment_xsrf_token, html_review_answers,
             html_review_form, is_review_form=True, review_key=key,
-            transient_student=transient_student)
+            transient_student=transient_student, review_score=score)
       }}
     {% endif %}
 

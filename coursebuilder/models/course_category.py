@@ -53,6 +53,8 @@ class CourseCategoryDAO(object):
     """All access and mutation methods for CourseCategory."""
 
     TARGET_NAMESPACE = appengine_config.DEFAULT_NAMESPACE_NAME
+    category_list_memcache_key = 'course-category-list-all'
+    category_list_visible_memcache_key = 'course-category-list-visible-only'
 
     @classmethod
     def _memcache_key(cls, key):
@@ -61,9 +63,42 @@ class CourseCategoryDAO(object):
 
 
     @classmethod
-    def get_category_list(cls):
+    def _convert_to_dto_list(cls, categories):
+        category_list = []
+        for category in categories:
+            category_list.append(CourseCategoryDTO(category))
+        return category_list
+
+
+    @classmethod
+    def get_category_list(cls, visible_only=False):
         with Namespace(cls.TARGET_NAMESPACE):
-            return CourseCategory.all().run(batch_size=1000)
+            if visible_only:
+                category_list = models.MemcacheManager.get(cls.category_list_visible_memcache_key, 
+                                namespace=cls.TARGET_NAMESPACE)                
+            else:
+                category_list = models.MemcacheManager.get(cls.category_list_memcache_key, 
+                                namespace=cls.TARGET_NAMESPACE)
+            if category_list:
+                return cls._convert_to_dto_list(category_list)
+                
+            category_list = [] 
+            query = db.Query(CourseCategory)
+            if visible_only:
+                query.filter('visible =', True)                
+ 
+ 
+            for category in query:
+                category_list.append(category)
+            
+            if visible_only:
+                models.MemcacheManager.set(cls.category_list_visible_memcache_key, category_list, 
+                    namespace=cls.TARGET_NAMESPACE)
+            else:
+                models.MemcacheManager.set(cls.category_list_memcache_key, category_list, 
+                    namespace=cls.TARGET_NAMESPACE)    
+
+            return cls._convert_to_dto_list(category_list)
 
     @classmethod
     def get_category_by_key(cls, key):
@@ -96,6 +131,8 @@ class CourseCategoryDAO(object):
             cli.put()
             models.MemcacheManager.set(
 	        cls._memcache_key(key), cli, namespace=cls.TARGET_NAMESPACE)
+            models.MemcacheManager.delete(cls.category_list_memcache_key, namespace=cls.TARGET_NAMESPACE)
+            models.MemcacheManager.delete(cls.category_list_visible_memcache_key , namespace=cls.TARGET_NAMESPACE)
 
 
     @classmethod
@@ -113,6 +150,8 @@ class CourseCategoryDAO(object):
             c.put()
             models.MemcacheManager.set(
 	        cls._memcache_key(key), c, namespace=cls.TARGET_NAMESPACE)
+            models.MemcacheManager.delete(cls.category_list_memcache_key, namespace=cls.TARGET_NAMESPACE)
+            models.MemcacheManager.delete(cls.category_list_visible_memcache_key , namespace=cls.TARGET_NAMESPACE)
 
 
     @classmethod
@@ -127,3 +166,6 @@ class CourseCategoryDAO(object):
             c.delete()
             models.MemcacheManager.delete(
 	        cls._memcache_key(key),  namespace=cls.TARGET_NAMESPACE)
+            models.MemcacheManager.delete(cls.category_list_memcache_key, namespace=cls.TARGET_NAMESPACE)
+            models.MemcacheManager.delete(cls.category_list_visible_memcache_key , namespace=cls.TARGET_NAMESPACE)
+

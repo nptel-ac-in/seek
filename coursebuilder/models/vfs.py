@@ -31,6 +31,7 @@ import jinja2
 
 from common import caching
 from common import jinja_utils
+from models import messages
 
 from google.appengine.api import namespace_manager
 from google.appengine.ext import db
@@ -47,15 +48,13 @@ MAX_GLOBAL_CACHE_ITEM_SIZE_BYTES = 256 * 1024
 _MAX_VFS_SHARD_SIZE = 1000 * 1000
 
 # Max number of shards for a single VFS cached file.
-_MAX_VFS_NUM_SHARDS = 4
+_MAX_VFS_NUM_SHARDS = 8
 
 # Global memcache controls.
 CAN_USE_VFS_IN_PROCESS_CACHE = ConfigProperty(
-    'gcb_can_use_vfs_in_process_cache', bool, (
-        'Whether or not to cache content objects. For production this value '
-        'should be on to enable maximum performance. For development this '
-        'value should be off so you can see your changes to course content '
-        'instantaneously.'), default_value=True)
+    'gcb_can_use_vfs_in_process_cache', bool,
+    messages.SITE_SETTINGS_CACHE_CONTENT, default_value=True,
+    label='Cache Content')
 
 
 class AbstractFileSystem(object):
@@ -586,6 +585,17 @@ class DatastoreBackedFileSystem(object):
                         # determine how best to address chunking strategies.
                         self.cache.put(filename, metadata, data)
                         return FileStreamWrapped(metadata, data)
+                keys = self._generate_file_key_names(filename, metadata.size)
+                data_shards = []
+                for data_entity in FileDataEntity.get_by_key_name(keys):
+                    data_shards.append(data_entity.data)
+                data = ''.join(data_shards)
+                # TODO: Note that this will ask the cache to accept
+                # potentially very large items.  The caching strategy both
+                # for in-memory and Memcache should be revisited to
+                # determine how best to address chunking strategies.
+                self.cache.put(filename, metadata, data)
+                return FileStreamWrapped(metadata, data)
 
             # lets us cache the (None, None) so next time we asked for this key
             # we fall right into the inherited section without trying to load

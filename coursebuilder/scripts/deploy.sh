@@ -1,19 +1,5 @@
 #!/bin/bash
 
-# Copyright 2020 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 # Copyright 2014 Google Inc. All Rights Reserved.
 #
 # Usage:
@@ -37,14 +23,62 @@
 
 set -e
 
+# Add Cygwin install to path before script uses any utilities.
+if [[ $OSTYPE == cygwin* ]] ; then
+  export PATH="$COURSE_BUILDER_CYGWIN_ROOT:/usr/bin:$PATH"
+fi
+
+# local environment may contain non-default value for GCB_ALLOW_STATIC_SERV;
+# remove it here, so the proper default is picked up from script/config.sh
+echo "Removing GCB_ALLOW_STATIC_SERV set to '"$GCB_ALLOW_STATIC_SERV"'"
+unset GCB_ALLOW_STATIC_SERV
+
 . "$(dirname "$0")/common.sh"
 
-if [[ $# == 1 && $1 != -* ]]; then
-  application="--application=$1"
-  shift
+# -----------------------------------------------------------------------------
+# Argument parsing helper: If there is a command line argument that does
+# not start with a hyphen, treat that as the name of the App Engine instance
+# to which to deploy.  Pass through any arguments to appcfg.py
+# (Here, we cannot use getopt since we do not know the universe of all legal
+# arguments.)
+#
+declare -a args=( $@ )
+declare -a passthrough_args
+# Loop over command line arguments, as copied into 'args'.
+for i in $( seq 0 $(( ${#args[@]} - 1)) ); do
+  if [[ ${args[$i]:0:1} != '-' ]] ; then
+    # If first character of the $i'th argument is not a hyphen, treat it as
+    # the name of the App Engine instance.
+    app_name="${args[$i]}"
+    application="--application=$app_name"
+
+  else
+    # First char is a hyphen; append to a list of arguments passed through to
+    # appcfg.py
+    passthrough_args+=(${args[$i]})
+    if [[ "${args[$i]:0:14}" == "--application=" ]] ; then
+      app_name="${args[$i]:14}"
+    fi
+  fi
+done
+
+if [ -z "$app_name" ] ; then
+  app_name=$(
+    egrep '^application:\s+' "$SOURCE_DIR/app.yaml" | \
+    head -1 | \
+    sed -e 's/^application:\s*//' -e 's/\s.*//' )
 fi
 
 python "$GOOGLE_APP_ENGINE_HOME/appcfg.py" \
   $application \
-  "$@" update \
+  "${passthrough_args[@]}" \
+  update \
   "$SOURCE_DIR"
+
+echo ""
+echo ""
+echo ""
+echo "Deployment to  https://$app_name.appspot.com  complete"
+echo ""
+echo ""
+echo ""

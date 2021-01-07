@@ -18,27 +18,37 @@ __author__ = 'Pavel Simakov (psimakov@google.com)'
 
 import collections
 import copy
+import datetime
 import logging
 import os
 import sys
 import time
-import pickle
+import webapp2
 
-from config import ConfigProperty
+import jinja2
+
+import config
 import counters
 from counters import PerfCounter
 from entities import BaseEntity
-import jinja2
+from entities import delete
+from entities import get
+from entities import put
+import data_removal
+import messages
 import services
 import transforms
 
 import appengine_config
 from common import caching
 from common import utils as common_utils
+from common import users
 
+from google.appengine.api import app_identity
+from google.appengine.api import mail
 from google.appengine.api import memcache
 from google.appengine.api import namespace_manager
-from google.appengine.api import users
+from google.appengine.api import taskqueue
 from google.appengine.ext import db
 from google.appengine.api import datastore
 
@@ -54,14 +64,13 @@ DEFAULT_CACHE_TTL_SECS = 60 * 5
 MEMCACHE_MAX = (1000 * 1000 - 96 - 250)
 MEMCACHE_MULTI_MAX = 32 * 1000 * 1000
 
+# Update frequency for Student.last_seen_on.
+STUDENT_LAST_SEEN_ON_UPDATE_SEC = 24 * 60 * 60  # 1 day.
+
 # Global memcache controls.
-CAN_USE_MEMCACHE = ConfigProperty(
-    'gcb_can_use_memcache', bool, (
-        'Whether or not to cache various objects in memcache. For production '
-        'this value should be on to enable maximum performance. For '
-        'development this value should be off so you can see your changes to '
-        'course content instantaneously.'),
-    appengine_config.PRODUCTION_MODE)
+CAN_USE_MEMCACHE = config.ConfigProperty(
+    'gcb_can_use_memcache', bool, messages.SITE_SETTINGS_MEMCACHE,
+    default_value=appengine_config.PRODUCTION_MODE, label='Memcache')
 
 # performance counters
 CACHE_PUT = PerfCounter(
@@ -173,6 +182,7 @@ class MemcacheManager(object):
         if cls._IS_READONLY:
             assert cls._is_same_app_context_if_set()
             _dict = cls._LOCAL_CACHE.get(namespace)
+            # TODO(nretallack): change to: if _dict is None
             if not _dict:
                 _dict = {}
                 cls._LOCAL_CACHE[namespace] = _dict
@@ -189,6 +199,7 @@ class MemcacheManager(object):
         if cls._IS_READONLY:
             assert cls._is_same_app_context_if_set()
             _dict = cls._LOCAL_CACHE.get(namespace)
+            # TODO(nretallack): change to: if _dict is None
             if not _dict:
                 _dict = {}
                 cls._LOCAL_CACHE[namespace] = _dict
@@ -278,14 +289,15 @@ class MemcacheManager(object):
         return values
 
     @classmethod
-    def set(cls, key, value, ttl=DEFAULT_CACHE_TTL_SECS, namespace=None):
+    def set(cls, key, value, ttl=DEFAULT_CACHE_TTL_SECS, namespace=None,
+            propagate_exceptions=False):
         """Sets an item in memcache if memcache is enabled."""
         # Ensure subsequent mods to value do not affect the cached copy.
         value = copy.deepcopy(value)
 
         try:
             if CAN_USE_MEMCACHE.value:
-                size = sys.getsizeof(pickle.dumps(value))
+                size = sys.getsizeof(value)
                 if size > MEMCACHE_MAX:
                     CACHE_PUT_TOO_BIG.inc()
                 else:
@@ -294,8 +306,11 @@ class MemcacheManager(object):
                     memcache.set(key, value, ttl, namespace=_namespace)
                     cls._local_cache_put(key, _namespace, value)
         except:  # pylint: disable=bare-except
-            logging.exception(
-                'Failed to set: %s, %s', key, cls._get_namespace(namespace))
+            if propagate_exceptions:
+                raise
+            else:
+                logging.exception(
+                    'Failed to set: %s, %s', key, cls._get_namespace(namespace))
             return None
 
     @classmethod
@@ -347,15 +362,10 @@ class MemcacheManager(object):
                 namespace=cls._get_namespace(namespace), initial_value=0)
 
 
-CAN_AGGREGATE_COUNTERS = ConfigProperty(
+CAN_AGGREGATE_COUNTERS = config.ConfigProperty(
     'gcb_can_aggregate_counters', bool,
-    'Whether or not to aggregate and record counter values in memcache. '
-    'This allows you to see counter values aggregated across all frontend '
-    'application instances. Without recording, you only see counter values '
-    'for one frontend instance you are connected to right now. Enabling '
-    'aggregation improves quality of performance metrics, but adds a small '
-    'amount of latency to all your requests.',
-    default_value=False)
+    messages.SITE_SETTINGS_AGGREGATE_COUNTERS, default_value=False,
+    label='Aggregate Counters')
 
 
 def incr_counter_global_value(name, delta):
@@ -376,13 +386,9 @@ def get_counter_global_value(name):
 counters.get_counter_global_value = get_counter_global_value
 counters.incr_counter_global_value = incr_counter_global_value
 
-
-# Whether to record tag events in a database.
-CAN_SHARE_STUDENT_PROFILE = ConfigProperty(
-    'gcb_can_share_student_profile', bool, (
-        'Whether or not to share student profile between different courses.'),
-    False)
-
+DEPRECATED_CAN_SHARE_STUDENT_PROFILE = config.ConfigProperty(
+    'gcb_can_share_student_profile', bool, '', default_value=False,
+    deprecated=True)
 
 class CollisionError(Exception):
     """Exception raised to show that a collision in a namespace has occurred."""
@@ -395,7 +401,7 @@ class ValidationError(Exception):
 class ContentChunkEntity(BaseEntity):
     """Defines storage for ContentChunk, a blob of opaque content to display."""
 
-    _PROPERTY_EXPORT_DENYLIST = []  # No PII in ContentChunks.
+    _PROPERTY_EXPORT_BLACKLIST = []  # No PII in ContentChunks.
 
     # A string that gives the type of the content chunk. At the data layer we
     # make no restrictions on the values that can be used here -- we only
@@ -432,7 +438,7 @@ class ContentChunkDAO(object):
         entity = ContentChunkEntity.get_by_id(entity_id)
 
         if entity:
-            db.delete(entity)
+            delete(entity)
 
         MemcacheManager.delete(memcache_key)
 
@@ -472,6 +478,29 @@ class ContentChunkDAO(object):
             key=lambda dto: dto.id)
 
     @classmethod
+    def get_or_new_by_uid(cls, uid):
+        result = cls.get_one_by_uid(uid)
+        if result is not None:
+            return result
+        else:
+            type_id, resource_id = cls._split_uid(uid)
+            return ContentChunkDTO({
+                'type_id': type_id,
+                'resource_id': resource_id,
+            })
+
+    @classmethod
+    def get_one_by_uid(cls, uid):
+        matches = cls.get_by_uid(uid)
+        if matches:
+            # There is a data race in the DAO -- it's possible to create two
+            # entries at the same time with the same UID. If that happened,
+            # use the first one saved.
+            return matches[0]
+        else:
+            return None
+
+    @classmethod
     def make_uid(cls, type_id, resource_id):
         """Makes a uid string (or None) from the given strings (or Nones)."""
         if type_id is None and resource_id is None:
@@ -482,10 +511,11 @@ class ContentChunkDAO(object):
 
     @classmethod
     def save(cls, dto):
-        """Saves contents of a DTO and returns the key of the saved entity.
+        """Saves content of DTO and returns the key of the saved entity.
 
-        Handles both creating new and updating existing entities. If the id of
-        the passed DTO is found, the entity will be updated.
+        Handles both creating new and updating existing entities. If the id of a
+        passed DTO is found, the entity will be updated; otherwise, the entity
+        will be created.
 
         Note that this method does not refetch the saved entity from the
         datastore after put since this is impossible in a transaction. This
@@ -495,27 +525,46 @@ class ContentChunkDAO(object):
         this value for our getters.
 
         Args:
-            dto: ContentChunkDTO. last_modified will be ignored.
+            dto: ContentChunkDTO. DTO to save. Its last_modified field is
+                ignored.
 
         Returns:
             db.Key of saved ContentChunkEntity.
         """
-        if dto.id is None:
-            entity = ContentChunkEntity(content_type=dto.content_type)
-        else:
-            entity = ContentChunkEntity.get_by_id(dto.id)
+        return cls.save_all([dto])[0]
 
-            if entity is None:
+    @classmethod
+    def save_all(cls, dtos):
+        """Saves all given DTOs; see save() for semantics.
+
+        Args:
+            dtos: list of ContentChunkDTO. The last_modified field is ignored.
+
+        Returns:
+            List of db.Key of saved ContentChunkEntities, in order of dto input.
+        """
+        entities = []
+        for dto in dtos:
+            if dto.id is None:
                 entity = ContentChunkEntity(content_type=dto.content_type)
+            else:
+                entity = ContentChunkEntity.get_by_id(dto.id)
 
-        entity.contents = dto.contents
-        entity.supports_custom_tags = dto.supports_custom_tags
-        entity.uid = cls.make_uid(dto.type_id, dto.resource_id)
-        entity.put()
-        MemcacheManager.set(
-            cls._get_memcache_key(entity.key().id()), cls._make_dto(entity))
+                if entity is None:
+                    entity = ContentChunkEntity(content_type=dto.content_type)
 
-        return entity.key()
+            entity.content_type = dto.content_type
+            entity.contents = dto.contents
+            entity.supports_custom_tags = dto.supports_custom_tags
+            entity.uid = cls.make_uid(dto.type_id, dto.resource_id)
+            entities.append(entity)
+
+        db.put(entities)
+
+        for entity in entities:
+            MemcacheManager.delete(cls._get_memcache_key(entity.key().id()))
+
+        return [entity.key() for entity in entities]
 
     @classmethod
     def _get_memcache_key(cls, entity_id):
@@ -579,13 +628,13 @@ class PersonalProfile(BaseEntity):
     legal_name = db.StringProperty(indexed=False)
     nick_name = db.StringProperty(indexed=False)
     date_of_birth = db.DateProperty(indexed=False)
-    enrollment_info = db.TextProperty()
     course_info = db.TextProperty()
+    enrollment_info = db.TextProperty()
     country_of_residence = db.StringProperty(indexed=False)
     state_of_residence = db.StringProperty(indexed=False)
     city_of_residence = db.StringProperty(indexed=False)
     name_of_college = db.StringProperty(indexed=False)
-    college_id = db.StringProperty(indexed=False)
+    college_id = db.StringProperty(indexed=True)
     college_roll_no = db.StringProperty(indexed=False)
     age_group = db.StringProperty(indexed=False)
     graduation_year = db.IntegerProperty(indexed=False)
@@ -594,15 +643,41 @@ class PersonalProfile(BaseEntity):
     accepted_honor = db.BooleanProperty(indexed=False)
     accepted_terms = db.BooleanProperty(indexed=False)
     mobile_number = db.StringProperty(indexed=False)
-    local_chapter = db.BooleanProperty(indexed=False)
+    local_chapter = db.BooleanProperty(indexed=True)
+    motivation = db.StringProperty(indexed=False)
+    exam_taker = db.BooleanProperty(indexed=False, default=False)
+    qualification = db.StringProperty(indexed=False)
+    degree = db.StringProperty(indexed=False)
+    department = db.StringProperty(indexed=False)
+    study_year = db.IntegerProperty(indexed=False)
+    designation = db.StringProperty(indexed=False)
+    employer_id = db.StringProperty(indexed=True)
+    push_tokens = db.StringProperty(indexed=False)
+
+
+    # True -> Student gets scholarship
+    # Indexed to filter on students getting scholarship
+    scholarship = db.BooleanProperty(indexed=True)
 
     last_updated = db.DateTimeProperty(auto_now=True)
 
-    _PROPERTY_EXPORT_DENYLIST = [email, legal_name, nick_name, date_of_birth]
+    _PROPERTY_EXPORT_BLACKLIST = [email, legal_name, nick_name, date_of_birth]
 
     @property
     def user_id(self):
         return self.key().name()
+
+    @property
+    def push_tokens_as_list(self):
+        if self.push_tokens:
+            return transforms.loads(self.push_tokens)
+        else:
+            return []
+
+    @push_tokens_as_list.setter
+    def push_tokens_as_list(self, val):
+        if val:
+            self.push_tokens = transforms.dumps(val)
 
     @classmethod
     def safe_key(cls, db_key, transform_fn):
@@ -612,18 +687,22 @@ class PersonalProfile(BaseEntity):
 class PersonalProfileDTO(object):
     """DTO for PersonalProfile."""
 
+    def key(self):
+        return self._key
+
     def __init__(self, personal_profile=None):
-        self.enrollment_info = '{}'
         self.course_info = '{}'
+        self.enrollment_info = '{}'
         self.last_updated = None
         if personal_profile:
+            self._key = personal_profile.key()
             self.user_id = personal_profile.user_id
             self.email = personal_profile.email
             self.legal_name = personal_profile.legal_name
             self.nick_name = personal_profile.nick_name
             self.date_of_birth = personal_profile.date_of_birth
-            self.enrollment_info = personal_profile.enrollment_info
             self.course_info = personal_profile.course_info
+            self.enrollment_info = personal_profile.enrollment_info
             self.country_of_residence = personal_profile.country_of_residence
             self.state_of_residence = personal_profile.state_of_residence
             self.city_of_residence = personal_profile.city_of_residence
@@ -639,30 +718,258 @@ class PersonalProfileDTO(object):
             self.college_id = personal_profile.college_id
             self.college_roll_no = personal_profile.college_roll_no
             self.last_updated = personal_profile.last_updated
+            self.scholarship = personal_profile.scholarship
+            self.motivation = personal_profile.motivation
+            self.exam_taker = personal_profile.exam_taker
+            self.qualification = personal_profile.qualification
+            self.degree = personal_profile.degree
+            self.department = personal_profile.department
+            self.study_year = personal_profile.study_year
+            self.designation = personal_profile.designation
+            self.employer_id = personal_profile.employer_id
+            self.push_tokens_as_list = personal_profile.push_tokens_as_list
+
+QUEUE_RETRIES_BEFORE_SENDING_MAIL = config.ConfigProperty(
+    'gcb_lifecycle_queue_retries_before_sending_mail', int,
+    messages.SITE_SETTINGS_QUEUE_NOTIFICATION, default_value=10,
+    label='Queue Notification',
+    validator=config.ValidateIntegerRange(1, 50).validate)
+
+
+class StudentLifecycleObserver(webapp2.RequestHandler):
+    """Provides notification on major events to Students for interested modules.
+
+    Notification is done from an App Engine deferred work queue.  This is done
+    so that observers who _absolutely_ _positively_ _have_ _to_ _be_ _notified_
+    are either going to be notified, or a site administrator is going to get
+    an ongoing sequence of email notifications that Something Is Wrong, and
+    will then address the problem manually.
+
+    Modules can register to be called back for the lifecycle events listed
+    below.  Callbacks should be registered like this:
+
+        models.StudentLifecycleObserver.EVENT_CALLBACKS[
+            models.StudentLifecycleObserver.EVENT_ADD]['my_module'] = my_handler
+
+    If a callback function needs to have extra information passed to it that
+    needs to be collected in the context where the lifecycle event is actually
+    happening, modules can register a function in the ENQUEUE_CALLBACKS.  Add
+    one of those in the same way as for event callbacks:
+
+        models.StudentLifecycleObserver.ENQUEUE_CALLBACKS[
+            models.StudentLifecycleObserver.EVENT_ADD]['my_module'] = a_function
+
+    Event notification callbacks are called repeatedly until they return
+    without raising an exception.  Note that due to retries having an
+    exponential backoff (to a maximum of two hours), you cannot rely on
+    notifications being delivered in any particular order relative to one
+    another.
+
+    Event notification callbacks must take two or three parameters:
+    - the user_id (a string)
+    - the datetime.datetime UTC timestamp when the event originally occurred.
+    - If-and-only-if the the enqueue callback was registered and returned a
+      non-None value, this argument is passed.  If this value is mutable, any
+      changes made by the event callback will be retained in any future
+      re-tries.
+
+    Enqueue callback functions must take exactly one parameter:
+    - the user_id of the user to which the event pertains.
+    The function may return any data type which is convertible to a JSON
+    string using transforms.dumps().  This value is passed to the event
+    notification callback.
+
+    """
+
+    QUEUE_NAME = 'user-lifecycle'
+    URL = '/_ah/queue/' + QUEUE_NAME
+    EVENT_ADD = 'add'
+    EVENT_UNENROLL = 'unenroll'
+    EVENT_UNENROLL_COMMANDED = 'unenroll_commanded'
+    EVENT_REENROLL = 'reenroll'
+
+    EVENT_CALLBACKS = {
+        EVENT_ADD: {},
+        EVENT_UNENROLL: {},
+        EVENT_UNENROLL_COMMANDED: {},
+        EVENT_REENROLL: {},
+    }
+    ENQUEUE_CALLBACKS = {
+        EVENT_ADD: {},
+        EVENT_UNENROLL: {},
+        EVENT_UNENROLL_COMMANDED: {},
+        EVENT_REENROLL: {},
+    }
+
+    @classmethod
+    def enqueue(cls, event, user_id, transactional=True):
+        if event not in cls.EVENT_CALLBACKS:
+            raise ValueError('Event "%s" not in allowed list: %s' % (
+                event, ' '.join(cls.EVENT_CALLBACKS)))
+        if not user_id:
+            raise ValueError('User ID must be non-blank')
+        if not cls.EVENT_CALLBACKS[event]:
+            return  # No callbacks registered for event -> nothing to do; skip.
+        extra_data = {}
+        for name, callback in cls.ENQUEUE_CALLBACKS[event].iteritems():
+            extra_data[name] = callback(user_id)
+        cls._internal_enqueue(
+            event, user_id, cls.EVENT_CALLBACKS[event].keys(), extra_data,
+            transactional=transactional)
+
+    @classmethod
+    def _internal_enqueue(cls, event, user_id, callbacks, extra_data,
+                          transactional):
+        for callback in callbacks:
+            if callback not in cls.EVENT_CALLBACKS[event]:
+                raise ValueError(
+                    'Callback "%s" not in callbacks registered for event %s'
+                    % (callback, event))
+
+        task = taskqueue.Task(params={
+            'event': event,
+            'user_id': user_id,
+            'callbacks': ' '.join(callbacks),
+            'timestamp': datetime.datetime.utcnow().strftime(
+                transforms.ISO_8601_DATETIME_FORMAT),
+            'extra_data': transforms.dumps(extra_data),
+        })
+        task.add(cls.QUEUE_NAME, transactional=transactional)
+
+    def post(self):
+        if 'X-AppEngine-QueueName' not in self.request.headers:
+            self.response.set_status(500)
+            return
+        user_id = self.request.get('user_id')
+        if not user_id:
+            logging.critical('Student lifecycle queue had item with no user')
+            self.response.set_status(200)
+            return
+        event = self.request.get('event')
+        if not event:
+            logging.critical('Student lifecycle queue had item with no event')
+            self.response.set_status(200)
+            return
+        timestamp_str = self.request.get('timestamp')
+        try:
+            timestamp = datetime.datetime.strptime(
+                timestamp_str, transforms.ISO_8601_DATETIME_FORMAT)
+        except ValueError:
+            logging.critical('Student lifecycle queue: malformed timestamp %s',
+                             timestamp_str)
+            self.response.set_status(200)
+            return
+
+        extra_data = self.request.get('extra_data')
+        if extra_data:
+            extra_data = transforms.loads(extra_data)
+        else:
+            extra_data = {}
+
+        callbacks = self.request.get('callbacks')
+        if not callbacks:
+            logging.warning('Odd: Student lifecycle with no callback items')
+            self.response.set_status(200)
+            return
+        callbacks = callbacks.split(' ')
+
+        # Configure path in threadlocal cache in sites; callbacks may
+        # be dynamically determining their current context by calling
+        # sites.get_app_context_for_current_request(), which relies on
+        # sites.PATH_INFO_THREAD_LOCAL.path.
+        current_namespace = namespace_manager.get_namespace()
+        logging.info(
+            '-- Dequeue in namespace "%s" handling event %s for user %s --',
+            current_namespace, event, user_id)
+        from controllers import sites
+        app_context = sites.get_course_index().get_app_context_for_namespace(
+            current_namespace)
+        path = app_context.get_slug()
+        if hasattr(sites.PATH_INFO_THREAD_LOCAL, 'path'):
+            has_path_info = True
+            save_path_info = sites.PATH_INFO_THREAD_LOCAL.path
+        else:
+            has_path_info = False
+        sites.PATH_INFO_THREAD_LOCAL.path = path
+
+        try:
+            remaining_callbacks = []
+            for callback in callbacks:
+                if callback not in self.EVENT_CALLBACKS[event]:
+                    logging.error(
+                        'Student lifecycle event enqueued with callback named '
+                        '"%s", but no such callback is currently registered.',
+                        callback)
+                    continue
+                try:
+                    logging.info('-- Student lifecycle callback %s starting --',
+                                 callback)
+                    callback_extra_data = extra_data.get(callback)
+                    if callback_extra_data is None:
+                        self.EVENT_CALLBACKS[event][callback](
+                            user_id, timestamp)
+                    else:
+                        self.EVENT_CALLBACKS[event][callback](
+                            user_id, timestamp, callback_extra_data)
+                    logging.info('-- Student lifecycle callback %s success --',
+                                 callback)
+                except Exception, ex:  # pylint: disable=broad-except
+                    logging.error(
+                        '-- Student lifecycle callback %s fails: %s --',
+                        callback, str(ex))
+                    common_utils.log_exception_origin()
+                    remaining_callbacks.append(callback)
+        finally:
+            if has_path_info:
+                sites.PATH_INFO_THREAD_LOCAL.path = save_path_info
+            else:
+                del sites.PATH_INFO_THREAD_LOCAL.path
+
+        if remaining_callbacks == callbacks:
+            # If we have made _no_ progress, emit error and get queue backoff.
+            num_tries = 1 + int(
+                self.request.headers.get('X-AppEngine-TaskExecutionCount', '0'))
+            complaint = (
+                'Student lifecycle callback in namespace %s for '
+                'event %s enqueued at %s made no progress on any of the '
+                'callbacks %s for user %s after %d attempts' % (
+                namespace_manager.get_namespace() or '<blank>',
+                event, timestamp_str, callbacks, user_id, num_tries))
+            logging.warning(complaint)
+
+            if num_tries >= QUEUE_RETRIES_BEFORE_SENDING_MAIL.value:
+                app_id = app_identity.get_application_id()
+                sender = 'queue_admin@%s.appspotmail.com' % app_id
+                subject = ('Queue processing: Excessive retries '
+                           'on student lifecycle queue')
+                body = complaint + ' in application ' + app_id
+                mail.send_mail_to_admins(sender, subject, body)
+            raise RuntimeError(
+                'Queued work incomplete; raising error to force retries.')
+        else:
+            # If we made some progress, but still have work to do, re-enqueue
+            # remaining work.
+            if remaining_callbacks:
+                logging.warning(
+                    'Student lifecycle callback for event %s enqueued at %s '
+                    'made some progress, but needs retries for the following '
+                    'callbacks: %s', event, timestamp_str, callbacks)
+                self._internal_enqueue(
+                    event, user_id, remaining_callbacks, extra_data,
+                    transactional=False)
+            # Claim success if any work done, whether or not any work remains.
+            self.response.set_status(200)
+
 
 class StudentProfileDAO(object):
     """All access and mutation methods for PersonalProfile and Student."""
 
     TARGET_NAMESPACE = appengine_config.DEFAULT_NAMESPACE_NAME
 
-    # Each hook is called back after update() has completed without raising
-    # an exception.  Arguments are:
-    # profile: The PersonalProfile object for the user
-    # student: The Student object for the user
-    # Subsequent arguments are identical to the arguments list to the update()
-    # call.  Not documented here so as to not get out-of-date.
-    # The return value from hooks is discarded.  Since these hooks run
-    # after update() has succeeded, they should run as best-effort, rather
-    # than raising exceptions.
-    UPDATE_POST_HOOKS = []
-
-    # Each hook is called back after _add_new_student_for_current_user has
-    # completed without raising an exception.  Arguments are:
-    # student: The Student object for the user.
-    # The return value from hooks is discarded.  Since these hooks run
-    # after update() has succeeded, they should run as best-effort, rather
-    # than raising exceptions.
-    ADD_STUDENT_POST_HOOKS = []
+    # Only for use from modules with fields in Student or PersonalProfile.
+    # (As of 2016-02-19, this is only student_groups).  Other modules should
+    # register with StudentLifecycleObserver.
+    STUDENT_CREATION_HOOKS = []
 
     @classmethod
     def _memcache_key(cls, key):
@@ -722,15 +1029,18 @@ class StudentProfileDAO(object):
             namespace_manager.set_namespace(old_namespace)
 
     @classmethod
-    def _add_new_profile(cls, user_id, email):
-        """Adds new profile for a user_id and returns Entity object."""
-        if not CAN_SHARE_STUDENT_PROFILE.value:
-            return None
+    def delete_profile_by_user_id(cls, user_id):
+        with common_utils.Namespace(cls.TARGET_NAMESPACE):
+            PersonalProfile.delete_by_key(user_id)
+            MemcacheManager.delete(
+                cls._memcache_key(user_id), namespace=cls.TARGET_NAMESPACE)
 
+    @classmethod
+    def add_new_profile(cls, user_id, email):
+        """Adds new profile for a user_id and returns Entity object."""
         old_namespace = namespace_manager.get_namespace()
         try:
             namespace_manager.set_namespace(cls.TARGET_NAMESPACE)
-
             profile = PersonalProfile(key_name=user_id)
             profile.email = email
             profile.enrollment_info = '{}'
@@ -749,11 +1059,12 @@ class StudentProfileDAO(object):
         graduation_year=None, profession=None, employer_name=None,
         accepted_honor=None, accepted_terms=None, mobile_number=None,
         local_chapter=None, college_id=None, college_roll_no=None,
-        course_namespace=None):
+        scholarship=None, course_namespace=None, motivation=None, 
+        exam_taker=None,qualification=None,degree=None, department=None,
+        study_year=None,designation=None,employer_id=None,push_tokens_as_list=None):
         """Modifies various attributes of Student's Global Profile."""
-        # TODO(psimakov): update of email does not work for student
         if email is not None:
-            profile.email = email
+            profile.email = email.lower()
 
         if legal_name is not None:
             profile.legal_name = legal_name
@@ -805,6 +1116,37 @@ class StudentProfileDAO(object):
         if college_roll_no is not None:
             profile.college_roll_no = college_roll_no
 
+        if motivation is not None:
+            profile.motivation = motivation
+
+        if isinstance(scholarship, bool):
+            profile.scholarship = scholarship
+
+        if isinstance(exam_taker, bool):
+            profile.exam_taker = exam_taker
+
+        if qualification is not None:
+            profile.qualification = qualification    
+
+        if degree is not None:
+            profile.degree = degree    
+
+        if department is not None:
+            profile.department = department    
+
+        if isinstance(study_year, int):
+            profile.study_year = study_year    
+
+        if designation is not None:
+            profile.designation = designation    
+
+        if employer_id is not None:
+            profile.employer_id = employer_id
+            
+        if push_tokens_as_list is not None:
+            profile.push_tokens_as_list = push_tokens_as_list
+
+
         if not (is_enrolled is None and final_grade is None and
                 course_info is None):
 
@@ -827,6 +1169,25 @@ class StudentProfileDAO(object):
                     info['info'] = course_info
                 course_info_dict[course_namespace] = info
                 profile.course_info = transforms.dumps(course_info_dict)
+
+        # TODO(nretallack): Remove this block and re-calculate this dynamically
+        if final_grade is not None or course_info is not None:
+
+            # Defer to avoid circular import.
+            from controllers import sites
+            course = sites.get_course_for_current_request()
+            course_namespace = course.get_namespace_name()
+
+            course_info_dict = {}
+            if profile.course_info:
+                course_info_dict = transforms.loads(profile.course_info)
+            info = course_info_dict.get(course_namespace, {})
+            if final_grade:
+                info['final_grade'] = final_grade
+            if course_info:
+                info['info'] = course_info
+            course_info_dict[course_namespace] = info
+            profile.course_info = transforms.dumps(course_info_dict)
 
     @classmethod
     def _update_course_profile_attributes(
@@ -851,7 +1212,9 @@ class StudentProfileDAO(object):
         city_of_residence=None, name_of_college=None, age_group=None, graduation_year=None,
         employer_name=None, profession=None, accepted_honor=None,
         accepted_terms=None, mobile_number=None, local_chapter=None,
-        college_id=None, college_roll_no=None, course_namespace=None):
+        college_id=None, college_roll_no=None, scholarship=None,
+        course_namespace=None, motivation=None, exam_taker=None,qualification=None,
+        degree=None, department=None,study_year=None,designation=None,employer_id=None,push_tokens_as_list=None):
         """Modifies various attributes of Student and Profile."""
 
         if profile:
@@ -869,7 +1232,17 @@ class StudentProfileDAO(object):
                 accepted_terms=accepted_terms, mobile_number=mobile_number,
                 local_chapter=local_chapter, college_id=college_id,
                 college_roll_no=college_roll_no,
-                course_namespace=course_namespace
+                scholarship=scholarship,
+                course_namespace=course_namespace,
+                motivation=motivation,
+                exam_taker =exam_taker,
+                qualification=qualification,
+                degree=degree, 
+                department=department,
+                study_year=study_year,
+                designation=designation,
+                employer_id=employer_id,
+                push_tokens_as_list=push_tokens_as_list
                 )
 
         if student:
@@ -904,15 +1277,15 @@ class StudentProfileDAO(object):
         return None
 
     @classmethod
-    def add_new_profile(cls, user_id, email):
-        return cls._add_new_profile(user_id, email)
+    def get_profile_by_user(cls, user):
+        return cls.get_profile_by_user_id(user.user_id())
 
     @classmethod
     def add_new_student_for_current_user(
         cls, nick_name, additional_fields, handler, labels=None):
         user = users.get_current_user()
 
-        student_by_uid = Student.get_student_by_user_id(user.user_id())
+        student_by_uid = Student.get_by_user_id(user.user_id())
         is_valid_student = (student_by_uid is None or
                             student_by_uid.user_id == user.user_id())
         assert is_valid_student, (
@@ -935,27 +1308,33 @@ class StudentProfileDAO(object):
         course = sites.get_course_for_current_request()
         course_namespace = course.get_namespace_name()
 
+        student = Student.get_by_user_id(user_id)
+        key_name = None
+        if student:
+            key_name = student.key().name()
         student = cls._add_new_student_for_current_user_in_txn(
-          user_id, email, nick_name, additional_fields, labels,course_namespace=course_namespace)
-        common_utils.run_hooks(cls.ADD_STUDENT_POST_HOOKS, student)
+          key_name, user_id, email, nick_name, additional_fields, labels,
+          course_namespace=course_namespace)
         return student
 
     @classmethod
     @db.transactional(xg=True)
     def _add_new_student_for_current_user_in_txn(
-        cls, user_id, email, nick_name, additional_fields, labels=None,course_namespace=None):
+        cls, key_name, user_id, email, nick_name, additional_fields,
+        labels=None, course_namespace=None):
         """Create new or re-enroll old student."""
 
         # create profile if does not exist
         profile = cls._get_profile_by_user_id(user_id)
         if not profile:
-            profile = cls._add_new_profile(user_id, email)
+            profile = cls.add_new_profile(user_id, email)
 
         # create new student or re-enroll existing
-        student = Student.get_by_email(email)
-        if not student:
-            # TODO(psimakov): we must move to user_id as a key
-            student = Student(key_name=email)
+        if key_name:
+            student = Student.get_by_key_name(key_name)
+        else:
+            student = Student._add_new(  # pylint: disable=protected-access
+                user_id, email)
 
         # update profile
         cls._update_attributes(
@@ -963,13 +1342,16 @@ class StudentProfileDAO(object):
             labels=labels,course_namespace=course_namespace)
 
         # update student
-        student.user_id = user_id
+        student.email = email.lower()
         student.additional_fields = additional_fields
+        common_utils.run_hooks(cls.STUDENT_CREATION_HOOKS, student, profile)
 
         # put both
         cls._put_profile(profile)
-        student.put()
 
+        student.put()
+        StudentLifecycleObserver.enqueue(
+            StudentLifecycleObserver.EVENT_ADD, user_id)
         return student
 
     @classmethod
@@ -1036,14 +1418,28 @@ class StudentProfileDAO(object):
         ).get('welcome_notifications_sender')
 
     @classmethod
-    def get_enrolled_student_by_email_for(cls, email, app_context):
+    def get_enrolled_student_by_user_for(cls, user, app_context):
         """Returns student for a specific course."""
         old_namespace = namespace_manager.get_namespace()
         try:
             namespace_manager.set_namespace(app_context.get_namespace_name())
-            return Student.get_enrolled_student_by_email(email)
+            return Student.get_enrolled_student_by_user(user)
         finally:
             namespace_manager.set_namespace(old_namespace)
+
+    @classmethod
+    def unregister_user(cls, user_id, unused_timestamp):
+        student = Student.get_by_user_id(user_id)
+        if not student:
+            logging.info(
+                'Unregister commanded for user %s, but user already gone.',
+                user_id)
+            return
+        cls.update(user_id, None, is_enrolled=False)
+
+    @classmethod
+    def set_scholarship_status(cls, user_id, scholarship):
+        cls.update(user_id, None, scholarship=scholarship)
 
     @classmethod
     def bulk_get_student_profile_by_id(
@@ -1059,12 +1455,12 @@ class StudentProfileDAO(object):
         return profile_list
 
     @classmethod
-    def bulk_get_student_by_email(
-            cls, emails, consistency=datastore.EVENTUAL_CONSISTENCY):
-        """Returns a list of Student objects from their email addresses"""
+    def bulk_get_student_by_id(
+            cls, id_list, consistency=datastore.EVENTUAL_CONSISTENCY):
+        """Returns a list of Student objects from their user_ids"""
         key_list = [
-            db.Key.from_path('Student', email).__str__() for email in emails]
-
+            db.Key.from_path(
+                'Student', user_id).__str__() for user_id in id_list]
         student_list = db.Model.get(
             key_list, read_policy=consistency)
         return student_list
@@ -1074,10 +1470,18 @@ class StudentProfileDAO(object):
             cls, id_list, consistency=datastore.EVENTUAL_CONSISTENCY):
         """Returns a list of Student objects from their IDs"""
         profile_list = cls.bulk_get_student_profile_by_id(id_list, consistency)
-        email_list = [profile.email for profile in profile_list]
-        student_list = cls.bulk_get_student_by_email(email_list, consistency)
+        student_list = cls.bulk_get_student_by_id(id_list, consistency)
 
         return profile_list, student_list
+
+    @classmethod
+    def bulk_set_scholarship_status(cls, id_list, scholarship_status,
+                                    consistency=datastore.EVENTUAL_CONSISTENCY):
+        """Sets the scholarship status in bulk"""
+        profiles = cls.bulk_get_student_profile_by_id(id_list)
+        for i, profile in enumerate(profiles):
+            profile.scholarship = scholarship_status[i]
+        db.put(profiles)
 
 
     @classmethod
@@ -1089,19 +1493,63 @@ class StudentProfileDAO(object):
         age_group=None, graduation_year=None, profession=None, employer_name=None,
         accepted_terms=None,accepted_honor=None, mobile_number=None,
         local_chapter=None, college_id=None, college_roll_no=None,
-        profile_only=False):
+        scholarship=False, profile_only=False, motivation=None, 
+        exam_taker=None,qualification=None,degree=None, 
+        department=None,study_year=None,designation=None,employer_id=None,push_tokens_as_list=None):
+        student = Student.get_by_user_id(user_id)
+        key_name = None
+        if student:
+            key_name = student.key().name()
+        cls._update_in_txn(
+            key_name, user_id, email, legal_name, nick_name, date_of_birth,
+            is_enrolled, final_grade, course_info, labels,
+            country_of_residence=country_of_residence,
+            state_of_residence=state_of_residence,
+            city_of_residence=city_of_residence, name_of_college=name_of_college,
+            age_group=age_group,graduation_year=graduation_year,profession=profession,
+            employer_name=employer_name,accepted_terms=accepted_terms,
+            accepted_honor=accepted_honor, mobile_number=mobile_number,
+            local_chapter=local_chapter, college_id=college_id,
+            college_roll_no=college_roll_no, scholarship=scholarship,
+            profile_only=profile_only,motivation=motivation,
+            exam_taker=exam_taker, qualification=qualification,
+            degree=degree, department=department, study_year=study_year,
+            designation=designation, employer_id=employer_id,push_tokens_as_list=push_tokens_as_list)
+
+    @classmethod
+    @db.transactional(xg=True)
+    def _update_in_txn(
+        cls, key_name, user_id, email, legal_name=None, nick_name=None,
+        date_of_birth=None, is_enrolled=None, final_grade=None,
+        course_info=None, labels=None, country_of_residence=None,
+        state_of_residence=None,city_of_residence=None, name_of_college=None,
+        age_group=None, graduation_year=None, profession=None, employer_name=None,
+        accepted_terms=None,accepted_honor=None, mobile_number=None,
+        local_chapter=None, college_id=None, college_roll_no=None,
+        scholarship=False, profile_only=False,motivation=None, 
+        exam_taker=None,qualification=None,degree=None, department=None,
+        study_year=None,designation=None,employer_id=None, push_tokens_as_list=None):
         """Updates a student and/or their global profile."""
         student = None
         if not profile_only:
-            student = Student.get_by_email(email)
+            if key_name:
+                student = Student.get_by_key_name(key_name)
             if not student:
-                raise Exception('Unable to find student for: %s' % user_id)
+                raise Exception('Unable to find student for: %s' % email)
 
         profile = cls._get_profile_by_user_id(user_id)
         if not profile:
             profile = cls.add_new_profile(user_id, email)
 
         course_namespace = namespace_manager.get_namespace()
+        if (student and is_enrolled is not None and
+            student.is_enrolled != is_enrolled):
+            if is_enrolled:
+                event = StudentLifecycleObserver.EVENT_REENROLL
+            else:
+                event = StudentLifecycleObserver.EVENT_UNENROLL
+            StudentLifecycleObserver.enqueue(event, student.user_id)
+
         cls._update_attributes(
             profile, student, email=email, legal_name=legal_name,
             nick_name=nick_name, date_of_birth=date_of_birth,
@@ -1115,37 +1563,249 @@ class StudentProfileDAO(object):
             accepted_honor=accepted_honor, accepted_terms=accepted_terms,
             mobile_number=mobile_number, local_chapter=local_chapter,
             college_id=college_id, college_roll_no=college_roll_no,
-            course_namespace=course_namespace)
+            scholarship=scholarship, course_namespace=course_namespace,
+            motivation=motivation,exam_taker=exam_taker,qualification=qualification,
+            degree=degree, department=department, study_year=study_year,
+            designation=designation, employer_id=employer_id,
+            push_tokens_as_list=push_tokens_as_list)
+
 
         cls._put_profile(profile)
         if not profile_only:
             student.put()
 
-        return profile, student
+
+class StudentCache(caching.RequestScopedSingleton):
+    """Class that manages optimized loading of Students from datastore."""
+
+    def __init__(self):
+        self._key_name_to_student = {}
+
+    @classmethod
+    def _key(cls, user_id):
+        """Make key specific to user_id and current namespace."""
+        return '%s-%s' % (MemcacheManager.get_namespace(), user_id)
+
+    def _get_by_user_id_from_datastore(self, user_id):
+        """Load Student by user_id. Fail if user_id is not unique."""
+        # In the CB 1.8 and below email was the key_name. This is no longer
+        # true. To support legacy Student entities do a double look up here:
+        # first by the key_name value and then by the user_id field value.
+        student = Student.get_by_key_name(user_id)
+        if student:
+            return student
+
+        students = Student.all().filter(
+            Student.user_id.name, user_id).fetch(limit=2)
+        if len(students) > 1:
+            raise Exception(
+                'There is more than one student with user_id "%s"' % user_id)
+
+        return students[0] if students else None
+
+    def _get_by_user_id(self, user_id):
+        """Get cached Student with user_id or load one from datastore."""
+        key = self._key(user_id)
+        if key in self._key_name_to_student:
+            return self._key_name_to_student[key]
+        student = self._get_by_user_id_from_datastore(user_id)
+        self._key_name_to_student[key] = student
+        return student
+
+    def _remove(self, user_id):
+        """Remove cached value by user_id."""
+        key = self._key(user_id)
+        if key in self._key_name_to_student:
+            del self._key_name_to_student[key]
+
+    @classmethod
+    def remove(cls, user_id):
+        # pylint: disable=protected-access
+        return cls.instance()._remove(user_id)
+
+    @classmethod
+    def get_by_user_id(cls, user_id):
+        # pylint: disable=protected-access
+        return cls.instance()._get_by_user_id(user_id)
+
+
+class _EmailProperty(db.StringProperty):
+    """Class that provides dual look up of email property value."""
+
+    def __get__(self, model_instance, model_class):
+        if model_instance is None:
+            return self
+
+        # Try to get and use the actual stored value.
+        value = super(_EmailProperty, self).__get__(model_instance, model_class)
+        if value:
+            return value
+
+        # In CB 1.8 and before email was used as a key to Student entity. This
+        # is no longer true. Here we provide the backwards compatibility for the
+        # legacy Student instances. If user_id and key.name match, it means that
+        # the user_id is a key and we should not use key as email and email is
+        # not set. If key.name and user_id don't match, the key is also an
+        # email.
+        if model_instance.is_saved():
+            user_id = model_instance.user_id
+            key_name = model_instance.key().name()
+            if key_name != user_id:
+                return key_name
+
+        return None
+
+
+class _ReadOnlyStringProperty(db.StringProperty):
+    """Class that provides set once read-only property."""
+
+    def __set__(self, model_instance, value):
+        if model_instance:
+            validated_value = self.validate(value)
+            current_value = self.get_value_for_datastore(model_instance)
+            if current_value and current_value != validated_value:
+                raise ValueError(
+                    'Unable to change set once read-only property '
+                    '%s.' % self.name)
+        super(_ReadOnlyStringProperty, self).__set__(model_instance, value)
 
 
 class Student(BaseEntity):
-    """Student data specific to a course instance."""
+    """Student data specific to a course instance.
+
+    This entity represents a student in a specific course. It has somewhat
+    complex key_name/user_id/email behavior that comes from the legacy mistakes.
+    Current and historical behavior of this class is documented in detail below.
+
+    Let us start with the historical retrospect. In CB 1.8 and below:
+        - key_name
+            - is email for new users
+        - email
+            - is used as key_name
+            - is unique
+            - is immutable
+        - user_id
+            - was introduced in CB 1.2.0
+            - was an independent field and not a key_name
+            - held google.appengine.api.users.get_current_user().user_id()
+            - mutations were not explicitly prevented, but no mutations are
+              known to have occurred
+            - was used as foreign key in other tables
+
+    Anyone who attempts federated identity will find use of email as key_name
+    completely unacceptable. So we decided to make user_id a key_name.
+
+    The ideal solution would have been:
+        - store user_id as key_name for new and legacy users
+        - store email as an independent mutable field
+
+    The ideal solution was rejected upon discussion. It required taking course
+    offline and running M/R or ETL job to modify key_name. All foreign key
+    relationships that used old key_name value would need to be fixed up to use
+    new value. ETL would also need to be aware of different key structure before
+    and after CB 1.8. All in all the ideal approach is complex, invasive and
+    error prone. It was ultimately rejected.
+
+    The currently implemented solution is:
+        - key_name
+            - == user_id for new users
+            - == email for users created in CB 1.8 and below
+        - user_id
+            - is used as key_name
+            - is immutable independent field
+            - holds google.appengine.api.users.get_current_user().user_id()
+            - historical convention is to use user_id as foreign key in other
+              tables
+        - email
+            - is an independent field
+            - is mutable
+
+    This solution is a bit complex, but provides all of the behaviors of the
+    ideal solution. It is 100% backwards compatible and does not require offline
+    upgrade step. For example, if student, who registered and unregistered in
+    CB 1.8 or below, now re-registers, we will reactivate his original student
+    entry thus keeping all prior progress (modulo data-removal policy).
+
+    The largest new side effects is:
+        - there may be several users with the same email in one course
+
+    If email uniqueness is desired it needs to be added on separately.
+
+    We automatically execute core CB functional tests under both the old and the
+    new key_name logic. This is done in LegacyEMailAsKeyNameTest. The exact
+    interplay of key_name/user_id/email is tested in StudentKeyNameTest. We also
+    manually ran the entire test suite with _LEGACY_EMAIL_AS_KEY_NAME_ENABLED
+    set to True and all test passed, except test_rpc_performance in the class
+    tests.functional.modules_i18n_dashboard.SampleCourseLocalizationTest. This
+    failure is expected as we have extra datastore lookup in get() by email.
+
+    We did not optimize get() by email RPC performance as this call is used
+    rarely. To optimize dual datastore lookup in get_by_user_id() we tried
+    memcache and request-scope cache for Student. Request-scoped cache provided
+    much better results and this is what we implemented.
+
+    We are confident that core CB components, including peer review system, use
+    user_id as foreign key and will continue working with no changes. Any custom
+    components that used email as foreign key they will stop working and will
+    require modifications and an upgrade step.
+
+    TODO(psimakov):
+        - review how email changes propagate between global and per-course
+          namespaces
+
+    Good luck!
+
+    """
+
     enrolled_on = db.DateTimeProperty(auto_now_add=True, indexed=True)
-    user_id = db.StringProperty(indexed=True)
+    user_id = _ReadOnlyStringProperty(indexed=True)
+    email = _EmailProperty(indexed=True)
     name = db.StringProperty(indexed=False)
     additional_fields = db.TextProperty(indexed=False)
     is_enrolled = db.BooleanProperty(indexed=False)
+
+    # UTC timestamp of when the user last rendered a page that's aware they've
+    # enrolled in a course.
+    last_seen_on = db.DateTimeProperty(indexed=True)
 
     # Each of the following is a string representation of a JSON dict.
     scores = db.TextProperty(indexed=False)
     labels = db.StringProperty(indexed=False)
 
-    _PROPERTY_EXPORT_DENYLIST = [
+    # Group ID of group in which student is a member; can be None.
+    group_id = db.IntegerProperty(indexed=True)
+
+    # In CB 1.8 and below an email was used as a key_name. This is no longer
+    # true and a user_id is the key_name. We transparently support legacy
+    # Student entity instances that still have email as key_name, but we no
+    # longer create new entries. If you need to enable this old behavior set the
+    # flag below to True.
+    _LEGACY_EMAIL_AS_KEY_NAME_ENABLED = False
+
+    # TODO(mgainer): why is user_id is not here?
+    _PROPERTY_EXPORT_BLACKLIST = [
         additional_fields,  # Suppress all additional_fields items.
         # Convenience items if not all additional_fields should be suppressed:
         #'additional_fields.xsrf_token',  # Not PII, but also not useful.
         #'additional_fields.form01',  # User's name on registration form.
-        name]
+        email, name]
+
+    def __init__(self, *args, **kwargs):
+        super(Student, self).__init__(*args, **kwargs)
+        self._federated_email_cached = False
+        self._federated_email_value = None
 
     @classmethod
     def safe_key(cls, db_key, transform_fn):
         return db.Key.from_path(cls.kind(), transform_fn(db_key.id_or_name()))
+
+    @classmethod
+    def _add_new(cls, user_id, email):
+        if cls._LEGACY_EMAIL_AS_KEY_NAME_ENABLED:
+            return Student(key_name=email, email=email, user_id=user_id)
+        else:
+            return Student(
+                key_name=user_id, email=email.lower(), user_id=user_id)
 
     def for_export(self, transform_fn):
         """Creates an ExportEntity populated from this entity instance."""
@@ -1161,32 +1821,40 @@ class Student(BaseEntity):
         return model
 
     @property
-    def is_transient(self):
-        return False
+    def federated_email(self):
+        """Gets the federated email address of the student.
+
+        This always returns None unless federated authentication is enabled and
+        the federated authentication implementation implements an email
+        resolver. See common.users.FederatedEmailResolver.
+        """
+        if not self._federated_email_cached:
+            manager = users.UsersServiceManager.get()
+            resolver = manager.get_federated_email_resolver_class()
+            assert resolver
+            self._federated_email_value = (
+                resolver.get(self.user_id) if self.user_id else None)
+            self._federated_email_cached = True
+
+        return self._federated_email_value
 
     @property
-    def email(self):
-        return self.key().name()
+    def is_transient(self):
+        return False
 
     @property
     def profile(self):
         return StudentProfileDAO.get_profile_by_user_id(self.user_id)
 
-    @classmethod
-    def _memcache_key(cls, key):
-        """Makes a memcache key from primary key."""
-        return 'entity:student:%s' % key
-
     def put(self):
-        """Do the normal put() and also add the object to memcache."""
-        result = super(Student, self).put()
-        MemcacheManager.set(self._memcache_key(self.key().name()), self)
-        return result
+        """Do the normal put() and also add the object to cache."""
+        StudentCache.remove(self.user_id)
+        return super(Student, self).put()
 
     def delete(self):
-        """Do the normal delete() and also remove the object from memcache."""
+        """Do the normal delete() and also remove the object from cache."""
+        StudentCache.remove(self.user_id)
         super(Student, self).delete()
-        MemcacheManager.delete(self._memcache_key(self.key().name()))
 
     @classmethod
     def add_new_student_for_current_user(
@@ -1195,25 +1863,43 @@ class Student(BaseEntity):
             nick_name, additional_fields, handler, labels)
 
     @classmethod
-    def get_by_email(cls, email):
-        return Student.get_by_key_name(email.encode('utf8'))
+    def get_first_by_email(cls, email):
+        """Get the first student matching requested email.
+
+        Returns:
+            A tuple: (Student, unique). The first value is the first student
+            object with requested email. The second value is set to True if only
+            exactly one student has this email on record; False otherwise.
+        """
+        # In the CB 1.8 and below email was the key_name. This is no longer
+        # true. To support legacy Student entities do a double look up here:
+        # first by the key_name value and then by the email field value.
+        student = cls.get_by_key_name(email)
+        if student:
+            return (student, True)
+        students = cls.all().filter(cls.email.name, email).fetch(limit=2)
+        if not students:
+            return (None, False)
+        return (students[0], len(students) == 1)
 
     @classmethod
-    def get_enrolled_student_by_email(cls, email):
+    def get_by_user(cls, user):
+        return cls.get_by_user_id(user.user_id())
+
+    @classmethod
+    def get_enrolled_student_by_user(cls, user):
         """Returns enrolled student or None."""
-        student = MemcacheManager.get(cls._memcache_key(email))
-        if NO_OBJECT == student:
-            return None
-        if not student:
-            student = Student.get_by_email(email)
-            if student:
-                MemcacheManager.set(cls._memcache_key(email), student)
-            else:
-                MemcacheManager.set(cls._memcache_key(email), NO_OBJECT)
+        student = cls.get_by_user_id(user.user_id())
         if student and student.is_enrolled:
             return student
-        else:
-            return None
+        return None
+
+    @classmethod
+    def is_email_in_use(cls, email):
+        """Checks if an email is in use by one of existing student."""
+        if cls.all().filter(cls.email.name, email).fetch(limit=1):
+            return True
+        return False
 
     @classmethod
     def _get_user_and_student(cls):
@@ -1221,10 +1907,10 @@ class Student(BaseEntity):
         user = users.get_current_user()
         if not user:
             raise Exception('No current user.')
-        student = Student.get_by_email(user.email())
+        student = Student.get_by_user(user)
         if not student:
-            raise Exception('Student instance corresponding to user %s not '
-                            'found.' % user.email())
+            raise Exception('Student instance corresponding to user_id %s not '
+                            'found.' % user.user_id())
         return user, student
 
     @classmethod
@@ -1256,12 +1942,15 @@ class Student(BaseEntity):
         return db.Key.from_path(Student.kind(), user_id)
 
     @classmethod
-    def get_student_by_user_id(cls, user_id):
-        students = cls.all().filter(cls.user_id.name, user_id).fetch(limit=2)
-        if len(students) == 2:
-            raise Exception(
-                'There is more than one student with user_id %s' % user_id)
-        return students[0] if students else None
+    def get_by_user_id(cls, user_id):
+        """Get object from datastore with the help of cache."""
+        return StudentCache.get_by_user_id(user_id)
+
+    @classmethod
+    def delete_by_user_id(cls, user_id):
+        student = cls.get_by_user_id(user_id)
+        if student:
+            student.delete()
 
     def has_same_key_as(self, key):
         """Checks if the key of the student and the given key are equal."""
@@ -1275,6 +1964,28 @@ class Student(BaseEntity):
                     common_utils.text_to_list(self.labels)
                     if int(label) in label_ids])
 
+    def update_last_seen_on(self, now=None, value=None):
+        """Updates last_seen_on.
+
+        Args:
+            now: datetime.datetime.utcnow or None. Injectable for tests only.
+            value: datetime.datetime.utcnow or None. Injectable for tests only.
+        """
+        now = now if now is not None else datetime.datetime.utcnow()
+        value = value if value is not None else now
+
+        if self._should_update_last_seen_on(value):
+            self.last_seen_on = value
+            self.put()
+            StudentCache.remove(self.user_id)
+
+    def _should_update_last_seen_on(self, value):
+        if self.last_seen_on is None:
+            return True
+
+        return (
+            (value - self.last_seen_on).total_seconds() >
+            STUDENT_LAST_SEEN_ON_UPDATE_SEC)
 
 class TransientStudent(object):
     """A transient student (i.e. a user who hasn't logged in or registered)."""
@@ -1287,6 +1998,10 @@ class TransientStudent(object):
     def is_enrolled(self):
         return False
 
+    @property
+    def scores(self):
+        return {}
+
 
 class EventEntity(BaseEntity):
     """Generic events.
@@ -1295,6 +2010,10 @@ class EventEntity(BaseEntity):
     recorded. Each event has a 'user_id' to represent an actor who triggered
     the event. The event 'data' is a JSON object, the format of which is defined
     elsewhere and depends on the type of the event.
+
+    When extending this class, be sure to register your new class with
+    models.data_removal.Registry so that instances can be cleaned up on user
+    un-registration.
     """
     recorded_on = db.DateTimeProperty(auto_now_add=True, indexed=True)
     source = db.StringProperty(indexed=False)
@@ -1303,13 +2022,32 @@ class EventEntity(BaseEntity):
     # Each of the following is a string representation of a JSON dict.
     data = db.TextProperty(indexed=False)
 
+    # Modules may add functions to this list which will receive notification
+    # whenever an event is recorded. The method will be called with the
+    # arguments (source, user, data) from record().
+    EVENT_LISTENERS = []
+
     @classmethod
-    def record(cls, source, user, data):
+    @db.non_transactional
+    def _run_record_hooks(cls, source, user, data_dict):
+        for listener in cls.EVENT_LISTENERS:
+            try:
+                listener(source, user, data_dict)
+            except Exception:  # On purpose. pylint: disable=broad-except
+                logging.exception(
+                    'Event record hook failed: %s, %s, %s',
+                    source, user.user_id(), data_dict)
+
+    @classmethod
+    def record(cls, source, user, data, user_id=None):
         """Records new event into a datastore."""
+        data_dict = transforms.loads(data)
+        cls._run_record_hooks(source, user, data_dict)
+        data = transforms.dumps(data_dict)
 
         event = cls()
         event.source = source
-        event.user_id = user.user_id()
+        event.user_id = user_id if user_id else user.user_id()
         event.data = data
         event.put()
 
@@ -1317,6 +2055,10 @@ class EventEntity(BaseEntity):
         model = super(EventEntity, self).for_export(transform_fn)
         model.user_id = transform_fn(self.user_id)
         return model
+
+    def get_user_ids(self):
+        # Thus far, events pertain only to one user; no need to look in data.
+        return [self.user_id]
 
 
 class StudentAnswersEntity(BaseEntity):
@@ -1333,7 +2075,14 @@ class StudentAnswersEntity(BaseEntity):
 
 
 class StudentPropertyEntity(BaseEntity):
-    """A property of a student, keyed by the string STUDENT_ID-PROPERTY_NAME."""
+    """A property of a student, keyed by the string STUDENT_ID-PROPERTY_NAME.
+
+    When extending this class, be sure to register your new class with
+    models.data_removal.Registry so that instances can be cleaned up on user
+    un-registration.  See an example of how to do that at the bottom of this
+    file.
+
+    """
 
     updated_on = db.DateTimeProperty(indexed=True)
 
@@ -1556,7 +2305,7 @@ class BaseJsonDao(object):
             if memcache_key not in memcache_entities]
         if datastore_keys:
             datastore_entities = dict(zip(
-                datastore_keys, db.get([
+                datastore_keys, get([
                     db.Key.from_path(cls.ENTITY.kind(), obj_id)
                     for obj_id in datastore_keys])))
         else:
@@ -1624,7 +2373,7 @@ class BaseJsonDao(object):
             entities.append(entity)
             cls.before_put(dto, entity)
 
-        keys = db.put(entities)
+        keys = put(entities)
         MemcacheManager.delete(cls._memcache_all_key())
         for key, entity in zip(keys, entities):
             MemcacheManager.set(cls._memcache_key(key.id_or_name()), entity)
@@ -1645,7 +2394,7 @@ class BaseJsonDao(object):
         return cls.DTO(None, copy.deepcopy(dto.dict))
 
 
-class LastModfiedJsonDao(BaseJsonDao):
+class LastModifiedJsonDao(BaseJsonDao):
     """Base DAO that updates the last_modified field of entities on every save.
 
     DTOs managed by this DAO must have a settable field last_modified defined.
@@ -1654,13 +2403,13 @@ class LastModfiedJsonDao(BaseJsonDao):
     @classmethod
     def save(cls, dto):
         dto.last_modified = time.time()
-        return super(LastModfiedJsonDao, cls).save(dto)
+        return super(LastModifiedJsonDao, cls).save(dto)
 
     @classmethod
     def save_all(cls, dtos):
         for dto in dtos:
             dto.last_modified = time.time()
-        return super(LastModfiedJsonDao, cls).save_all(dtos)
+        return super(LastModifiedJsonDao, cls).save_all(dtos)
 
 
 class QuestionEntity(BaseEntity):
@@ -1702,7 +2451,7 @@ class QuestionDTO(object):
         self.dict['last_modified'] = value
 
 
-class QuestionDAO(LastModfiedJsonDao):
+class QuestionDAO(LastModifiedJsonDao):
     VERSION = '1.5'
     DTO = QuestionDTO
     ENTITY = QuestionEntity
@@ -1758,7 +2507,7 @@ class QuestionImporter(object):
     @classmethod
     def _gen_description(cls, unit, lesson_title, question_number):
         return (
-            'Imported from unit "%s", lesson "%s" (question #%s)' % (
+            'Unit "%s", lesson "%s" (question #%s)' % (
                 unit.title, lesson_title, question_number))
 
     @classmethod
@@ -1811,7 +2560,7 @@ class QuestionImporter(object):
     def import_multiple_choice(cls, question, description, task):
         QuestionDAO.validate_unique_description(description)
         task = ''.join(task) if task else ''
-        return {
+        qu_dict = {
             'version': QuestionDAO.VERSION,
             'description': description,
             'question': task,
@@ -1822,6 +2571,19 @@ class QuestionImporter(object):
                     'score': 1.0 if choice[1].value else 0.0,
                     'feedback': choice[2]
                 } for choice in question['choices']]}
+        # Add optional fields
+        if 'defaultFeedback' in question:
+            qu_dict['defaultFeedback'] = question['defaultFeedback']
+        if 'permute_choices' in question:
+            qu_dict['permute_choices'] = question['permute_choices']
+        if 'show_answer_when_incorrect' in question:
+            qu_dict['show_answer_when_incorrect'] = (
+                question['show_answer_when_incorrect'])
+        if 'all_or_nothing_grading' in question:
+            qu_dict['all_or_nothing_grading'] = (
+                question['all_or_nothing_grading'])
+
+        return qu_dict
 
     @classmethod
     def import_multiple_choice_group(
@@ -1836,7 +2598,7 @@ class QuestionImporter(object):
         question_list = []
         for index, question in enumerate(group['questionsList']):
             description = (
-                'Imported from unit "%s", lesson "%s" (question #%s, part #%s)'
+                'Unit "%s", lesson "%s" (question #%s, part #%s)'
                 % (unit.title, lesson_title, question_number, index + 1))
             question_dict = cls.import_multiple_choice_group_question(
                 question, description)
@@ -1845,7 +2607,7 @@ class QuestionImporter(object):
             question_list.append(question)
         qid_list = QuestionDAO.save_all(question_list)
         question_group_dict['items'] = [{
-            'question': str(quid),
+            'question': quid,
             'weight': 1.0} for quid in qid_list]
         return question_group_dict
 
@@ -2013,7 +2775,7 @@ class QuestionGroupDTO(object):
         self.dict['last_modified'] = value
 
 
-class QuestionGroupDAO(LastModfiedJsonDao):
+class QuestionGroupDAO(LastModifiedJsonDao):
     DTO = QuestionGroupDTO
     ENTITY = QuestionGroupEntity
     ENTITY_KEY_TYPE = BaseJsonDao.EntityKeyTypeId
@@ -2043,7 +2805,7 @@ class LabelEntity(BaseEntity):
     data = db.TextProperty(indexed=False)
 
     MEMCACHE_KEY = 'labels'
-    _PROPERTY_EXPORT_DENYLIST = []  # No PII in labels.
+    _PROPERTY_EXPORT_BLACKLIST = []  # No PII in labels.
 
     def put(self):
         """Save the content to the datastore.
@@ -2088,7 +2850,7 @@ class LabelDTO(object):
         LabelType(LABEL_TYPE_COURSE_TRACK, 'course_track', 'Course Track', 1),
         ]
     SYSTEM_EDITABLE_LABEL_TYPES = [
-        LabelType(LABEL_TYPE_LOCALE, 'locale', 'Locale', 2),
+        LabelType(LABEL_TYPE_LOCALE, 'locale', 'Language', 2),
         ]
     LABEL_TYPES = USER_EDITABLE_LABEL_TYPES + SYSTEM_EDITABLE_LABEL_TYPES
 
@@ -2160,16 +2922,17 @@ class LabelDAO(BaseJsonDao):
                 LabelDTO.LABEL_TYPE_LOCALE):
                 id_to_label[int(label.id)] = label
             for item in list(items):
-                item_matches = set([int(label_id) for label_id in
-                                    common_utils.text_to_list(item.labels)
-                                    if int(label_id) in id_to_label.keys()])
-                found = False
-                for item_match in item_matches:
-                    label = id_to_label[item_match]
-                    if id_to_label and label and label.title == locale:
-                        found = True
-                if id_to_label and item_matches and not found:
-                    items.remove(item)
+                if hasattr(items, 'labels'):
+                    item_matches = set([int(label_id) for label_id in
+                                        common_utils.text_to_list(item.labels)
+                                        if int(label_id) in id_to_label.keys()])
+                    found = False
+                    for item_match in item_matches:
+                        label = id_to_label[item_match]
+                        if id_to_label and label and label.title == locale:
+                            found = True
+                    if id_to_label and item_matches and not found:
+                        items.remove(item)
         return items
 
     @classmethod
@@ -2206,12 +2969,13 @@ class LabelDAO(BaseJsonDao):
         if student and not student.is_transient:
             student_matches = student.get_labels_of_type(label_type)
             for item in list(items):
-                item_matches = set([int(label_id) for label_id in
-                                    common_utils.text_to_list(item.labels)
-                                    if int(label_id) in label_ids])
-                if (student_matches and item_matches and
-                    student_matches.isdisjoint(item_matches)):
-                    items.remove(item)
+                if hasattr(items, 'labels'):
+                    item_matches = set([int(label_id) for label_id in
+                                        common_utils.text_to_list(item.labels)
+                                        if int(label_id) in label_ids])
+                    if (student_matches and item_matches and
+                        student_matches.isdisjoint(item_matches)):
+                        items.remove(item)
         return items
 
 
@@ -2299,7 +3063,7 @@ class StudentPreferencesDAO(BaseJsonDao):
     CURRENT_VERSION = '1.0'
 
     @classmethod
-    def load_or_create(cls):
+    def load_or_default(cls):
         user = users.get_current_user()
         if not user:
             return None
@@ -2312,7 +3076,6 @@ class StudentPreferencesDAO(BaseJsonDao):
                     'show_hooks': False,
                     'show_jinja_context': False
                 })
-            cls.save(prefs)
         return prefs
 
 
@@ -2348,3 +3111,22 @@ class RoleDAO(BaseJsonDao):
     DTO = RoleDTO
     ENTITY = RoleEntity
     ENTITY_KEY_TYPE = BaseJsonDao.EntityKeyTypeId
+
+
+def get_global_handlers():
+    return [
+        (StudentLifecycleObserver.URL, StudentLifecycleObserver),
+    ]
+
+def register_for_data_removal():
+    data_removal.Registry.register_sitewide_indexed_by_user_id_remover(
+        StudentProfileDAO.delete_profile_by_user_id)
+    removers = [
+        Student.delete_by_user_id,
+        StudentAnswersEntity.delete_by_key,
+        StudentPropertyEntity.delete_by_user_id_prefix,
+        StudentPreferencesEntity.delete_by_key,
+    ]
+    for remover in removers:
+        data_removal.Registry.register_indexed_by_user_id_remover(remover)
+    data_removal.Registry.register_unindexed_entity_class(EventEntity)

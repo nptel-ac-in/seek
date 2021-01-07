@@ -1,17 +1,3 @@
-# Copyright 2020 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """Unit tests for the common.sanitize module."""
 
 __author__ = 'John Orr (jorr@google.com)'
@@ -293,3 +279,45 @@ class EntityTests(unittest.TestCase):
         except AssertionError:
             return
         self.fail('Expected an assert exception')
+
+
+class MockTemplate(object):
+    def __init__(self):
+        self.render_received_args = None
+
+    def render(self, **kwargs):
+        self.render_received_args = kwargs
+        return "<div>template</div>"
+
+
+class TemplateTests(unittest.TestCase):
+    def test_template_in_node_list(self):
+        template = MockTemplate()
+        template_node = safe_dom.Template(template, arg1='foo', arg2='bar')
+
+        self.assertEqual(template.render_received_args, None)
+        self.assertEqual(template_node.sanitized, "<div>template</div>")
+        self.assertEqual(
+            template.render_received_args, {'arg1':'foo', 'arg2':'bar'})
+
+        # put it in the beginning, middle, and end of a node list
+        node_list = safe_dom.NodeList().append(
+            template_node
+        ).append(
+            safe_dom.Element('div', className='first')
+        ).append(
+            template_node
+        ).append(
+            safe_dom.Element('div', className='second')
+        ).append(
+            template_node
+        )
+
+        expected_nodelist = ('<div>template</div><div class="first"></div>'
+            '<div>template</div><div class="second"></div><div>template</div>')
+        self.assertEqual(node_list.sanitized, expected_nodelist)
+
+        # wrap that nodelist in an element
+        element = safe_dom.Element('div').add_children(node_list)
+        self.assertEqual(
+            element.sanitized, '<div>{}</div>'.format(expected_nodelist))

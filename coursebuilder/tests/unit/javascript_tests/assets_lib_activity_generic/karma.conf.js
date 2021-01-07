@@ -1,58 +1,34 @@
-/**
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-basePath = '../../../..';
-
-var KARMA_LIB = process.env.KARMA_LIB;
-
-files = [
-  JASMINE,
-  JASMINE_ADAPTER,
-  'https://ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min.js',
-  KARMA_LIB + '/jasmine-jquery-1.5.2.js',
-
-  // Test file
-  'tests/unit/javascript_tests/assets_lib_activity_generic/tests.js',
-
-  {
-    pattern: 'tests/unit/javascript_tests/assets_lib_activity_generic/interactions.js',
-    watched: true,
-    included: false,
-    served: true
-  },
-
-  // Files to test
-  'assets/lib/activity-generic-1.3.js',
-  {
-    pattern: 'tests/unit/common/event_payloads.json',
-    watched: true,
-    included: false,
-    served: true
-  },
-  {
-    pattern: 'tests/unit/javascript_tests/assets_lib_activity_generic/*.html',
-    watched: true,
-    included: false,
-    served: true
-  }
-];
-
-exclude = [
-  '**/karma.conf.js',
-];
-
-browsers = ['PhantomJS'];
-singleRun = true;
+module.exports = function(config) {
+  config.set({
+    basePath: '../../../..',
+    files: [
+      'lib/_static/jquery-2.2.4/jquery.min.js',
+      'tests/unit/javascript_tests/assets_lib_activity_generic/tests.js',
+      {
+        pattern: 'tests/unit/javascript_tests/assets_lib_activity_generic/' +
+            'interactions.js',
+        watched: true,
+        included: false,
+        served: true
+      },
+      'assets/lib/activity-generic-1.3.js',
+      {
+        pattern: 'tests/unit/common/event_payloads.json',
+        watched: true,
+        included: false,
+        served: true
+      },
+      {
+        pattern: 'tests/unit/javascript_tests/assets_lib_activity_generic/' +
+            '*.html',
+        watched: true,
+        included: false,
+        served: true
+      }
+    ],
+    exclude: ['**/karma.conf.js'],
+    frameworks: ['jasmine-jquery', 'jasmine'],
+    browsers: ['PhantomJS'],
+    singleRun: true
+  });
+};

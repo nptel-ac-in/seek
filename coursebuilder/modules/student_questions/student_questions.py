@@ -209,7 +209,9 @@ class StudentQuestionsHandler(BaseHandler, ReflectiveRequestHandler):
                                  question.key())
 
         email_manager = notify.EmailManager(self.get_course())
-        email_manager.send_mail_sync(subject, body, receiver)
+        email_manager.send_mail_sync(
+            subject, body, receiver, intent=FORUM_QUESTION_INTENT,
+            html=body)
 
     @db.transactional()
     def increment_count(self):

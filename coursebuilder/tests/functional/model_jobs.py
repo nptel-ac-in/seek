@@ -18,8 +18,12 @@ __author__ = [
     'mgainer@google.com (Mike Gainer)',
 ]
 
+import time
+
 from common.utils import Namespace
+from controllers import sites
 from models import jobs
+from models import models
 from models import transforms
 from tests.functional import actions
 
@@ -27,9 +31,7 @@ from google.appengine.ext import db
 
 TEST_NAMESPACE = 'test'
 TEST_DATA = {'bunny_names': ['flopsy', 'mopsy', 'cottontail']}
-TEST_DURATION = 123
 TEST_BAD_DATA = {'wolf_actions': ['huff', 'puff', 'blow your house down']}
-TEST_BAD_DURATION = 4
 
 
 class MockAppContext(object):
@@ -49,25 +51,27 @@ class TestJob(jobs.DurableJobBase):
     def force_start_job(self, sequence_num):
         with Namespace(self._namespace):
             db.run_in_transaction(
-                jobs.DurableJobEntity._start_job, self._job_name,
-                sequence_num)
+                jobs.DurableJobEntity._start_job, self._job_name, sequence_num)
 
-    def force_complete_job(self, sequence_num, data, duration):
+    def force_complete_job(self, sequence_num, data):
         data = transforms.dumps(data)
         with Namespace(self._namespace):
             db.run_in_transaction(
                 jobs.DurableJobEntity._complete_job, self._job_name,
-                sequence_num, data, duration)
+                sequence_num, data)
 
-    def force_fail_job(self, sequence_num, data, duration):
+    def force_fail_job(self, sequence_num, data):
         data = transforms.dumps(data)
         with Namespace(self._namespace):
             db.run_in_transaction(
                 jobs.DurableJobEntity._fail_job, self._job_name,
-                sequence_num, data, duration)
+                sequence_num, data)
 
     def get_output(self):
         return transforms.loads(self.load().output)
+
+    def get_duration(self):
+        return self.load().execution_time_sec
 
 
 class JobOperationsTest(actions.TestBase):
@@ -120,12 +124,12 @@ class JobOperationsTest(actions.TestBase):
         sequence_num = self.test_job.submit()
         self.test_job.force_start_job(sequence_num)
         self.assertIsNone(self.test_job.load().output)
-        func(sequence_num, TEST_DATA, TEST_DURATION)
+        time.sleep(2)
+        func(sequence_num, TEST_DATA)
         self.assertFalse(self.test_job.is_active())
         self.assertEquals(expected_status, self.test_job.load().status_code)
         self.assertEquals(TEST_DATA, self.test_job.get_output())
-        self.assertEquals(TEST_DURATION,
-                          self.test_job.load().execution_time_sec)
+        self.assertGreaterEqual(2, self.test_job.get_duration())
 
     def test_submit_does_not_restart_running_job(self):
         sequence_num = self.test_job.submit()
@@ -161,8 +165,7 @@ class JobOperationsTest(actions.TestBase):
     def test_cancel_does_not_kill_completed_job(self):
         sequence_num = self.test_job.submit()
         self.test_job.force_start_job(sequence_num)
-        self.test_job.force_complete_job(sequence_num, TEST_DATA,
-                                         TEST_DURATION)
+        self.test_job.force_complete_job(sequence_num, TEST_DATA)
         self.assertFalse(self.test_job.is_active())
         self.test_job.cancel()
         self.assertEquals(jobs.STATUS_CODE_COMPLETED,
@@ -184,11 +187,10 @@ class JobOperationsTest(actions.TestBase):
         self.assertEquals(jobs.STATUS_CODE_FAILED,
                           self.test_job.load().status_code)
 
-        func(sequence_num, TEST_DATA, TEST_DURATION)
+        func(sequence_num, TEST_DATA)
         self.assertEquals(expected_status, self.test_job.load().status_code)
         self.assertEquals(TEST_DATA, self.test_job.get_output())
-        self.assertEquals(TEST_DURATION,
-                          self.test_job.load().execution_time_sec)
+
 
     # --------------------------------------------------------------------
     # Results from older runs are ignored, even if a seemingly-hung job
@@ -208,12 +210,98 @@ class JobOperationsTest(actions.TestBase):
         sequence_num_2 = self.test_job.submit()
         self.assertEquals(sequence_num_2, sequence_num + 1)
         self.test_job.force_start_job(sequence_num_2)
-        self.test_job.force_complete_job(sequence_num_2, TEST_DATA,
-                                         TEST_DURATION)
+        self.test_job.force_complete_job(sequence_num_2, TEST_DATA)
 
         # Now try to complete the (long-running) first try.
         # Results from previous run should not overwrite more-recent.
-        func(sequence_num, TEST_BAD_DATA, TEST_BAD_DURATION)
+        func(sequence_num, TEST_BAD_DATA)
         self.assertEquals(TEST_DATA, self.test_job.get_output())
-        self.assertEquals(TEST_DURATION,
-                          self.test_job.load().execution_time_sec)
+
+
+class CountStudentsWithClassMethods(jobs.MapReduceJob):
+
+    @classmethod
+    def entity_class(cls):
+        return models.Student
+
+    @classmethod
+    def map(cls, student):
+        yield ('total', 1)
+
+    @classmethod
+    def reduce(cls, key, values):
+        yield sum([int(value) for value in values])
+
+    @classmethod
+    def combine(cls, key, values, prev_values):
+        total = sum([int(value) for value in values])
+        if prev_values is not None:
+            total += sum([int(value) for value in prev_values])
+        yield total
+
+    @classmethod
+    def complete(cls, kwargs, results):
+        results[0] += 1
+
+
+class CountStudentsWithStaticMethods(jobs.MapReduceJob):
+
+    @staticmethod
+    def entity_class():
+        return models.Student
+
+    @staticmethod
+    def map(student):
+        yield ('total', 1)
+
+    @staticmethod
+    def reduce(key, values):
+        yield sum([int(value) for value in values])
+
+    @staticmethod
+    def combine(key, values, prev_values):
+        total = sum([int(value) for value in values])
+        if prev_values is not None:
+            total += sum([int(value) for value in prev_values])
+        yield total
+
+    @staticmethod
+    def complete(kwargs, results):
+        results[0] += 1
+
+
+class MapReduceMethodTypeTests(actions.TestBase):
+
+    COURSE_NAME = 'mr_test'
+    NAMESPACE = 'ns_%s' % COURSE_NAME
+    ADMIN_EMAIL = 'admin@foo.com'
+
+    def setUp(self):
+        super(MapReduceMethodTypeTests, self).setUp()
+        self.app_context = actions.simple_add_course(
+            self.COURSE_NAME, self.ADMIN_EMAIL, 'Test Course')
+        self.base = '/%s' % self.COURSE_NAME
+
+        actions.login('student_one@foo.com')
+        actions.register(self, 'Student One')
+        actions.login('student_two@foo.com')
+        actions.register(self, 'Student Two')
+        actions.login('student_three@foo.com')
+        actions.register(self, 'Student Three')
+
+    def tearDown(self):
+        sites.reset_courses()
+        super(MapReduceMethodTypeTests, self).tearDown()
+
+    def _test_count_with_job(self, job_class):
+        job_class(self.app_context).submit()
+        self.execute_all_deferred_tasks()
+        job = job_class(self.app_context).load()
+        results = job_class.get_results(job)
+        self.assertEquals([4], results)
+
+    def test_count_with_classmethod(self):
+        self._test_count_with_job(CountStudentsWithClassMethods)
+
+    def test_count_with_staticmethod(self):
+        self._test_count_with_job(CountStudentsWithStaticMethods)

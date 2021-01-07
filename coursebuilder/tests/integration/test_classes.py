@@ -20,273 +20,24 @@ __author__ = [
 
 import collections
 import os
-import random
-import subprocess
 import time
 import urllib
 import urllib2
-import zipfile
 
-import pageobjects
-from selenium import webdriver
-from selenium.common import exceptions
-from selenium.webdriver.chrome import options
-
-from models import models
 from models import transforms
-from tests import suite
 from tests.integration import fake_visualizations
-
-BROWSER_WIDTH = 1600
-BROWSER_HEIGHT = 1000
-
-
-class BaseIntegrationTest(suite.TestBase):
-    """Base class for all integration tests."""
-
-    TAGS = {
-        suite.TestBase.REQUIRES_INTEGRATION_SERVER: True,
-        suite.TestBase.REQUIRES_TESTING_MODULES: set([fake_visualizations]),
-        }
-
-    LOGIN = 'test@example.com'
-
-    def setUp(self):
-        super(BaseIntegrationTest, self).setUp()
-        chrome_options = options.Options()
-        chrome_options.add_argument('--disable-extensions')
-
-        # Sadly, the max wait for the driver to become ready is hard-coded at
-        # 30 seconds.  However, that seems like it'd be enough for our
-        # purposes, so retrying the whole shebang seems like a better bet for
-        # getting rid of the flakiness due to occasional failure to connect to
-        # the Chrome driver.
-        self.driver = None
-        tries = 10
-        while not self.driver:
-            tries -= 1
-            try:
-                self.driver = webdriver.Chrome(chrome_options=chrome_options)
-            except exceptions.WebDriverException, ex:
-                print ex
-                if tries:
-                    print 'Retrying Chrome connection up to %d more times' % (
-                        tries)
-                else:
-                    raise ex
-
-        # Set a large enough window size independent of screen size so that all
-        # click actions can be performed correctly.
-        self.driver.set_window_size(BROWSER_WIDTH, BROWSER_HEIGHT)
-
-    def tearDown(self):
-        time.sleep(1)  # avoid broken sockets on the server
-        self.driver.quit()
-        super(BaseIntegrationTest, self).tearDown()
-
-    def load_root_page(self):
-        ret = pageobjects.RootPage(self).load(
-            suite.TestBase.INTEGRATION_SERVER_BASE_URL)
-        tries = 10
-        while tries and 'This webpage is not avail' in self.driver.page_source:
-            tries -= 1
-            time.sleep(1)
-            ret = pageobjects.RootPage(self).load(
-                suite.TestBase.INTEGRATION_SERVER_BASE_URL)
-        return ret
-
-    def load_dashboard(self, name):
-        return pageobjects.DashboardPage(self).load(
-            suite.TestBase.INTEGRATION_SERVER_BASE_URL, name)
-
-    def load_appengine_admin(self, course_name):
-        return pageobjects.AppengineAdminPage(
-            self, suite.TestBase.ADMIN_SERVER_BASE_URL, course_name)
-
-    def get_uid(self):
-        """Generate a unique id string."""
-        uid = ''
-        for i in range(10):  # pylint: disable=unused-variable
-            j = random.randint(0, 61)
-            if j < 26:
-                uid += chr(65 + j)  # ascii capital letters
-            elif j < 52:
-                uid += chr(97 + j - 26)  # ascii lower case letters
-            else:
-                uid += chr(48 + j - 52)  # ascii digits
-        return uid
-
-    def create_new_course(self):
-        """Create a new course with a unique name, using the admin tools."""
-        uid = self.get_uid()
-        name = 'ns_%s' % uid
-        title = 'Test Course (%s)' % uid
-
-        self.load_root_page(
-        ).click_login(
-        ).login(
-            self.LOGIN, admin=True
-        ).click_dashboard(
-        ).click_admin(
-        ).click_add_course(
-        ).set_fields(
-            name=name, title=title, email='a@bb.com'
-        ).click_save(
-            link_text='Add New Course', status_message='Added.'
-        ).click_close()
-
-        return (name, title)
-
-    def set_admin_setting(self, setting_name, state):
-        """Configure a property on Admin setting page."""
-
-        self.load_root_page(
-        ).click_dashboard(
-        ).click_admin(
-        ).click_settings(
-        ).click_override(
-            setting_name
-        ).set_value(
-            state
-        ).set_status(
-            'Active'
-        ).click_save(
-        ).click_close()
+from tests.integration import integration
+from tests.integration import pageobjects
 
 
-class EtlTranslationRoundTripTest(BaseIntegrationTest):
+class IntegrationServerInitializationTask(integration.TestBase):
 
-    def setUp(self):
-        super(EtlTranslationRoundTripTest, self).setUp()
-        self.archive_path = self._get_archive_path('translations.zip')
-
-    def _delete_archive_file(self):
-        os.remove(self.archive_path)
-
-    def _get_archive_path(self, name):
-        return os.path.join(self.test_tempdir, name)
-
-    def _get_etl_sh_abspath(self):
-        cb_home = os.environ.get('COURSEBUILDER_HOME')
-        if not cb_home:
-            raise Exception('Could not find COURSEBUILDER_HOME')
-
-        return os.path.join(cb_home, 'scripts/etl.sh')
-
-    def _get_ln_locale_element(self, page):
-        try:
-            return page.find_element_by_css_selector(
-                'thead > tr > th:nth-child(3)')
-        except exceptions.NoSuchElementException:
-            return None
-
-    def _load_sample_course(self):
-        return self.load_root_page(
-        ).load_welcome_page(
-            self.INTEGRATION_SERVER_BASE_URL
-        ).click_explore_sample_course()
-
-    def _run_download_course(self):
-        etl_command = [
-            'download', 'course', '/sample', 'mycourse', 'localhost:8081',
-            '--archive_path', self.archive_path]
-        self._run_etl_command(etl_command)
-
-    def _run_download_datastore(self):
-        etl_command = [
-            'download', 'datastore', '/sample', 'mycourse', 'localhost:8081',
-            '--archive_path', self.archive_path]
-        self._run_etl_command(etl_command)
-
-    def _run_delete_job(self):
-        etl_command = [
-            'run', 'modules.i18n_dashboard.jobs.DeleteTranslations', '/sample',
-            'mycourse', 'localhost:8081']
-        self._run_etl_command(etl_command)
-
-    def _run_download_job(self):
-        etl_command = [
-            'run', 'modules.i18n_dashboard.jobs.DownloadTranslations',
-            '/sample', 'mycourse', 'localhost:8081',
-            '--job_args=' + self.archive_path]
-        self._run_etl_command(etl_command)
-
-    def _run_translate_job(self):
-        etl_command = [
-            'run', 'modules.i18n_dashboard.jobs.TranslateToReversedCase',
-            '/sample', 'mycourse', 'localhost:8081']
-        self._run_etl_command(etl_command)
-
-    def _run_upload_job(self):
-        etl_command = [
-            'run', 'modules.i18n_dashboard.jobs.UploadTranslations', '/sample',
-            'mycourse', 'localhost:8081', '--job_args=' + self.archive_path]
-        self._run_etl_command(etl_command)
-
-    def _run_etl_command(self, etl_command):
-        etl_command = (['sh', self._get_etl_sh_abspath()] + etl_command)
-        process = subprocess.Popen(
-            etl_command, stdin=subprocess.PIPE, stderr=subprocess.PIPE,
-            stdout=subprocess.PIPE)
-        process.stdin.write('anything@example.com\nany_password\n')
-        process.stdin.flush()
-        _, stderr = process.communicate()
-
-        if process.returncode:
-            raise Exception(
-                'Unable to run etl command "%s", stderr was %s' % (
-                    ' '.join(etl_command), stderr))
-
-    def assert_archive_file_exists(self):
-        self.assertTrue(os.path.exists(self.archive_path))
-
-    def assert_ln_locale_in_course(self, page):
-        self.assertTrue(self._get_ln_locale_element(page))
-
-    def assert_ln_locale_not_in_course(self, page):
-        self.assertFalse(self._get_ln_locale_element(page))
-
-    def assert_zipfile_contains_only_ln_locale(self):
-        self.assert_archive_file_exists()
-
-        with zipfile.ZipFile(self.archive_path) as zf:
-            files = zf.infolist()
-            self.assertEqual(
-                ['locale/ln/LC_MESSAGES/messages.po'],
-                [f.filename for f in files])
-
-    def test_full_round_trip_of_data_via_i18n_dashboard_module_jobs(self):
-        page = self._load_sample_course().click_i18n()
-        self.assert_ln_locale_not_in_course(page)
-
-        self._run_translate_job()
-        page.click_i18n()
-        self.assert_ln_locale_in_course(page)
-
-        self._run_download_job()
-        self.assert_zipfile_contains_only_ln_locale()
-
-        self._run_delete_job()
-        page.click_i18n()
-        self.assert_ln_locale_not_in_course(page)
-
-        self._run_upload_job()
-        page.click_i18n()
-        self.assert_ln_locale_in_course(page)
-
-        # As an additional sanity check, make sure we can download the course
-        # definitions and datastore data for a course with translations.
-
-        self._delete_archive_file()
-        self._run_download_course()
-        self.assert_archive_file_exists()
-
-        self._delete_archive_file()
-        self._run_download_datastore()
-        self.assert_archive_file_exists()
+    def test_setup_default_course(self):
+        self.load_root_page()._add_default_course_if_needed(
+            integration.TestBase.INTEGRATION_SERVER_BASE_URL)
 
 
-class SampleCourseTests(BaseIntegrationTest):
+class SampleCourseTests(integration.TestBase):
     """Integration tests on the sample course installed with Course Builder."""
 
     def test_admin_can_add_announcement(self):
@@ -294,11 +45,7 @@ class SampleCourseTests(BaseIntegrationTest):
         login = 'test-%s@example.com' % uid
         title = 'Test announcement (%s)' % uid
 
-        self.load_root_page(
-        ).click_login(
-        ).login(login, admin=True)
-
-        self.set_admin_setting('gcb_can_highlight_code', False)
+        self.login(login, admin=True)
 
         self.load_root_page(
         ).click_announcements(
@@ -309,8 +56,10 @@ class SampleCourseTests(BaseIntegrationTest):
             body='The new announcement'
         ).click_save(
         ).click_close(
+        ).click_view_item(
+            0, pageobjects.AnnouncementsPage
         ).verify_announcement(
-            title=title + ' (Draft)', date='2013-03-01',
+            title=title + ' (Private)', date='2013-03-01',
             body='The new announcement')
 
     def test_admin_can_change_admin_user_emails(self):
@@ -318,32 +67,26 @@ class SampleCourseTests(BaseIntegrationTest):
         login = 'test-%s@example.com' % uid
         email = 'new-admin-%s@foo.com' % uid
 
-        self.load_root_page(
-        ).click_login(
-        ).login(
+        self.login(
             login, admin=True
         ).click_dashboard(
         ).click_admin(
-        ).click_settings(
+        ).click_site_settings(
         ).click_override_admin_user_emails(
         ).set_value(
             email
-        ).set_status(
-            'Active'
         ).click_save(
         ).click_close(
         ).verify_admin_user_emails_contains(email)
 
 
-class AdminTests(BaseIntegrationTest):
+class AdminTests(integration.TestBase):
     """Tests for the administrator interface."""
 
     LOGIN = 'test@example.com'
 
     def test_default_course_is_read_only(self):
-        self.load_root_page(
-        ).click_login(
-        ).login(
+        self.login(
             self.LOGIN, admin=True
         ).click_dashboard(
         ).verify_read_only_course()
@@ -360,8 +103,6 @@ class AdminTests(BaseIntegrationTest):
         ).click_add_unit(
         ).set_title(
             'Test Unit 1'
-        ).set_status(
-            'Public'
         ).click_save(
         ).click_close(
         ).verify_course_outline_contains_unit('Unit 1 - Test Unit 1')
@@ -379,8 +120,7 @@ class AdminTests(BaseIntegrationTest):
         ).click_add_unit(
         ).set_title(
             unit_title
-        ).set_status(
-            'Public'
+        ).click_plain_text(
         ).setvalue_codemirror(
             0, unit_header_html
         ).assert_equal_codemirror(
@@ -393,6 +133,37 @@ class AdminTests(BaseIntegrationTest):
         # recheck that the data is really on the server
             0, unit_header_html
         ).click_close()
+
+    def test_in_place_lesson_editing(self):
+        name = self.create_new_course()[0]
+        self.load_dashboard(
+            name
+        ).click_add_unit(
+        ).set_title(
+            'Test Unit 1'
+        ).click_save(
+        ).click_close(
+        ).verify_course_outline_contains_unit(
+            'Unit 1 - Test Unit 1'
+        ).click_add_lesson(
+        ).set_title(
+            'Test Lesson'
+        ).select_settings(
+        ).select_content(
+        ).click_plain_text(
+        ).setvalue_codemirror(
+            0, 'Lorem ipsum'
+        ).click_save(
+        ).click_close(
+        ).click_on_course_outline_components(
+            '1. Test Lesson'
+        ).click_edit_lesson(
+        ).edit_lesson_iframe_assert_equal_codemirror(
+            'Lorem ipsum'
+        ).edit_lesson_iframe_setvalue_codemirror(
+            'Lorem ipsum dolor sit amet'
+        ).edit_lesson_iframe_click_save(
+        ).assert_lesson_content_contains('Lorem ipsum dolor sit amet')
 
     def test_cancel_add_with_no_changes_should_not_need_confirm(self):
         """Test entering editors and clicking close without making changes."""
@@ -420,12 +191,12 @@ class AdminTests(BaseIntegrationTest):
         ).verify_not_publicly_available()  # confirm that we're on the dashboard
 
         # Test Upload asset
-        self.load_dashboard(name).click_assets(
+        self.load_dashboard(name).click_edit(
         ).click_sub_tab(
-            'Images & Documents'
+            'Images'
         ).click_upload(
         ).click_close(
-        ).verify_selected_tab('Assets')
+        ).verify_selected_group('edit')
 
     def test_leave_page_with_changes_triggers_alert(self):
         """Opens an editor page, make changes and tries to leave.
@@ -437,7 +208,7 @@ class AdminTests(BaseIntegrationTest):
                            ' you leave.')
         # Test back arrow
         browser = self.load_dashboard(name).click_add_unit(
-        ).set_contents_on_one_page(True).go_back()
+        ).set_contents_on_one_page(True).go_back(expect_exception=True)
         alert = browser.switch_to_alert()
         self.assertEqual(confirm_message, alert.text)
         alert.accept()
@@ -454,15 +225,15 @@ class AdminTests(BaseIntegrationTest):
         # Test click navigation bar button
         dashboard = self.load_dashboard(name)
         dashboard.click_add_unit().set_contents_on_one_page(True)
-        dashboard.click_assets()
+        dashboard.click_edit()
         alert = browser.switch_to_alert()
         self.assertEqual(confirm_message, alert.text)
         alert.accept()
-        self.assertEqual(browser.where_am_i(), 'dashboard?action=assets')
+        self.assertEqual(browser.where_am_i(), 'dashboard?action=outline')
 
         # Test cancel the alert
         browser = self.load_dashboard(name).click_add_unit(
-        ).set_contents_on_one_page(True).go_back()
+        ).set_contents_on_one_page(True).go_back(expect_exception=True)
         browser.switch_to_alert().dismiss()
         self.assertNotEqual(browser.where_am_i(), 'dashboard')
 
@@ -475,9 +246,9 @@ class AdminTests(BaseIntegrationTest):
 
         self.load_dashboard(
             name
-        ).click_assets(
+        ).click_edit(
         ).click_sub_tab(
-            'Images & Documents'
+            'Images'
         ).click_upload(
         ).select_file(
             image_file
@@ -493,6 +264,8 @@ class AdminTests(BaseIntegrationTest):
     def test_add_and_edit_custom_tags(self):
         name = self.create_new_course()[0]
         instanceid_regex = 'instanceid="[A-Za-z0-9]{12}"'
+        video_id_1 = 'f1U4SAgy60c'
+        video_id_2 = 'https://www.youtube.com/embed/sIE0mcOGnms'
 
         self.load_dashboard(
             name
@@ -506,11 +279,13 @@ class AdminTests(BaseIntegrationTest):
         ).send_rte_text(
             'YouTube:'
         ).click_rte_add_custom_tag(
-        ).select_rte_custom_tag_type(
-            'gcb: YouTube Video'
+            'YouTube Video'
         ).set_rte_lightbox_field(
-            'input[name=videoid]', '123'
+            'input[name=videoid]', video_id_1
         ).click_rte_save(
+        ).click_preview(
+        ).ensure_preview_document_matches_text(
+            '<script>gcbTagYoutubeEnqueueVideo("' + video_id_1 + '", '
         ).click_plain_text(
         ).ensure_instanceid_count_equals(
             1
@@ -519,21 +294,20 @@ class AdminTests(BaseIntegrationTest):
         ).doubleclick_rte_element(
             'img.gcbMarker'
         ).ensure_rte_lightbox_field_has_value(
-            'input[name=videoid]', '123'
+            'input[name=videoid]', video_id_1
         ).set_rte_lightbox_field(
-            'input[name=videoid]', '321'
+            'input[name=videoid]', video_id_2
         ).click_rte_save(
         ).click_plain_text(
         ).ensure_lesson_body_textarea_matches_regex(
-            'YouTube:<gcb-youtube videoid="321" %s>'
+            'YouTube:<gcb-youtube videoid="' + video_id_2 + '" %s>'
             '</gcb-youtube>' % instanceid_regex
         ).ensure_instanceid_list_matches_last_snapshot(
         ).click_rich_text(
         ).send_rte_text(
             'Google Group:'
         ).click_rte_add_custom_tag(
-        ).select_rte_custom_tag_type(
-            'gcb: Google Group'
+            'Google Group'
         ).set_rte_lightbox_field(
             'input[name=group]', 'abc'
         ).set_rte_lightbox_field(
@@ -541,28 +315,38 @@ class AdminTests(BaseIntegrationTest):
         ).click_rte_save(
         ).click_plain_text(
         ).ensure_lesson_body_textarea_matches_regex(
+            'YouTube:<gcb-youtube videoid="' + video_id_2 +
+            '" %s></gcb-youtube>'
             'Google Group:'
-            '<gcb-googlegroup group="abc" category="def" %s></gcb-googlegroup>'
-            'YouTube:<gcb-youtube videoid="321" %s></gcb-youtube>' % (
-                instanceid_regex, instanceid_regex
-            )
-        )
+            '<gcb-googlegroup group="abc" category="def" %s>'
+            '</gcb-googlegroup>' % (instanceid_regex, instanceid_regex)
+        ).click_save(
+        #---------- Test editor state is saved ----------
+        ).click_close(
+        ).click_edit_lesson(
+            '1. New Lesson'
+        ).assert_editor_mode_is_html(
+        ).click_rich_text(
+        ).click_save(
+        ).click_close(
+        ).click_edit_lesson(
+            '1. New Lesson'
+        ).assert_editor_mode_is_rich_text()
 
     def test_add_edit_delete_label(self):
         name = self.create_new_course()[0]
 
         self.load_dashboard(
             name
-        ).click_assets(
+        ).click_edit(
         ).click_sub_tab(
-            'Labels'
+            'Tracks'
         ).click_add_label(
+            'Add Track'
         ).set_title(
             'Liver'
         ).set_description(
             'Exercise and diet to support healthy hepatic function'
-        ).set_type(
-            models.LabelDTO.LABEL_TYPE_COURSE_TRACK
         ).click_save(
         ).click_close(
         ).verify_label_present(
@@ -573,8 +357,6 @@ class AdminTests(BaseIntegrationTest):
             'Liver'
         ).verify_description(
             'Exercise and diet to support healthy hepatic function'
-        ).verify_type(
-            models.LabelDTO.LABEL_TYPE_COURSE_TRACK
         ).set_title(
             'Kidney'
         ).click_save(
@@ -592,24 +374,118 @@ class AdminTests(BaseIntegrationTest):
         )
 
 
-class QuestionsTest(BaseIntegrationTest):
+class QuestionsTest(integration.TestBase):
 
-    def test_add_question_and_solve_it(self):
+    def test_inline_question_creation(self):
         name = self.create_new_course()[0]
-
-        self.set_admin_setting('gcb_can_highlight_code', False)
 
         self.load_dashboard(
             name
-        ).click_course(
-        ).click_register(
-        ).enroll(
-            'John Smith'
-        ).click_course(
-        ).click_dashboard(
+        ).click_add_unit(
+        ).set_title(
+            'Test Unit'
+        ).click_save(
+        ).click_close(
+        ).click_add_lesson(
+        ).set_title(
+            'Test Lesson'
+        ).click_rich_text(
+
+        #---------------------------------------------- Add a MC question
+        ).click_rte_add_custom_tag(
+            'Question'
+        ).click_rte_element(
+            '#mc_tab'
+        ).set_rte_lightbox_field(
+            '.mc-container [name="description"]', 'mc question'
+        ).set_rte_lightbox_field(
+            '.question-weight [name="weight"]', '23'
+        ).set_rte_lightbox_field(
+            '.mc-container .yui-editor-editable', 'What color is the sky?',
+            index=0, clear=False
+        ).set_rte_lightbox_field(
+            '.mc-container .yui-editor-editable', 'Blue',
+            index=2, clear=False
+        ).click_rte_link(
+            'Add a choice'
+        ).set_rte_lightbox_field(
+            '.mc-container .yui-editor-editable', 'Red',
+            index=4, clear=False
+        ).click_rte_link(
+            'Add a choice'
+        ).set_rte_lightbox_field(
+            '.mc-container .yui-editor-editable', 'Green',
+            index=6, clear=False
+        ).click_rte_link(
+            'Add a choice'
+        ).set_rte_lightbox_field(
+            '.mc-container .yui-editor-editable', 'Yellow',
+            index=8, clear=False
+        ).click_rte_save(
+        ).doubleclick_rte_element(
+            'img'
+        ).ensure_rte_lightbox_field_has_value(
+            '.mc-container [name="description"]', 'mc question'
+        ).ensure_rte_lightbox_field_has_value(
+            '.question-weight [name="weight"]', '23'
+        ).click_rte_close(
+        ).click_preview(
+        #---------------------------------------------- Confirm in preview
+        ).ensure_preview_document_matches_text(
+            '23 points'
+        ).ensure_preview_document_matches_text(
+            'What color is the sky?'
+        ).click_rich_text(
+
+        #---------------------------------------------- Add a SA questions
+        ).click_rte_add_custom_tag(
+            'Question'
+        ).click_rte_element(
+            '#sa_tab'
+        ).set_rte_lightbox_field(
+            '.sa-container [name="description"]', 'sa question',
+        ).set_rte_lightbox_field(
+            '.question-weight [name="weight"]', '24',
+        ).set_rte_lightbox_field(
+            '.sa-container .yui-editor-editable', 'Type "woof"',
+            index=0, clear=False
+        ).set_rte_lightbox_field(
+            '.sa-container [name="graders[0]response"]', 'woof'
+        ).click_rte_save(
+        ).doubleclick_rte_element(
+            'img:nth-of-type(2)', index=0
+        ).ensure_rte_lightbox_field_has_value(
+            '.sa-container [name="description"]', 'sa question'
+        ).ensure_rte_lightbox_field_has_value(
+            '.question-weight [name="weight"]', '24'
+        ).click_rte_close(
+        ).click_preview(
+        #---------------------------------------------- Confirm in preview
+        ).ensure_preview_document_matches_text(
+            '24 points'
+        ).ensure_preview_document_matches_text(
+            'Type "woof"'
+        ).ensure_preview_document_matches_text(
+            '23 points'
+        ).ensure_preview_document_matches_text(
+            'What color is the sky?'
+        )
+
+    def test_add_question_and_solve_it(self):
+        name = self.create_new_course()[0]
+        root_page = self.load_root_page(
+        ).register_for_course(
+            name
+        )
+
+        # Note the occasional breaks in the fluent structure of the code in
+        # this test are because Pylint has stack overflow problems with very
+        # long chained expressions.
+
+        page = root_page.click_dashboard(
 
         #---------------------------------------------- Question
-        ).click_assets(
+        ).click_edit(
         ).click_sub_tab(
             'Questions'
         ).click_add_multiple_choice(
@@ -619,10 +495,13 @@ class QuestionsTest(BaseIntegrationTest):
             'Multiple choice question'
         ).set_answer(
             0, 'Red'
+        ).click_add_choice(
         ).set_answer(
             1, 'Blue'
+        ).click_add_choice(
         ).set_answer(
             2, 'Yellow'
+        ).click_add_choice(
         ).set_answer(
             3, 'Pink'
         ).click_save(
@@ -638,8 +517,6 @@ class QuestionsTest(BaseIntegrationTest):
         ).click_add_unit(
         ).set_title(
             'Test Unit 1'
-        ).set_status(
-            'Public'
         ).set_contents_on_one_page(
             True
         ).click_save(
@@ -647,18 +524,23 @@ class QuestionsTest(BaseIntegrationTest):
         ).verify_course_outline_contains_unit(
             'Unit 1 - Test Unit 1'
         #---------------------------------------------- Lesson 1 (graded)
-        ).click_add_lesson(
+        )
+
+        page = page.click_add_lesson(
         ).set_title(
             'Question lesson - Graded'
-        ).set_status(
-            'Public'
+        ).select_settings(
         ).set_questions_are_scored(
+        ).select_content(
         ).click_rich_text(
         ).click_rte_add_custom_tag(
-        ).select_rte_custom_tag_type(
-            'gcb: Question'
+            'Question'
+        ).click_rte_element(
+            '#select_tab'
         ).set_rte_lightbox_field(
-            'input[name=weight]', 1
+            '.question-weight input[name=weight]', 1
+        ).click_rte_element(
+            '.select-container [name="quid"] option:nth-child(2)'
         ).click_rte_save(
         ).click_save(
         ).click_close(
@@ -666,48 +548,57 @@ class QuestionsTest(BaseIntegrationTest):
         ).click_add_lesson(
         ).set_title(
             'Question lesson - UnGraded'
-        ).set_status(
-            'Public'
+        ).select_settings(
+        ).select_content(
         ).click_rich_text(
         ).click_rte_add_custom_tag(
-        ).select_rte_custom_tag_type(
-            'gcb: Question'
+            'Question'
+        ).click_rte_element(
+            '#select_tab'
         ).set_rte_lightbox_field(
-            'input[name=weight]', 1
+            '.question-weight input[name=weight]', 1
+        ).click_rte_element(
+            '.select-container [name="quid"] option:nth-child(2)'
         ).click_rte_save(
         ).click_save(
         ).click_close(
         #---------------------------------------------- Assessment pre (ID 4)
-        ).click_add_assessment(
+        )
+
+        page = page.click_add_assessment(
         ).set_title(
             'Pre-Assessment'
-        ).set_status(
-            'Public'
         ).click_rich_text(
             pageobjects.AddAssessment.INDEX_CONTENT
         ).click_rte_add_custom_tag(
+            'Question',
             pageobjects.AddAssessment.INDEX_CONTENT
-        ).select_rte_custom_tag_type(
-            'gcb: Question'
+        ).click_rte_element(
+            '#select_tab'
         ).set_rte_lightbox_field(
-            'input[name=weight]', 1
+            '.question-weight input[name=weight]', 1
+        ).click_rte_element(
+            '.select-container [name="quid"] option:nth-child(2)'
         ).click_rte_save(
         ).click_save(
         ).click_close(
         #---------------------------------------------- Assessment post (ID 5)
-        ).click_add_assessment(
+        )
+
+        page = page.click_add_assessment(
         ).set_title(
             'Post-Assessment'
-        ).set_status(
-            'Public'
         ).click_rich_text(
             pageobjects.AddAssessment.INDEX_CONTENT
         ).click_rte_add_custom_tag(
+            'Question',
             pageobjects.AddAssessment.INDEX_CONTENT
-        ).select_rte_custom_tag_type(
-            'gcb: Question'
+        ).click_rte_element(
+            '#select_tab'
         ).set_rte_lightbox_field(
-            'input[name=weight]', 1
+            '.question-weight input[name=weight]', 1
+        ).click_rte_element(
+            '.select-container [name="quid"] option:nth-child(2)'
         ).click_rte_save(
         ).click_save(
         ).click_close(
@@ -723,7 +614,9 @@ class QuestionsTest(BaseIntegrationTest):
         ).click_on_course_outline_components(
             '2. Question lesson - UnGraded'
         #---------------------------------------------- Verify pre-assessment
-        ).set_answer_for_mc_question(
+        )
+
+        page.set_answer_for_mc_question(
             'A4', 'What is your favorite color?', 'Red'
         ).submit_question_batch(
             'A4', 'Submit Answers'
@@ -764,7 +657,7 @@ class QuestionsTest(BaseIntegrationTest):
         ).return_to_unit()
 
 
-class VisualizationsTest(BaseIntegrationTest):
+class VisualizationsTest(integration.TestBase):
 
     def setUp(self):
         super(VisualizationsTest, self).setUp()
@@ -787,7 +680,7 @@ class VisualizationsTest(BaseIntegrationTest):
         self._assert_have_page_number(page, data_source, page_number)
 
     def _force_response_common(self, data_source, action, page_number=0):
-        url = (suite.TestBase.INTEGRATION_SERVER_BASE_URL +
+        url = (integration.TestBase.INTEGRATION_SERVER_BASE_URL +
                fake_visualizations.ForceResponseHandler.URL)
         fp = urllib2.urlopen(url, urllib.urlencode({
             fake_visualizations.ForceResponseHandler.PARAM_DATA_SOURCE:
@@ -823,12 +716,14 @@ class VisualizationsTest(BaseIntegrationTest):
         self.assertEquals(0, page.get_data_page_number('exams'))
 
         # Verify that page controls and page number are not displayed.
-        self.assertEquals('', page.get_displayed_page_number('exams'))
-        self.assertFalse(page.buttons_present('exams'))
+        self.assertEquals('', page.get_displayed_page_number(
+            'exams', pre_wait=False))
+        self.assertFalse(page.buttons_present('exams', pre_wait=False))
 
         self._force_response_log_critical('exams')
         page = self.load_dashboard(self._name).click_analytics(
             'Exams').wait_until_logs_not_empty('exams')
+        page.wait_until_logs_not_empty('exams')
         self.assertEquals('critical: Error for testing',
                           page.get_data_source_logs('exams'))
 
@@ -836,6 +731,7 @@ class VisualizationsTest(BaseIntegrationTest):
         page = self.load_dashboard(self._name).click_analytics(
             'Exams').wait_until_logs_not_empty('exams')
 
+        page.wait_until_logs_not_empty('exams')
         self.assertRegexpMatches(
             page.get_data_source_logs('exams'),
             'critical: Fetching results data: ValueError: Error for testing')
@@ -854,6 +750,7 @@ class VisualizationsTest(BaseIntegrationTest):
         self._force_response_page_number('pupils', 1)
         page.click('pupils', 'plusone')
         self._wait_for_page_number(page, 'pupils', 1)
+        page.wait_until_logs_not_empty('pupils')
         self.assertEquals('warning: Stopping at last page 1',
                           page.get_data_source_logs('pupils'))
         page.click('pupils', 'minusone')
@@ -871,6 +768,7 @@ class VisualizationsTest(BaseIntegrationTest):
         self._force_response_page_number('pupils', 22)
         page.click('pupils', 'plusten')
         self._wait_for_page_number(page, 'pupils', 22)
+        page.wait_until_logs_not_empty('pupils')
         self.assertEquals('warning: Stopping at last page 22',
                           page.get_data_source_logs('pupils'))
 
@@ -912,6 +810,7 @@ class VisualizationsTest(BaseIntegrationTest):
         page.set_chunk_size('pupils', 3)
         page.click('pupils', 'minusone')
         self._wait_for_page_number(page, 'pupils', 0)
+        page.wait_until_logs_not_empty('pupils')
         self.assertEquals('critical: Error for testing',
                           page.get_data_source_logs('pupils'))
 
@@ -940,6 +839,7 @@ class VisualizationsTest(BaseIntegrationTest):
         page.click('pupils', 'plusone')
         self._wait_for_page_number(page, 'pupils', 0)
         self._wait_for_page_number(page, 'fake_answers', 0)
+        page.wait_until_logs_not_empty('pupils')
         self.assertRegexpMatches(
             page.get_data_source_logs('pupils'),
             'critical: Fetching results data: ValueError: Error for testing')
@@ -955,26 +855,21 @@ class VisualizationsTest(BaseIntegrationTest):
         self._wait_for_page_number(page, 'pupils', 1)
         self._wait_for_page_number(page, 'fake_answers', 1)
         self.assertEquals('', page.get_data_source_logs('pupils'))
+        page.wait_until_logs_not_empty('fake_answers')
         self.assertEquals('critical: Error for testing',
                           page.get_data_source_logs('fake_answers'))
 
 
-class EventsTest(BaseIntegrationTest):
+class EventsTest(integration.TestBase):
 
     def test_html5_video_events(self):
         name = self.create_new_course()[0]
 
-        # Set gcb_can_persist_tag_events so we will track video events.
-        self.load_root_page(
-        ).click_dashboard(
-        ).click_admin(
+        # Set Enable Student Analytics so we will track video events.
+        self.load_dashboard(name
         ).click_settings(
-        ).click_override(
-            'gcb_can_persist_tag_events'
-        ).set_value(
-            True
-        ).set_status(
-            'Active'
+        ).set_checkbox_by_title(
+            'Enable Student Analytics', True
         ).click_save()
 
         # Add a unit with a video.
@@ -984,13 +879,10 @@ class EventsTest(BaseIntegrationTest):
         ).click_add_unit(
         ).set_title(
             'First Unit'
-        ).set_status(
-            'Public'
         ).click_rich_text(
             pageobjects.AddUnit.INDEX_UNIT_HEADER
         ).click_rte_add_custom_tag(
-        ).select_rte_custom_tag_type(
-            'gcb: HTML5 Video'
+            'HTML5 Video'
         ).set_rte_lightbox_field(
             'input[name=url]',
             'http://techslides.com/demos/sample-videos/small.mp4'
@@ -1012,7 +904,7 @@ class EventsTest(BaseIntegrationTest):
         ).play_video(
             instanceid
         ).wait_for_video_state(
-            instanceid, 'paused', False, 10
+            instanceid, 'paused', None, 10
         ).pause_video(
             instanceid
         ).wait_for_video_state(
@@ -1031,9 +923,8 @@ class EventsTest(BaseIntegrationTest):
         ).get_items(
         )
 
-        events = []
-        for datum in data:
-            events.append(transforms.loads(datum['data']))
+        events = [transforms.loads(d['data']) for d in data]
+        events = [e for e in events if 'event_id' in e]
         events.sort(key=lambda event: event['event_id'])
 
         # Sometimes get this, sometimes don't.  Don't check for this to
@@ -1054,6 +945,7 @@ class EventsTest(BaseIntegrationTest):
             ExpectedEvent('ended', 'end'),
             ]
 
+        # Positions are in seconds since start of video
         end_position = 5.568
         for event, expected in zip(events, expected_events):
             self.assertEquals(instanceid, event['instance_id'])
@@ -1061,9 +953,17 @@ class EventsTest(BaseIntegrationTest):
             self.assertEquals(1, event['default_rate'])
             self.assertEquals(expected.event_type, event['event_type'])
             if expected.position == 'zero':
-                self.assertEquals(0, event['position'])
+                self.assertAlmostEqual(0, event['position'], delta=0.03)
             elif expected.position == 'middle':
-                self.assertNotEquals(0, event['position'])
-                self.assertNotEquals(end_position, event['position'])
+                self.assertNotAlmostEquals(0, event['position'], delta=0.03)
+                self.assertNotAlmostEquals(
+                    end_position, event['position'], delta=0.03)
             elif expected.position == 'end':
-                self.assertEquals(end_position, event['position'])
+                self.assertAlmostEquals(
+                    end_position, event['position'], delta=0.03)
+
+
+class IntegrationTestBundle1(
+        AdminTests, EventsTest, QuestionsTest, SampleCourseTests):
+    """Test bundle that forces serial execution of all containing tests."""
+    pass

@@ -21,12 +21,19 @@ __author__ = [
 import datetime
 import random
 
+from common import schema_fields
 from models import counters
 from models import custom_modules
+from models import data_removal
+from models import data_sources
 from models import entities
+from models import entity_transforms
 from models import student_work
+from models import transforms
 from models import utils
 import models.review
+from modules.dashboard import dashboard
+from modules.review import dashboard as review_dashboard
 from modules.review import domain
 from modules.review import peer
 from modules.review import stats
@@ -814,7 +821,8 @@ class Manager(object):
         if model is None:
             return
 
-        return domain.Review(contents=model.contents, key=model.key())
+        return domain.Review(contents=model.contents, key=model.key(),
+                             score=model.score)
 
     @classmethod
     def get_submission_and_review_step_keys(cls, unit_id, reviewee_key):
@@ -939,7 +947,8 @@ class Manager(object):
 
     @classmethod
     def write_review(
-        cls, review_step_key, review_payload, mark_completed=True):
+        cls, review_step_key, review_payload, mark_completed=True,
+            review_score=None):
         """Writes a review, updating associated internal state.
 
         If the passed step already has a review, that review will be updated. If
@@ -967,7 +976,8 @@ class Manager(object):
         COUNTER_WRITE_REVIEW_START.inc()
         try:
             step_key = cls._update_review_contents_and_change_state(
-                review_step_key, review_payload, mark_completed)
+                review_step_key, review_payload, mark_completed,
+                    review_score=review_score)
         except Exception as e:
             COUNTER_WRITE_REVIEW_FAILED.inc()
             raise e
@@ -978,7 +988,7 @@ class Manager(object):
     @classmethod
     @db.transactional(xg=True)
     def _update_review_contents_and_change_state(
-        cls, review_step_key, review_payload, mark_completed):
+        cls, review_step_key, review_payload, mark_completed, review_score=None):
         should_increment_created_new_review = False
         should_increment_updated_existing_review = False
         should_increment_assigned_to_completed = False
@@ -1004,7 +1014,7 @@ class Manager(object):
         else:
             review_to_update = student_work.Review(
                 contents=review_payload, reviewee_key=step.reviewee_key,
-                reviewer_key=step.reviewer_key, unit_id=step.unit_id)
+                reviewer_key=step.reviewer_key, unit_id=step.unit_id, score=review_score)
             step.review_key = db.Key.from_path(
                 student_work.Review.kind(),
                 student_work.Review.key_name(
@@ -1024,6 +1034,7 @@ class Manager(object):
                     step.review_summary_key))
 
         review_to_update.contents = review_payload
+        review_to_update.score = review_score
         updated_step_key = None
         if not mark_completed:
             # pylint: disable=unbalanced-tuple-unpacking,unpacking-non-sequence
@@ -1055,6 +1066,65 @@ class Manager(object):
         return updated_step_key
 
 
+class SubmissionDataSource(data_sources.AbstractDbTableRestDataSource):
+
+    @classmethod
+    def get_name(cls):
+        return 'submissions'
+
+    @classmethod
+    def get_title(cls):
+        return 'Submissions'
+
+    @classmethod
+    def get_default_chunk_size(cls):
+        return 100
+
+    @classmethod
+    def get_context_class(cls):
+        return data_sources.DbTableContext
+
+    @classmethod
+    def exportable(cls):
+        return True
+
+    @classmethod
+    def get_schema(cls, app_context, log, source_context):
+        clazz = cls.get_entity_class()
+        registry = entity_transforms.get_schema_for_entity(clazz)
+
+        # User ID is not directly available in the submission; it's encoded
+        # in a Key, which needs to be unpacked.
+        registry.add_property(schema_fields.SchemaField(
+            'user_id', 'User ID', 'string'))
+        ret = registry.get_json_schema_dict()['properties']
+        del ret['reviewee_key']
+        return ret
+
+    @classmethod
+    def get_entity_class(cls):
+        return student_work.Submission
+
+    @classmethod
+    def _postprocess_rows(cls, app_context, source_context, schema,
+                          log, page_number, submissions):
+        ret = super(SubmissionDataSource, cls)._postprocess_rows(
+            app_context, source_context, schema, log, page_number, submissions)
+        for item in ret:
+            # Submission's write() method does a transforms.dumps() on
+            # the inbound contents, so undo that.
+            item['contents'] = transforms.loads(item['contents'])
+
+            # Convert reviewee_key to user ID.
+            item['user_id'] = db.Key(encoded=item['reviewee_key']).name()
+            del item['reviewee_key']
+
+            # Suppress item key.  It contains PII (the student ID) among other
+            # things, and it's not useful for joins since it's an amalgamation.
+            del item['key']
+        return ret
+
+
 custom_module = None
 
 
@@ -1074,9 +1144,26 @@ def register_module():
         '/cron/expire_old_assigned_reviews',
         cron.ExpireOldAssignedReviewsHandler)]
 
+    def notify_module_enabled():
+        dashboard.DashboardHandler.add_sub_nav_mapping(
+            'settings', 'edit_assignment', 'Peer review',
+            action='edit_assignment',
+            contents=review_dashboard.get_edit_assignment)
+
+        dashboard.DashboardHandler.add_custom_post_action(
+            'add_reviewer', review_dashboard.post_add_reviewer)
+        dashboard.DashboardHandler.add_custom_post_action(
+            'delete_reviewer', review_dashboard.post_delete_reviewer)
+        data_removal.Registry.register_indexed_by_user_id_remover(
+            peer.ReviewSummary.delete_by_reviewee_id)
+        data_removal.Registry.register_indexed_by_user_id_remover(
+            peer.ReviewStep.delete_by_reviewee_id)
+        data_sources.Registry.register(SubmissionDataSource)
+
+
     global custom_module  # pylint: disable=global-statement
     custom_module = custom_modules.Module(
         'Peer Review Engine',
         'A set of classes for managing peer review process.',
-        cron_handlers, [])
+        cron_handlers, [], notify_module_enabled=notify_module_enabled)
     return custom_module

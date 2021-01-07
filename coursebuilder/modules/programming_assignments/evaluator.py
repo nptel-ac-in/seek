@@ -70,6 +70,13 @@ class ProgramEvaluator(object):
                 test_case.output = '%s...(%s) more chars' % (
                     test_case.output[0:valid_output_length],
                     len(test_case.output) - valid_output_length)
+
+            if (test_case.expected_output and
+                    len(test_case.expected_output) > valid_output_length):
+                test_case.expected_output = '%s...(%s) more chars' % (
+                    test_case.expected_output[0:valid_output_length],
+                    len(test_case.expected_output) - valid_output_length)
+
         return response
 
     @classmethod

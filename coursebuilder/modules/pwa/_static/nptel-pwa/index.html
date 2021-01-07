@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <script type="text/jscript" src="/modules/explorer/_static/js/mobile_redirect.js" charset="utf-8"></script>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, minimum-scale=1, initial-scale=1, user-scalable=yes">
+
+    <title>NPTEL Online Courses Mobile</title>
+    <meta name="description" content="NPTEL PWA APP">
+    <meta name="theme-color" content="#a90909">
+    <link rel="manifest" href="/modules/pwa/_static/nptel-pwa/manifest.json">
+    <link rel="icon" href="https://storage.googleapis.com/static-prod-v11/assets/img/favicon.ico" />
+    <script src="https://storage.googleapis.com/static-prod-v11/bower_components/webcomponentsjs/webcomponents-lite.js"></script>
+    <link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/font-roboto/roboto.html">
+    <link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/polymer/lib/utils/import-href.html">
+    <link rel="import" href="https://storage.googleapis.com/static-prod-v11/bower_components/polymer/polymer-element.html">
+    <link rel="import" href="/modules/pwa/_static/nptel-pwa/src/first-page/first-page.html">
+    <link rel="import" href="/modules/pwa/_static/nptel-pwa/src/nptel-pwa-app/nptel-pwa-app.html" async>
+    <link rel="apple-touch-icon" href="/modules/pwa/_static/nptel-pwa/assets/img/nptel-logo-48.png">
+    <meta name="apple-mobile-web-app-title" content="NPTEL Courses">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="#a90909">
+
+    <script src="https://www.gstatic.com/firebasejs/5.0.4/firebase.js"></script>
+    <!-- Firebase App is always required and must be first -->
+    <script src="https://www.gstatic.com/firebasejs/5.1.0/firebase-app.js"></script>
+    <!-- THen we import messaging -->
+    <script src="https://www.gstatic.com/firebasejs/5.1.0/firebase-messaging.js"></script>
+
+    <style>
+      body {
+        margin: 0;
+        font-family: 'Roboto', 'Noto', sans-serif;
+        background-color: #eee;
+      }
+  </style>
+  <noscript>
+    Please Enable Javascript for proper functioning of the app
+  </noscript>
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/modules/pwa/_static/nptel-pwa/sw.js', { scope: '/m' })
+        .then(function(registration) {
+          console.log('Registration successful, scope is:', registration.scope);
+        })
+        .catch(function(error) {
+          console.log('Service worker registration failed, error:', error);
+        });
+
+      }else {
+        console.log('Service Worker not supported');
+      }
+      window.addEventListener('load', function() {
+        function updateOnlineStatus(event) {
+          if (navigator.onLine) {
+            // handle online status
+            location.reload();
+            Polymer.dom(this.root).querySelector("nptel-pwa-app").setAttribute('online','');
+          } else {
+            // handle offline status
+            Polymer.dom(this.root).querySelector("nptel-pwa-app").removeAttribute('online');
+          }
+        }
+        window.addEventListener('online', updateOnlineStatus);
+        window.addEventListener('offline', updateOnlineStatus);
+      });
+    </script>
+
+
+  </head>
+  <body id="bod">
+    <input style="width: 0; heigth: 0; display: none" id="old-registration-token"/>
+    <script>
+    window.onload = function checkFirst()
+    {
+      if (!localStorage.getItem('first')){
+        localStorage.setItem('first',true);
+        var first = document.createElement('first-page');
+        first.setAttribute('id',"first");
+        document.getElementById('bod').appendChild(first);
+      }
+      else {
+        var nptel = document.createElement('nptel-pwa-app');
+        nptel.setAttribute('online','');
+        document.getElementById('bod').appendChild(nptel);
+      }
+      if (window.location.toString().indexOf('#') == -1)
+      window.location = window.location+"#/allcourses";
+    }
+    </script>
+    <script>
+      (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+       (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+       m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+       })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+      ga('create', 'UA-46447969-1', 'nptel.ac.in');
+      ga('send', 'pageview');
+    </script>
+
+  </body>
+</html>

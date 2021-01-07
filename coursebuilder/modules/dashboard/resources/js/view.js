@@ -1,19 +1,3 @@
-/**
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 //XSSI prefix. Must be kept in sync with models/transforms.py.
 var XSSI_PREFIX = ")]}'";
 var ESC_KEY = 27;
@@ -25,17 +9,25 @@ function parseJson(s) {
   return JSON.parse(s.replace(XSSI_PREFIX, ""));
 }
 
+/* These functions are reused in various pages */
+window.parseAjaxResponse = parseJson;
+window.parseAjaxResponsePayload = function(text) {
+  var wrapper = parseAjaxResponse(text);
+  wrapper.payload = JSON.parse(wrapper.payload);
+  return wrapper;
+}
+
 function setDraftStatus(padlock, isDraft) {
   if (isDraft) {
-    padlock.removeClass("md-lock-open").addClass("md-lock");
+    padlock.removeClass("public").addClass("private");
   } else {
-    padlock.removeClass("md-lock").addClass("md-lock-open");
+    padlock.removeClass("private").addClass("public");
   }
 }
 
 function setDraftStatusCallback(data, padlock) {
   var response = parseJson(data);
-  var isDraft = padlock.hasClass("md-lock")
+  var isDraft = padlock.hasClass("private")
   if (response.status != 200){
     cbShowAlert("Error: " + response.message);
     setDraftStatus(padlock, ! isDraft);
@@ -52,18 +44,18 @@ function setDraftStatusCallback(data, padlock) {
 
 function onDraftStatusClick() {
   var padlock = $(this);
-  var setDraft = $(this).hasClass("md-lock-open");
+  var setDraft = $(this).hasClass("public");
   // Optimistically update icon and revert if server confirmation not received
   setDraftStatus(padlock, setDraft);
   $.post(
     "dashboard",
     {
-      action: "set_draft_status",
+      action: "set_draft_status_" + $(this).data("component-type"),
       key: $(this).data("key"),
       type: $(this).data("component-type"),
       set_draft: setDraft ? 1 : 0,
-      xsrf_token: $(this).parents(".course-outline").data(
-        "status-xsrf-token")
+      xsrf_token: $(this).parents(".xsrf-token-holder").data(
+        "status-xsrf-token-" + $(this).data("component-type"))
     },
     function(data) {
       setDraftStatusCallback(data, padlock);
@@ -243,7 +235,7 @@ function setUpDraftStatus() {
 }
 
 function setUpCloneQuestion() {
-  $(".md-content-copy").on("click", onCloneQuestionClick);
+  $(".clone-question").on("click", onCloneQuestionClick);
 }
 
 /**
@@ -271,21 +263,34 @@ function setUpModalWindow() {
 
 function setUpQuestionPreview() {
   // Bind preview button to show question preview
-  $("table.assets-table .md-visibility").on("click", function(e) {
+  $("table.assets-table .preview-question").on("click", function(e) {
     openModal();
     var params = {
         action: "question_preview",
         quid: $(this).closest("tr").data("quid")
     };
-    $("#question-preview").html($("<iframe />").attr(
-      {id: "question-preview", src: "dashboard?" + $.param(params)})).show();
+    $("#modal-body").html($("<iframe />").attr(
+      {src: "dashboard?" + $.param(params)})).show();
+  });
+}
+
+function setUpQuestionGroupPreview() {
+  // Bind preview button to show question preview
+  $("table.assets-table .preview-question-group").on("click", function(e) {
+    openModal();
+    var params = {
+        action: "question_group_preview",
+        qgid: $(this).closest("tr").data("qgid")
+    };
+    $("#modal-body").html($("<iframe />").attr(
+      {src: "dashboard?" + $.param(params)})).show();
   });
 }
 
 function setUpAddToGroup() {
 
   function addBindings() {
-    $(".md-add-circle").on("click", function(e) {
+    $(".add-question-to-group").on("click", function(e) {
       openModal();
       var popup = $("#add-to-group");
       var row = $(this).closest("tr");
@@ -325,11 +330,13 @@ function setUpAddToGroup() {
  */
 function setUpTableSorting() {
   // Sort table on header click
-  $(".assets-table th").on("click", sortTableByClick);
+  var headers = $(".assets-table th:not(.gcb-list__cell--icon)")
+  headers.on("click", sortTableByClick);
+  headers.each(function(){
+    $(this).append('<i class="material-icons gcb-list__sort-indicator"></i>')
+  })
   // Default: sort ascending on first column
-  $(".assets-table th:first-child").each(function() {
-    sortTable($(this), true);
-  });
+  sortTable($(headers[0]), true);
 }
 
 function setUpFiltering() {
@@ -529,89 +536,6 @@ function setUpFiltering() {
   setUpFilterBindings();
 }
 
-function setUpCoursePicker(){
-  $('#gcb-course-picker').click(function () {
-    $('#gcb-course-picker-menu')
-        .toggleClass('hidden')
-        .css('top', $('table.gcb-nav-bar tr:first-child').height())
-        .css('min-width',
-            $('table.gcb-nav-bar tr:first-child td:first-child').outerWidth());
-    return false;
-  });
-  $(document.body).click(function(evt) {
-    if ($(evt.target).closest('ol.gcb-course-picker').length == 0) {
-      $('#gcb-course-picker-menu').addClass('hidden');
-    }
-  });
-}
-
-function onNavbarResize() {
-  var level1 = $('table.gcb-nav-bar tr.gcb-nav-bar-level-1');
-
-  // Restore navvar to original state
-  level1.find('td.gcb-nav-bar-links > a').show();
-  level1.find('td.gcb-nav-bar-links > button.gcb-nav-bar-more').remove();
-
-  // Measure the length of the nav items in the "extras" cells (course chooser
-  // and logout link)
-  var extrasWidth = 0;
-  level1.find('.gcb-nav-bar-extras').each(function() {
-    extrasWidth += this.offsetWidth;
-  });
-
-  // The available width for the links is the width of the window minus the
-  // width of the extras. Find the index of the last link item that fits
-  // in the available width, and flag if this means we have an overflow.
-  var availableWidth = document.body.offsetWidth - extrasWidth;
-  var totalWidth = 0;
-  var lastIndex = 0;
-  var isOverflow = false;
-  level1.find('td.gcb-nav-bar-links > a').each(function(index) {
-    totalWidth += this.offsetWidth;
-    if (totalWidth < availableWidth) {
-      lastIndex = index;
-    } else {
-      isOverflow = true;
-    }
-  });
-
-  // If there's no overflow, there's nothing to be done
-  if (! isOverflow) {
-    return;
-  }
-  // Adjust down by 1 to make room for the reveal button
-  lastIndex -= 1;
-  // Don't let the first two links get hidden
-  lastIndex = lastIndex > 1 ? lastIndex : 1;
-
-  var overflowedLinks = level1
-      .find('td.gcb-nav-bar-links > a:gt(' + lastIndex + ')');
-  var moreLinks = overflowedLinks.clone().css('display', 'block');
-  overflowedLinks.hide();
-
-  var moreButton = $(
-      '<button class="gcb-nav-bar-more gcb-button">More...</button>');
-  var moreButton2 = moreButton.clone();
-  var moreContentDiv = $('<div class="gcb-nav-bar-more-content"></div>');
-
-  moreContentDiv.append(moreButton2).append(moreLinks).hide();
-
-  if (moreContentDiv.find('.selected').length > 0) {
-    moreButton.addClass('selected');
-  }
-
-  moreButton.append(moreContentDiv).click(function() {
-    moreContentDiv.toggle();
-  });
-
-  level1.find('td.gcb-nav-bar-links').append(moreButton);
-}
-
-function setupNavbarResize() {
-  $(window).resize(onNavbarResize);
-  onNavbarResize();
-}
-
 /**
  * Returns a list with 10 different colors. To be used with Google
  * Visualizations graphs.
@@ -628,13 +552,12 @@ function init() {
   setUpDraftStatus();
   setUpCloneQuestion();
   setUpLocalTimes();
-  setUpModalWindow();
+  setUpModalWindow();  // Deprecated; prefer modules/core_ui Lightbox.
   setUpQuestionPreview();
+  setUpQuestionGroupPreview();
   setUpAddToGroup();
   setUpTableSorting();
   setUpFiltering();
-  setUpCoursePicker();
-  setupNavbarResize();
 };
 
 init();

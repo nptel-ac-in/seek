@@ -19,14 +19,21 @@ __author__ = [
 ]
 
 import datetime
+import logging
 
+import appengine_config
+
+from common import users
+from common import utils as common_utils
 from models import config
 from models import entities
 from models import models
 from models import services
+from models import transforms
 from modules.notifications import notifications
 from tests.functional import actions
 
+from google.appengine.api import taskqueue
 from google.appengine.ext import db
 
 
@@ -37,7 +44,7 @@ class EventEntityTestCase(actions.ExportTestBase):
         key = event.put()
         exported = event.for_export(self.transform)
 
-        self.assert_denylisted_properties_removed(event, exported)
+        self.assert_blacklisted_properties_removed(event, exported)
         self.assertEqual('source', event.source)
         self.assertEqual('transformed_1', exported.user_id)
         self.assertEqual(key, models.EventEntity.safe_key(key, self.transform))
@@ -124,7 +131,7 @@ class ContentChunkTestCase(actions.ExportTestBase):
         self.assert_fuzzy_equal(patched_dto, from_cache)
         self.assertNotEqual(patched_dto.contents, from_datastore.contents)
 
-    def test_dao_get_returns_datastore_entity_and_populates_cache(self):
+    def test_dao_get_returns_dto_and_populates_cache(self):
         self.assertIsNone(models.MemcacheManager.get(self.memcache_key))
 
         key = models.ContentChunkDAO.save(models.ContentChunkDTO({
@@ -134,13 +141,15 @@ class ContentChunkTestCase(actions.ExportTestBase):
             'supports_custom_tags': self.supports_custom_tags,
             'type_id': self.type_id,
         }))
-        expected_dto = models.ContentChunkDAO._make_dto(db.get(key))
-        from_datastore = models.ContentChunkEntity.get_by_id(self.id)
+        from_datastore = models.ContentChunkDAO._make_dto(db.get(key))
+
+        self.assertIsNone(models.MemcacheManager.get(self.memcache_key))
+
+        first_get_result = models.ContentChunkDAO.get(self.id)
         from_cache = models.MemcacheManager.get(self.memcache_key)
 
-        self.assert_fuzzy_equal(
-            expected_dto, models.ContentChunkDAO._make_dto(from_datastore))
-        self.assert_fuzzy_equal(expected_dto, from_cache)
+        self.assert_fuzzy_equal(first_get_result, from_datastore)
+        self.assert_fuzzy_equal(from_cache, from_datastore)
 
     def test_dao_get_returns_none_when_entity_id_none(self):
         self.assertIsNone(models.ContentChunkDAO.get(None))
@@ -236,45 +245,77 @@ class ContentChunkTestCase(actions.ExportTestBase):
         with self.assertRaises(AssertionError):
             models.ContentChunkDAO._split_uid(':foo')
 
-    def test_dao_save_creates_new_object_and_populates_cache(self):
+    def test_dao_save_creates_new_object_and_does_not_populate_cache(self):
         self.assertIsNone(models.MemcacheManager.get(self.memcache_key))
 
-        key = models.ContentChunkDAO.save(models.ContentChunkDTO({
+        dto = models.ContentChunkDTO({
             'content_type': self.content_type,
             'contents': self.contents,
             'id': self.id,
             'resource_id': self.resource_id,
             'supports_custom_tags': self.supports_custom_tags,
             'type_id': self.type_id,
-        }))
-        expected_dto = models.ContentChunkDAO._make_dto(db.get(key))
+        })
+        key = models.ContentChunkDAO.save(dto)
+        saved_dto = models.ContentChunkDAO._make_dto(db.get(key))
 
-        self.assert_fuzzy_equal(
-            expected_dto, models.MemcacheManager.get(self.memcache_key))
+        self.assert_fuzzy_equal(dto, saved_dto)
+        self.assertIsNone(models.MemcacheManager.get(self.memcache_key))
 
-    def test_dao_save_updates_existing_object_and_populates_cache(self):
-        key = models.ContentChunkDAO.save(models.ContentChunkDTO({
+    def test_dao_save_updates_existing_object_and_does_not_populate_cache(self):
+        self.assertIsNone(models.MemcacheManager.get(self.memcache_key))
+
+        dto = models.ContentChunkDTO({
             'content_type': self.content_type,
             'contents': self.contents,
             'id': self.id,
             'resource_id': self.resource_id,
             'supports_custom_tags': self.supports_custom_tags,
             'type_id': self.type_id,
-        }))
-        original_dto = models.ContentChunkDAO._make_dto(db.get(key))
+        })
+        key = models.ContentChunkDAO.save(dto)
+        saved_dto = models.ContentChunkDAO._make_dto(db.get(key))
 
-        self.assert_fuzzy_equal(
-            original_dto, models.MemcacheManager.get(self.memcache_key))
+        self.assert_fuzzy_equal(dto, saved_dto)
+        self.assertIsNone(models.MemcacheManager.get(self.memcache_key))
 
-        original_dto.content_type = 'new_content_type'
-        original_dto.contents = 'new_contents'
-        original_dto.supports_custom_tags = True
-        original_dto.uid = 'new_system_id:new_resource:id'
-        models.ContentChunkDAO.save(original_dto)
-        expected_dto = models.ContentChunkDAO._make_dto(db.get(key))
+        dto.content_type = 'new_content_type'
+        dto.contents = 'new_contents'
+        dto.supports_custom_tags = True
+        dto.uid = 'new_system_id:new_resource:id'
+        models.ContentChunkDAO.save(dto)
+        saved_dto = models.ContentChunkDAO._make_dto(db.get(key))
 
-        self.assert_fuzzy_equal(
-            expected_dto, models.MemcacheManager.get(self.memcache_key))
+        self.assert_fuzzy_equal(dto, saved_dto)
+        self.assertIsNone(models.MemcacheManager.get(self.memcache_key))
+
+    def test_dao_save_all_saves_multiple_dtos(self):
+        # All other behavior of save_all() tested via save() since they share
+        # implementation and save() provides a simpler interface.
+        first_dto = models.ContentChunkDTO({
+            'content_type': self.content_type,
+            'contents': self.contents,
+            'id': self.id,
+            'resource_id': self.resource_id,
+            'supports_custom_tags': self.supports_custom_tags,
+            'type_id': self.type_id,
+        })
+        second_dto = models.ContentChunkDTO({
+            'content_type': 'second_' + self.content_type,
+            'contents': 'second_' + self.contents,
+            'id': self.id + 1,
+            'resource_id': 'resource:second_id',
+            'supports_custom_tags': self.supports_custom_tags,
+            'type_id': 'second_' + self.type_id,
+        })
+        keys = models.ContentChunkDAO.save_all([first_dto, second_dto])
+        saved_dtos = [
+            models.ContentChunkDAO._make_dto(entity) for entity in db.get(keys)]
+
+        self.assertEqual(2, len(keys))
+        self.assertEqual(2, len(saved_dtos))
+        self.assert_fuzzy_equal(first_dto, saved_dtos[0])
+        self.assert_fuzzy_equal(second_dto, saved_dtos[1])
 
 
 class PersonalProfileTestCase(actions.ExportTestBase):
@@ -291,7 +332,7 @@ class PersonalProfileTestCase(actions.ExportTestBase):
         profile.put()
         exported = profile.for_export(self.transform)
 
-        self.assert_denylisted_properties_removed(profile, exported)
+        self.assert_blacklisted_properties_removed(profile, exported)
         self.assertEqual(
             self.transform(user_id), exported.safe_key.name())
 
@@ -478,13 +519,80 @@ class QuestionDAOTestCase(actions.TestBase):
 
 class StudentTestCase(actions.ExportTestBase):
 
+    def setUp(self):
+        super(StudentTestCase, self).setUp()
+        self.old_users_service = users.UsersServiceManager.get()
+
+    def tearDown(self):
+        users.UsersServiceManager.set(self.old_users_service)
+        super(StudentTestCase, self).tearDown()
+
+    def test_federated_email_returns_and_caches_none_by_default(self):
+        student = models.Student(user_id='1')
+
+        # Check backing value starts at None, uncached. On access of the public
+        # computed property, check the backing value is still None (since the
+        # expected value is None in this case), but that the None value is now
+        # cached.
+        self.assertIsNone(student._federated_email_value)
+        self.assertFalse(student._federated_email_cached)
+
+        self.assertIsNone(student.federated_email)
+
+        self.assertIsNone(student._federated_email_value)
+        self.assertTrue(student._federated_email_cached)
+
+    def test_federated_email_returns_and_caches_data_from_custom_resolver(self):
+
+        class Resolver(users.FederatedEmailResolver):
+
+            @classmethod
+            def get(cls, unused_user_id):
+                return 'resolved@example.com'
+
+        class UsersService(users.AbstractUsersService):
+
+            @classmethod
+            def get_federated_email_resolver_class(cls):
+                return Resolver
+
+        users.UsersServiceManager.set(UsersService)
+
+        student = models.Student(user_id='1')
+
+        # Check backing value starts at None, uncached. On access of the public
+        # computed property, check the backing value is now set and cached.
+        self.assertIsNone(student._federated_email_value)
+        self.assertFalse(student._federated_email_cached)
+
+        self.assertEquals('resolved@example.com', student.federated_email)
+
+        self.assertEquals(
+            'resolved@example.com', student._federated_email_value)
+        self.assertTrue(student._federated_email_cached)
+
+    def test_federated_email_returns_none_for_legacy_users_sans_user_id(self):
+        student = models.Student()
+
+        # Check backing value starts at None, uncached. On access of the public
+        # computed property, check the backing value is still None (since the
+        # expected value is None in this case), but that the None value is now
+        # cached.
+        self.assertIsNone(student._federated_email_value)
+        self.assertFalse(student._federated_email_cached)
+
+        self.assertIsNone(student.federated_email)
+
+        self.assertIsNone(student._federated_email_value)
+        self.assertTrue(student._federated_email_cached)
+
     def test_for_export_transforms_correctly(self):
         user_id = '1'
         student = models.Student(key_name='name', user_id='1', is_enrolled=True)
         key = student.put()
         exported = student.for_export(self.transform)
 
-        self.assert_denylisted_properties_removed(student, exported)
+        self.assert_blacklisted_properties_removed(student, exported)
         self.assertTrue(exported.is_enrolled)
         self.assertEqual('transformed_1', exported.user_id)
         self.assertEqual(
@@ -503,6 +611,71 @@ class StudentTestCase(actions.ExportTestBase):
         self.assertEqual(
             'transformed_name',
             models.Student.safe_key(key, self.transform).name())
+
+    def test_registration_sets_last_seen_on(self):
+        actions.login('test@example.com')
+        actions.register(self, 'User 1')
+        student = models.Student.all().get()
+
+        self.assertTrue(isinstance(student.last_seen_on, datetime.datetime))
+
+    def test_update_last_seen_on_does_not_update_when_last_seen_too_new(self):
+        now = datetime.datetime.utcnow()
+        student = models.Student(last_seen_on=now, user_id='1')
+        key = student.put()
+        too_new = now + datetime.timedelta(
+            seconds=models.STUDENT_LAST_SEEN_ON_UPDATE_SEC)
+
+        self.assertEquals(now, student.last_seen_on)
+
+        student.update_last_seen_on(now=now, value=too_new)
+        student = db.get(key)
+
+        self.assertEquals(now, student.last_seen_on)
+
+    def test_update_last_seen_on_updates_when_last_seen_on_is_none(self):
+        now = datetime.datetime.utcnow()
+        student = models.Student(last_seen_on=None, user_id='1')
+        key = student.put()
+        # Must be too new to otherwise update.
+        too_new = now + datetime.timedelta(
+            seconds=models.STUDENT_LAST_SEEN_ON_UPDATE_SEC)
+
+        self.assertIsNone(student.last_seen_on)
+
+        student.update_last_seen_on(now=now, value=too_new)
+        student = db.get(key)
+
+        self.assertEquals(too_new, student.last_seen_on)
+
+    def test_update_last_seen_on_updates_when_last_seen_on_is_none_noarg(self):
+        now = datetime.datetime.utcnow()
+        student = models.Student(last_seen_on=None, user_id='1')
+        key = student.put()
+        # Must be too new to otherwise update.
+        too_new = now + datetime.timedelta(
+            seconds=models.STUDENT_LAST_SEEN_ON_UPDATE_SEC)
+
+        self.assertIsNone(student.last_seen_on)
+
+        student.update_last_seen_on()
+        student = db.get(key)
+
+        self.assertTrue(isinstance(student.last_seen_on, datetime.datetime))
+
+    def test_update_last_seen_on_updates_when_last_seen_on_is_old_enough(self):
+        now = datetime.datetime.utcnow()
+        student = models.Student(last_seen_on=now, user_id='1')
+        key = student.put()
+        old_enough = now + datetime.timedelta(
+            seconds=models.STUDENT_LAST_SEEN_ON_UPDATE_SEC + 1)
+
+        self.assertEquals(now, student.last_seen_on)
+
+        student.update_last_seen_on(now=now, value=old_enough)
+        student = db.get(key)
+
+        self.assertEquals(old_enough, student.last_seen_on)
 
 
 class StudentProfileDAOTestCase(actions.ExportTestBase):
@@ -583,6 +756,7 @@ class StudentProfileDAOTestCase(actions.ExportTestBase):
         sender = 'sender@example.com'
         title = 'title'
         student = models.Student(key_name=email, name=nick_name)
+        student.put()
         self.swap(services.notifications, 'enabled', lambda: True)
         self.swap(services.unsubscribe, 'enabled', lambda: True)
         handler = actions.MockHandler(
@@ -637,3 +811,310 @@ class StudentPropertyEntityTestCase(actions.ExportTestBase):
             'transformed_%s-%s' % (user_id, property_name),
             models.StudentPropertyEntity.safe_key(
                 student_property_key, self.transform).name())
+
+class StudentLifecycleObserverTestCase(actions.TestBase):
+
+    COURSE = 'lifecycle_test'
+    NAMESPACE = 'ns_' + COURSE
+    ADMIN_EMAIL = 'admin@foo.com'
+    STUDENT_EMAIL = 'student@foo.com'
+    LOG_LEVEL = logging.WARNING
+
+    def setUp(self):
+        super(StudentLifecycleObserverTestCase, self).setUp()
+        app_context = actions.simple_add_course(
+            self.COURSE, self.ADMIN_EMAIL, 'Lifecycle Test')
+        self.base = '/' + self.COURSE
+        self._user_id = None
+        self._num_add_calls = 0
+        models.StudentLifecycleObserver.EVENT_CALLBACKS[
+            models.StudentLifecycleObserver.EVENT_ADD][self.COURSE] = (
+                self._add_callback)
+        self._num_unenroll_calls = 0
+        models.StudentLifecycleObserver.EVENT_CALLBACKS[
+            models.StudentLifecycleObserver.EVENT_UNENROLL][self.COURSE] = (
+                self._unenroll_callback)
+        self._num_reenroll_calls = 0
+        models.StudentLifecycleObserver.EVENT_CALLBACKS[
+            models.StudentLifecycleObserver.EVENT_REENROLL][self.COURSE] = (
+                self._reenroll_callback)
+
+        self._num_exception_calls = 0
+        self._num_exceptions_to_raise = 0
+        models.StudentLifecycleObserver.EVENT_CALLBACKS[
+            models.StudentLifecycleObserver.EVENT_ADD]['raises'] = (
+                self._raise_exceptions)
+        models.StudentLifecycleObserver.EVENT_CALLBACKS[
+            models.StudentLifecycleObserver.EVENT_UNENROLL]['raises'] = (
+                self._raise_exceptions)
+        models.StudentLifecycleObserver.EVENT_CALLBACKS[
+            models.StudentLifecycleObserver.EVENT_REENROLL]['raises'] = (
+                self._raise_exceptions)
+
+        event_callbacks = models.StudentLifecycleObserver.EVENT_CALLBACKS
+        for event_type in event_callbacks:
+            if 'wipeout' in event_callbacks[event_type]:
+                del event_callbacks[event_type]['wipeout']
+        enqueue_callbacks = models.StudentLifecycleObserver.EVENT_CALLBACKS
+        for event_type in enqueue_callbacks:
+            if 'wipeout' in enqueue_callbacks[event_type]:
+                del enqueue_callbacks[event_type]['wipeout']
+
+    def _add_callback(self, user_id, timestamp):
+        self._user_id = user_id
+        self._timestamp = timestamp
+        self._num_add_calls += 1
+
+    def _unenroll_callback(self, user_id, timestamp):
+        self._num_unenroll_calls += 1
+
+    def _reenroll_callback(self, user_id, timestamp):
+        self._num_reenroll_calls += 1
+
+    def _raise_exceptions(self, user_id, timestamp):
+        self._num_exception_calls += 1
+        if self._num_exceptions_to_raise:
+            self._num_exceptions_to_raise -= 1
+            raise ValueError('bogus error')
+
+    def test_notifications_succeed(self):
+        actions.login(self.STUDENT_EMAIL)
+        user_id = None
+
+        actions.register(self, self.STUDENT_EMAIL)
+        self.execute_all_deferred_tasks(
+            models.StudentLifecycleObserver.QUEUE_NAME)
+        self.assertIsNotNone(self._user_id)
+        user_id = self._user_id
+        self.assertEquals(1, self._num_add_calls)
+        self.assertEquals(0, self._num_unenroll_calls)
+        self.assertEquals(0, self._num_reenroll_calls)
+
+        actions.unregister(self)
+        self.execute_all_deferred_tasks(
+            models.StudentLifecycleObserver.QUEUE_NAME)
+        self.assertEquals(1, self._num_add_calls)
+        self.assertEquals(1, self._num_unenroll_calls)
+        self.assertEquals(0, self._num_reenroll_calls)
+
+
+        with common_utils.Namespace(self.NAMESPACE):
+            models.StudentProfileDAO.update(
+                user_id, self.STUDENT_EMAIL, is_enrolled=True)
+        self.execute_all_deferred_tasks(
+            models.StudentLifecycleObserver.QUEUE_NAME)
+        self.assertEquals(1, self._num_add_calls)
+        self.assertEquals(1, self._num_unenroll_calls)
+        self.assertEquals(1, self._num_reenroll_calls)
+
+    def test_bad_event_name(self):
+        with self.assertRaises(ValueError):
+            models.StudentLifecycleObserver.enqueue(
+                'not_a_real_event_name', 123)
+
+    def test_bad_user_id(self):
+        with self.assertRaises(ValueError):
+            models.StudentLifecycleObserver.enqueue(
+                models.StudentLifecycleObserver.EVENT_ADD, None)
+
+    def test_bad_post_not_from_appengine_queue_internals(self):
+        response = self.post(models.StudentLifecycleObserver.URL, {},
+                             expect_errors=True)
+        self.assertEquals(response.status_int, 500)
+
+    def test_bad_post_no_user_id(self):
+        response = self.post(
+            models.StudentLifecycleObserver.URL, {},
+            headers={'X-AppEngine-QueueName':
+                     models.StudentLifecycleObserver.QUEUE_NAME})
+        self.assertEquals(response.status_int, 200)
+        self.assertLogContains('Student lifecycle queue had item with no user')
+
+    def test_bad_post_no_event(self):
+        response = self.post(
+            models.StudentLifecycleObserver.URL, {'user_id': '123'},
+            headers={'X-AppEngine-QueueName':
+                     models.StudentLifecycleObserver.QUEUE_NAME})
+        self.assertEquals(response.status_int, 200)
+        self.assertLogContains('Student lifecycle queue had item with no event')
+
+    def test_bad_post_no_timestamp(self):
+        response = self.post(
+            models.StudentLifecycleObserver.URL,
+            {'user_id': '123', 'event': 'add'},
+            headers={'X-AppEngine-QueueName':
+                     models.StudentLifecycleObserver.QUEUE_NAME})
+        self.assertEquals(response.status_int, 200)
+        self.assertLogContains('Student lifecycle queue: malformed timestamp')
+
+    def test_bad_post_bad_timestamp(self):
+        response = self.post(
+            models.StudentLifecycleObserver.URL,
+            {'user_id': '123', 'event': 'add', 'timestamp': '12333'},
+            headers={'X-AppEngine-QueueName':
+                     models.StudentLifecycleObserver.QUEUE_NAME})
+        self.assertEquals(response.status_int, 200)
+        self.assertLogContains(
+            'Student lifecycle queue: malformed timestamp 12333')
+
+    def test_post_user_id_and_timestamp_pass_through_without_change(self):
+        user_id = '123'
+        timestamp = '2015-05-14T10:02:09.758704Z'
+
+        response = self.post(
+            models.StudentLifecycleObserver.URL,
+            {'user_id': user_id,
+             'event': 'add',
+             'extra_data': '{}',
+             'timestamp': timestamp,
+             'callbacks': self.COURSE},
+            headers={'X-AppEngine-QueueName':
+                     models.StudentLifecycleObserver.QUEUE_NAME})
+        self.assertEquals(response.status_int, 200)
+        self.assertEquals(user_id, self._user_id)
+        self.assertEquals(timestamp, self._timestamp.strftime(
+            transforms.ISO_8601_DATETIME_FORMAT))
+
+    def test_bad_post_no_callbacks(self):
+        response = self.post(
+            models.StudentLifecycleObserver.URL,
+            {'user_id': '123',
+             'event': 'add',
+             'extra_data': '{}',
+             'timestamp': '2015-05-14T10:02:09.758704Z'},
+            headers={'X-AppEngine-QueueName':
+                     models.StudentLifecycleObserver.QUEUE_NAME})
+        self.assertEquals(response.status_int, 200)
+        self.assertLogContains('Odd: Student lifecycle with no callback items')
+
+    def test_bad_post_bad_callback(self):
+        response = self.post(
+            models.StudentLifecycleObserver.URL,
+            {'user_id': '123',
+             'event': 'add',
+             'extra_data': '{}',
+             'timestamp': '2015-05-14T10:02:09.758704Z',
+             'callbacks': 'fred'},
+            headers={'X-AppEngine-QueueName':
+                     models.StudentLifecycleObserver.QUEUE_NAME})
+        self.assertEquals(response.status_int, 200)
+        self.assertLogContains(
+            'Student lifecycle event enqueued with callback named '
+            '"fred", but no such callback is currently registered.')
+
+    def test_retry_on_exception(self):
+        num_exceptions = 1  # testing queue does not permit errors.  :-{
+        self._num_exceptions_to_raise = num_exceptions
+        actions.login(self.STUDENT_EMAIL)
+        actions.register(self, self.STUDENT_EMAIL)
+        self.execute_all_deferred_tasks(
+            models.StudentLifecycleObserver.QUEUE_NAME)
+        self.assertEquals(1, self._num_add_calls)
+        self.assertEquals(0, self._num_unenroll_calls)
+        self.assertEquals(0, self._num_reenroll_calls)
+        self.assertEquals(num_exceptions + 1, self._num_exception_calls)
+
+    def test_extra_data_callback(self):
+        user = actions.login(self.STUDENT_EMAIL)
+        extra_data = {
+            'this': 'that',
+            'these': ['those']
+            }
+
+        def _no_extra_callback(user_id, timestamp):
+            self.assertEquals(user_id, user.user_id())
+
+        def _generate_extra_data_callback(user_id):
+            self._generate_extra_data_callback_called = True
+            self.assertEqual(user_id, user.user_id())
+            return extra_data
+
+        def _with_extra_data_callback(user_id, timestamp, actual_extra_data):
+            self._with_extra_data_callback_called = True
+            self.assertEquals(actual_extra_data, extra_data)
+
+        models.StudentLifecycleObserver.EVENT_CALLBACKS[
+            models.StudentLifecycleObserver.EVENT_ADD]['no_extra'] = (
+                _no_extra_callback)
+        models.StudentLifecycleObserver.EVENT_CALLBACKS[
+            models.StudentLifecycleObserver.EVENT_ADD]['with_extra'] = (
+                _with_extra_data_callback)
+        models.StudentLifecycleObserver.ENQUEUE_CALLBACKS[
+            models.StudentLifecycleObserver.EVENT_ADD]['with_extra'] = (
+                _generate_extra_data_callback)
+
+        actions.register(self, self.STUDENT_EMAIL)
+        self.execute_all_deferred_tasks(
+            models.StudentLifecycleObserver.QUEUE_NAME)
+        self.assertTrue(self._generate_extra_data_callback_called)
+        self.assertTrue(self._with_extra_data_callback_called)
+
+        del (models.StudentLifecycleObserver.EVENT_CALLBACKS[
+            models.StudentLifecycleObserver.EVENT_ADD]['no_extra'])
+        del (models.StudentLifecycleObserver.EVENT_CALLBACKS[
+            models.StudentLifecycleObserver.EVENT_ADD]['with_extra'])
+        del (models.StudentLifecycleObserver.ENQUEUE_CALLBACKS[
+            models.StudentLifecycleObserver.EVENT_ADD]['with_extra'])
+
+    def test_extra_data_is_optional(self):
+        response = self.post(
+            models.StudentLifecycleObserver.URL,
+            {'user_id': '123',
+             'event': 'add',
+             'timestamp': '2015-05-14T10:02:09.758704Z',
+             'callbacks': self.COURSE},
+            headers={'X-AppEngine-QueueName':
+                     models.StudentLifecycleObserver.QUEUE_NAME})
+        self.assertEquals(response.status_int, 200)
+        self.assertEquals('', self.get_log())
+
+    def test_unenroll_commanded_only_unenrolls_student(self):
+        # Register user with profile enabled, so as to trigger call to
+        # sites.get_course_for_current_request() when profile is updated
+        # from lifecycle queue callback handler.
+        user = actions.login(self.STUDENT_EMAIL)
+        actions.register(self, self.STUDENT_EMAIL)
+
+        # Verify user is really there.
+        with common_utils.Namespace(self.NAMESPACE):
+            self.assertIsNotNone(models.Student.get_by_user_id(user.user_id()))
+
+            # Add taskqueue task so that queue callback happens w/o 'self.base'
+            # being added to the URL and implicitly getting the course context
+            # set.
+            task = taskqueue.Task(
+                params={
+                    'event':
+                    models.StudentLifecycleObserver.EVENT_UNENROLL_COMMANDED,
+                    'user_id': user.user_id(),
+                    'timestamp': '2015-05-14T10:02:09.758704Z',
+                    'callbacks': appengine_config.CORE_MODULE_NAME
+                },
+                target=taskqueue.DEFAULT_APP_VERSION)
+            task.add('user-lifecycle')
+
+            # Taskqueue add should not have updated student.
+            student = models.Student.get_by_user_id(user.user_id())
+            self.assertTrue(student.is_enrolled)
+
+            self.execute_all_deferred_tasks(
+                models.StudentLifecycleObserver.QUEUE_NAME)
+
+            # User should still be there, but now marked unenrolled.
+            student = models.Student.get_by_user_id(user.user_id())
+            self.assertFalse(student.is_enrolled)
+
+    def test_unenroll_commanded_for_deleted_student_fails_safe(self):
+        self._logger.setLevel(logging.INFO)
+        response = self.post(
+            models.StudentLifecycleObserver.URL,
+            {'user_id': '123',
+             'event':
+                     models.StudentLifecycleObserver.EVENT_UNENROLL_COMMANDED,
+             'timestamp': '2015-05-14T10:02:09.758704Z',
+             'callbacks': appengine_config.CORE_MODULE_NAME},
+            headers={'X-AppEngine-QueueName':
+                     models.StudentLifecycleObserver.QUEUE_NAME})
+        self.assertEquals(response.status_int, 200)
+        self.assertLogContains(
+            'INFO: Unregister commanded for user 123, but user already gone.')

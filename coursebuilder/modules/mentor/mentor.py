@@ -266,7 +266,7 @@ class BulkAddNewMentorRESTHandler(BaseRESTHandler):
         email = updated_unit_dict['email']
 
         with Namespace(course_namespace):
-            p = Student.get_by_email(email)
+            p, unique = Student.get_first_by_email(email)
             if p is None:
                 # Check if personal profile exists
                 student_profile = StudentProfileDAO.get_profile_by_email(email)
@@ -389,4 +389,4 @@ class MentorBaseAdminHandler(base.MentorBase):
             None, rest_url, exit_url,
             auto_return=True,
             save_button_caption='Upload Mentors')
-        handler.render_page(template_values, in_tab='mentors')
+        handler.render_page(template_values)
